@@ -1,0 +1,96 @@
+import { CARDS, ITEMS } from './catalog.js';
+import type { CardInstance, PlayerState, RunState } from './types.js';
+import { randomInt } from './random.js';
+
+export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string): CardInstance {
+  if (!CARDS[definitionId]) throw new Error(`Unknown card: ${definitionId}`);
+  return {
+    instanceId: `c-${randomInt(run, 100000, 999999)}-${definitionId}`,
+    definitionId,
+    upgraded: false,
+  };
+}
+
+export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
+  const player: PlayerState = {
+    character: 'isaac', redContainers: 3, redHp: 90, pocketHearts: [],
+    stats: {
+      baseDamage: 6, damageMultiplier: 1, armor: 3, baseShield: 10,
+      heartSize: 30, maxVitality: 5, drawCount: 7, maxRetain: 5,
+      fireRate: 1, luck: 0, critChance: 0.05, dodgeChance: 0,
+      shopDiscount: 0, attackMode: 'tears',
+    },
+    coins: 5, bombs: 1, keys: 1, items: ['d6'], activeItemId: 'd6', deck: [],
+  };
+  const starterCards = [
+    ...Array<string>(6).fill('isaacs-tears'),
+    ...Array<string>(3).fill('wooden-cross'),
+    ...Array<string>(2).fill('half-heart'),
+    'bad-trip', 'the-empress', 'skill-d6',
+  ];
+  player.deck = starterCards.map((id) => createCard(run, id));
+  return player;
+}
+
+export function maxRedHp(player: PlayerState): number {
+  return player.redContainers * player.stats.heartSize;
+}
+
+export function healRed(player: PlayerState, amount: number): number {
+  const before = player.redHp;
+  player.redHp = Math.min(maxRedHp(player), player.redHp + amount);
+  return player.redHp - before;
+}
+
+export function addPocketHeart(run: RunState, kind: 'soul' | 'black', count = 1): void {
+  for (let index = 0; index < count; index += 1) {
+    run.player.pocketHearts.push({
+      id: `h-${randomInt(run, 100000, 999999)}`,
+      kind,
+      hp: run.player.stats.heartSize,
+      maxHp: run.player.stats.heartSize,
+    });
+  }
+}
+
+export function hasItemEffect(run: RunState, effect: keyof NonNullable<(typeof ITEMS)[string]['effects']>[number]): boolean {
+  return run.player.items.some((id) => ITEMS[id]?.effects?.some((entry) => entry[effect] !== undefined));
+}
+
+export function getItemEffectTotal(run: RunState, effect: 'damageCap'): number | undefined {
+  const values = run.player.items.flatMap((id) => ITEMS[id]?.effects?.map((entry) => entry[effect]).filter((value): value is number => value !== undefined) ?? []);
+  return values.length ? Math.min(...values) : undefined;
+}
+
+export function equipItem(run: RunState, itemId: string): void {
+  const item = ITEMS[itemId];
+  if (!item) throw new Error(`Unknown item: ${itemId}`);
+  if (item.kind === 'active') {
+    if (run.player.activeItemId) {
+      const previous = ITEMS[run.player.activeItemId];
+      if (previous?.skillCardId) {
+        run.player.deck = run.player.deck.filter((card) => card.definitionId !== previous.skillCardId);
+      }
+      run.player.items = run.player.items.filter((id) => id !== run.player.activeItemId);
+    }
+    run.player.activeItemId = item.id;
+    if (item.skillCardId) run.player.deck.push(createCard(run, item.skillCardId));
+  }
+  if (!run.player.items.includes(item.id)) run.player.items.push(item.id);
+
+  for (const effect of item.effects ?? []) {
+    if (effect.stat) {
+      const current = run.player.stats[effect.stat];
+      run.player.stats[effect.stat] = effect.multiplier !== undefined
+        ? current * effect.multiplier
+        : current + (effect.amount ?? 0);
+    }
+    if (effect.attackMode) run.player.stats.attackMode = effect.attackMode;
+    if (effect.redContainers) {
+      run.player.redContainers += effect.redContainers;
+      run.player.redHp = maxRedHp(run.player);
+    }
+    if (effect.soulHearts) addPocketHeart(run, 'soul', effect.soulHearts);
+    if (effect.blackHearts) addPocketHeart(run, 'black', effect.blackHearts);
+  }
+}
