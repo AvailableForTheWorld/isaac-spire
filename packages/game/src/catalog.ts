@@ -10,73 +10,73 @@ export const FLOORS: FloorDefinition[] = [
 ];
 
 export const CARDS: Record<string, CardDefinition> = {
-  'isaacs-tears': {
-    id: 'isaacs-tears', name: 'Tear Bomb', type: 'attack', cost: 1, value: 6,
-    description: 'Launch a tear bomb for 100% damage. Fire rate can echo this hit.', target: 'enemy', icon: '●',
+  'basic-attack': {
+    id: 'basic-attack', name: 'Attack', type: 'attack', cost: 1, value: 6,
+    description: 'Perform one basic attack with the current attack form. Item cards can be fused into it.', target: 'enemy', icon: '●',
   },
   'double-shot': {
-    id: 'double-shot', name: 'Double Shot', type: 'attack', cost: 1, value: 4, hits: 2,
-    description: 'Deal 70% tear damage twice.', target: 'enemy', icon: '●●',
+    id: 'double-shot', name: 'Double Shot', type: 'attack', cost: 2, value: 4.2, hits: 2,
+    description: 'Deal 70% attack damage twice.', target: 'enemy', icon: '●●', rewardWeight: 9,
   },
-  'wide-tears': {
-    id: 'wide-tears', name: 'Wide Tears', type: 'attack', cost: 1, value: 4,
-    description: 'Deal 65% tear damage to every enemy.', target: 'all-enemies', icon: '◉',
+  'sweeping-attack': {
+    id: 'sweeping-attack', name: 'Sweeping Attack', type: 'attack', cost: 2, value: 3.9,
+    description: 'Deal 65% attack damage to every enemy.', target: 'all-enemies', icon: '◉', rewardWeight: 5,
   },
   'wooden-cross': {
     id: 'wooden-cross', name: 'Wooden Cross', type: 'shield', cost: 1, value: 5,
-    description: 'Gain 5 shield. Shield persists for the room.', target: 'self', icon: '✚',
+    description: 'Gain 5 shield. Shield persists for the room.', target: 'self', icon: '✚', rewardWeight: 14,
   },
   'half-heart': {
     id: 'half-heart', name: 'Half Heart', type: 'recovery', cost: 1, value: 10,
-    description: 'Recover 10 red-heart HP.', target: 'self', icon: '♥',
+    description: 'Recover 10 red-heart HP.', target: 'self', icon: '♥', rewardWeight: 12,
   },
   'bad-trip': {
-    id: 'bad-trip', name: 'Bad Trip', type: 'hex', cost: 1, value: 2,
-    description: 'Curse an enemy for 2 turns. Its attacks deal 40% less and its special bundles are suppressed.', target: 'enemy', icon: '☠',
+    id: 'bad-trip', name: 'Bad Trip', type: 'hex', cost: 2, value: 2,
+    description: 'Curse an enemy for 2 turns. Its attacks deal 40% less and its special bundles are suppressed.', target: 'enemy', icon: '☠', rewardWeight: 5,
   },
   'the-empress': {
-    id: 'the-empress', name: 'III · The Empress', type: 'tarot', cost: 1, value: 3,
-    description: 'Gain +3 damage for this combat. Exhaust permanently.', target: 'self', exhaust: true, icon: 'Ⅲ',
+    id: 'the-empress', name: 'III · The Empress', type: 'tarot', cost: 2, value: 2,
+    description: 'Gain +2 damage for this combat. Exhaust permanently.', target: 'self', exhaust: true, icon: 'Ⅲ', rewardWeight: 3,
   },
   death: {
-    id: 'death', name: 'XIII · Death', type: 'tarot', cost: 1, value: 25,
-    description: 'Deal 25 damage to every enemy. Exhaust permanently.', target: 'all-enemies', exhaust: true, icon: 'ⅩⅢ',
+    id: 'death', name: 'XIII · Death', type: 'tarot', cost: 3, value: 18,
+    description: 'Deal 18 damage to every enemy. Exhaust permanently.', target: 'all-enemies', exhaust: true, icon: 'ⅩⅢ', rewardWeight: 2,
   },
   'the-sun': {
-    id: 'the-sun', name: 'XIX · The Sun', type: 'tarot', cost: 1, value: 30,
-    description: 'Deal 30 to all enemies and recover 20 HP. Exhaust permanently.', target: 'all-enemies', exhaust: true, icon: '☀',
+    id: 'the-sun', name: 'XIX · The Sun', type: 'tarot', cost: 4, value: 18,
+    description: 'Deal 18 to all enemies and recover 10 HP. Exhaust permanently.', target: 'all-enemies', exhaust: true, icon: '☀', rewardWeight: 1,
   },
   'dead-weight': {
     id: 'dead-weight', name: 'Dead Weight', type: 'curse', cost: 99,
     description: 'Unplayable. Created by enemy curses.', target: 'none', icon: '▧',
   },
   'skill-d6': {
-    id: 'skill-d6', name: 'The D6', type: 'skill', cost: 2,
+    id: 'skill-d6', name: 'The D6', type: 'skill', cost: 3,
     description: 'Reroll every other card in hand into a different card. Recharges in 3 rounds.', target: 'none', icon: '⚅',
   },
   'skill-yum-heart': {
-    id: 'skill-yum-heart', name: 'Yum Heart', type: 'skill', cost: 1,
-    description: 'Recover one full red heart. Recharges in 4 rounds.', target: 'self', icon: '♥',
+    id: 'skill-yum-heart', name: 'Yum Heart', type: 'skill', cost: 2,
+    description: 'Recover 15 red-heart HP. Recharges in 4 rounds.', target: 'self', icon: '♥',
   },
   'skill-belial': {
-    id: 'skill-belial', name: 'Book of Belial', type: 'skill', cost: 1,
-    description: 'Gain +2 damage for this room. Recharges in 3 rounds.', target: 'self', icon: '✦',
+    id: 'skill-belial', name: 'Book of Belial', type: 'skill', cost: 2,
+    description: 'Gain +1 damage for this room. Recharges in 3 rounds.', target: 'self', icon: '✦',
   },
   'skill-shadows': {
-    id: 'skill-shadows', name: 'Book of Shadows', type: 'skill', cost: 1,
-    description: 'Gain 20 shield. Recharges in 3 rounds.', target: 'self', icon: '◈',
+    id: 'skill-shadows', name: 'Book of Shadows', type: 'skill', cost: 2,
+    description: 'Gain 12 shield. Recharges in 3 rounds.', target: 'self', icon: '◈',
   },
   'skill-tammy': {
-    id: 'skill-tammy', name: "Tammy's Head", type: 'skill', cost: 1,
-    description: 'Deal tear damage to all enemies. Recharges in 3 rounds.', target: 'all-enemies', icon: '✺',
+    id: 'skill-tammy', name: "Tammy's Head", type: 'skill', cost: 2,
+    description: 'Deal attack damage to all enemies. Recharges in 3 rounds.', target: 'all-enemies', icon: '✺',
   },
   'skill-nail': {
-    id: 'skill-nail', name: 'The Nail', type: 'skill', cost: 2,
-    description: 'Gain a black heart and +2 armor this room. Recharges in 5 rounds.', target: 'self', icon: '†',
+    id: 'skill-nail', name: 'The Nail', type: 'skill', cost: 3,
+    description: 'Gain a black heart and +1 armor this room. Recharges in 6 rounds.', target: 'self', icon: '†',
   },
   'skill-hourglass': {
-    id: 'skill-hourglass', name: 'Glowing Hour Glass', type: 'skill', cost: 2,
-    description: 'All enemies lose their next action. Recharges in 5 rounds.', target: 'all-enemies', icon: '⌛',
+    id: 'skill-hourglass', name: 'Glowing Hour Glass', type: 'skill', cost: 3,
+    description: 'All enemies lose their next action. Recharges in 6 rounds.', target: 'all-enemies', icon: '⌛',
   },
 };
 
@@ -87,7 +87,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'yum-heart': {
     id: 'yum-heart', name: 'Yum Heart', kind: 'active', pool: ['treasure', 'shop'], quality: 2, icon: '♥', chargeRounds: 4,
-    skillCardId: 'skill-yum-heart', description: 'Recovers a full red heart.',
+    skillCardId: 'skill-yum-heart', description: 'Recovers 15 red-heart HP.',
   },
   'book-belial': {
     id: 'book-belial', name: 'Book of Belial', kind: 'active', pool: ['devil', 'treasure'], quality: 3, icon: '✦', chargeRounds: 3,
@@ -95,31 +95,34 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'book-shadows': {
     id: 'book-shadows', name: 'Book of Shadows', kind: 'active', pool: ['treasure', 'angel'], quality: 3, icon: '◈', chargeRounds: 3,
-    skillCardId: 'skill-shadows', description: 'Wraps Isaac in 20 shield.',
+    skillCardId: 'skill-shadows', description: 'Wraps Isaac in 12 shield.',
   },
   'tammys-head': {
     id: 'tammys-head', name: "Tammy's Head", kind: 'active', pool: ['treasure', 'secret'], quality: 2, icon: '✺', chargeRounds: 3,
-    skillCardId: 'skill-tammy', description: 'Fires tears in every direction.',
+    skillCardId: 'skill-tammy', description: 'Fires attacks in every direction.',
   },
   'the-nail': {
-    id: 'the-nail', name: 'The Nail', kind: 'active', pool: ['devil'], quality: 3, icon: '†', chargeRounds: 5,
+    id: 'the-nail', name: 'The Nail', kind: 'active', pool: ['devil'], quality: 3, icon: '†', chargeRounds: 6,
     skillCardId: 'skill-nail', description: 'Grants a black heart and room armor.',
   },
   'glowing-hourglass': {
-    id: 'glowing-hourglass', name: 'Glowing Hour Glass', kind: 'active', pool: ['shop', 'planetarium'], quality: 3, icon: '⌛', chargeRounds: 5,
+    id: 'glowing-hourglass', name: 'Glowing Hour Glass', kind: 'active', pool: ['shop', 'planetarium'], quality: 3, icon: '⌛', chargeRounds: 6,
     skillCardId: 'skill-hourglass', description: 'Makes every enemy miss its next action.',
   },
   'sad-onion': {
     id: 'sad-onion', name: 'The Sad Onion', kind: 'passive', pool: ['treasure'], quality: 2, icon: '◌',
     description: '+0.25 fire rate. Every four attacks produces a free echo shot.', effects: [{ stat: 'fireRate', amount: 0.25 }],
+    fusion: { damageMultiplier: 1.1, projectileScale: 1.25 },
   },
   'spoon-bender': {
     id: 'spoon-bender', name: 'Spoon Bender', kind: 'passive', pool: ['treasure'], quality: 3, icon: '⌁',
-    description: 'Homing tears can bend toward enemies outside a straight firing line.', effects: [{ curvedShots: true }],
+    description: 'Homing attacks can bend toward enemies outside a straight firing line.', effects: [{ curvedShots: true }],
+    fusion: { curvedShots: true, projectileScale: 1.1 },
   },
   'crickets-head': {
     id: 'crickets-head', name: "Cricket's Head", kind: 'passive', pool: ['treasure', 'elite'], quality: 4, icon: '♟',
     description: '×1.5 damage multiplier.', effects: [{ stat: 'damageMultiplier', multiplier: 1.5 }],
+    fusion: { damageMultiplier: 1.5, projectileScale: 1.2 },
   },
   'magic-mushroom': {
     id: 'magic-mushroom', name: 'Magic Mushroom', kind: 'passive', pool: ['treasure', 'boss'], quality: 4, icon: '♠',
@@ -127,14 +130,16 @@ export const ITEMS: Record<string, ItemDefinition> = {
       { stat: 'damageMultiplier', multiplier: 1.25 }, { stat: 'armor', amount: 1 },
       { stat: 'fireRate', amount: 0.15 }, { redContainers: 1 },
     ],
+    fusion: { damageMultiplier: 1.25, projectileScale: 1.55, knockback: 2 },
   },
   breakfast: {
     id: 'breakfast', name: 'Breakfast', kind: 'passive', pool: ['boss'], quality: 1, icon: '⌑',
-    description: '+1 red-heart container and a full heal.', effects: [{ redContainers: 1 }],
+    description: 'Adds a reusable card that recovers 15 red-heart HP.', effects: [{ redContainers: 1 }],
   },
   squeezy: {
     id: 'squeezy', name: 'Squeezy', kind: 'passive', pool: ['boss'], quality: 3, icon: '≋',
     description: '+0.2 fire rate and two soul hearts.', effects: [{ stat: 'fireRate', amount: 0.2 }, { soulHearts: 2 }],
+    fusion: { damageMultiplier: 1.1, projectileScale: 1.3, slowTurns: 2 },
   },
   'holy-mantle': {
     id: 'holy-mantle', name: 'Holy Mantle', kind: 'passive', pool: ['angel', 'treasure'], quality: 4, icon: '♢',
@@ -143,24 +148,29 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'steam-sale': {
     id: 'steam-sale', name: 'Steam Sale', kind: 'passive', pool: ['shop'], quality: 2, icon: '%',
+    combatCard: false,
     description: 'Shop prices are 50% lower.', effects: [{ stat: 'shopDiscount', amount: 0.5 }],
     unlock: { event: 'wealthy', label: 'Hold at least 15 coins' },
   },
   compass: {
     id: 'compass', name: 'The Compass', kind: 'passive', pool: ['shop'], quality: 2, icon: '⌖',
+    combatCard: false,
     description: 'Reveals every normal room on the floor.', effects: [{ revealAll: true }],
   },
   'blue-map': {
     id: 'blue-map', name: 'Blue Map', kind: 'passive', pool: ['shop', 'secret'], quality: 2, icon: '▦',
+    combatCard: false,
     description: 'Reveals secret and super-secret rooms.', effects: [{ revealSecrets: true }],
     unlock: { event: 'secret-hunter', label: 'Open both secret rooms on one floor' },
   },
   pentagram: {
     id: 'pentagram', name: 'Pentagram', kind: 'passive', pool: ['devil', 'elite'], quality: 3, icon: '☆',
     description: '×1.2 damage and +10% Devil chance.', effects: [{ stat: 'damageMultiplier', multiplier: 1.2 }],
+    fusion: { damageMultiplier: 1.2, poisonTurns: 2, poisonDamage: 3 },
   },
   'goat-head': {
     id: 'goat-head', name: 'Goat Head', kind: 'passive', pool: ['devil', 'curse'], quality: 3, icon: '♈',
+    combatCard: false,
     description: 'A Devil or Angel room is guaranteed after each boss.', effects: [{ guaranteeDeal: true }],
   },
   wafer: {
@@ -172,26 +182,31 @@ export const ITEMS: Record<string, ItemDefinition> = {
     description: '×1.6 damage and +15% critical chance.', effects: [
       { stat: 'damageMultiplier', multiplier: 1.6 }, { stat: 'critChance', amount: 0.15 },
     ],
+    fusion: { damageMultiplier: 1.6, projectileScale: 1.4, curvedShots: true },
     unlock: { event: 'angel-loyalty', label: 'Skip two Devil rooms in one run' },
   },
   brimstone: {
     id: 'brimstone', name: 'Brimstone', kind: 'passive', pool: ['devil'], quality: 4, icon: '♨',
-    description: 'Tears become a beam that hits every enemy for 85% damage.', effects: [{ attackMode: 'brimstone' }],
+    description: 'Basic attacks become a beam that hits every enemy for 85% damage.', effects: [{ attackMode: 'brimstone' }],
+    fusion: { attackMode: 'brimstone', damageMultiplier: 1.2, projectileScale: 1.3 },
     unlock: { event: 'mom-clear', label: "Defeat Mom's Leg" },
   },
   'moms-knife': {
     id: 'moms-knife', name: "Mom's Knife", kind: 'passive', pool: ['devil', 'treasure'], quality: 4, icon: '◢',
-    description: 'Tears become piercing knife strikes with ×1.6 power.', effects: [{ attackMode: 'knife' }],
+    description: 'Basic attacks become piercing knife strikes with ×1.6 power.', effects: [{ attackMode: 'knife' }],
+    fusion: { attackMode: 'knife', damageMultiplier: 1.35, knockback: 1 },
     unlock: { event: 'mom-clear', label: "Defeat Mom's Leg" },
   },
   'tech-x': {
     id: 'tech-x', name: 'Tech X', kind: 'passive', pool: ['treasure', 'planetarium'], quality: 4, icon: '◎',
     description: 'Ring shots hit all enemies and erase 3 shield.', effects: [{ attackMode: 'tech-x' }],
+    fusion: { attackMode: 'tech-x', projectileScale: 1.65, slowTurns: 1 },
     unlock: { event: 'elite-perfect', label: 'Beat an elite without taking damage' },
   },
   'terra': {
     id: 'terra', name: 'Terra', kind: 'passive', pool: ['planetarium'], quality: 3, icon: '●',
     description: '+3 base damage and +1 armor.', effects: [{ stat: 'baseDamage', amount: 3 }, { stat: 'armor', amount: 1 }],
+    fusion: { flatDamage: 3, projectileScale: 1.35, knockback: 2 },
   },
   'luna': {
     id: 'luna', name: 'Luna', kind: 'passive', pool: ['planetarium'], quality: 3, icon: '☾',
@@ -201,10 +216,10 @@ export const ITEMS: Record<string, ItemDefinition> = {
 
 const PASSIVE_CARD_TEXT: Record<string, string> = {
   'sad-onion': 'Gain +0.25 fire rate for this combat.',
-  'spoon-bender': 'Tears can target enemies diagonally for this combat.',
+  'spoon-bender': 'Attacks can target enemies diagonally for this combat.',
   'crickets-head': 'Multiply damage by 1.5 for this combat.',
   'magic-mushroom': 'Gain ×1.25 damage, +1 armor, +0.15 fire rate, and recover 15 HP this combat.',
-  breakfast: 'Recover one full red heart.',
+  breakfast: 'Recover 15 red-heart HP.',
   squeezy: 'Gain +0.2 fire rate and 20 shield this combat.',
   'holy-mantle': 'Gain 15 shield.',
   'steam-sale': 'Gain 2 coins.',
@@ -225,10 +240,14 @@ export function passiveCardId(itemId: string): string {
   return `item:${itemId}`;
 }
 
-for (const item of Object.values(ITEMS).filter((entry) => entry.kind === 'passive')) {
+export function itemUsesCombatCard(item: ItemDefinition): boolean {
+  return item.kind === 'passive' && item.combatCard !== false;
+}
+
+for (const item of Object.values(ITEMS).filter(itemUsesCombatCard)) {
   const id = passiveCardId(item.id);
   CARDS[id] = {
-    id, name: item.name, type: 'item', cost: 1, target: 'self', itemId: item.id, icon: item.icon,
+    id, name: item.name, type: 'item', cost: Math.max(1, item.quality - 1), target: 'self', itemId: item.id, icon: item.icon,
     description: `${PASSIVE_CARD_TEXT[item.id] ?? item.description} Reusable after the discard pile is reshuffled.`,
   };
 }
@@ -247,23 +266,23 @@ export const DEFAULT_PROFILE: ProfileState = {
 };
 
 const ENEMIES: Record<string, EnemyDefinition> = {
-  fly: { id: 'fly', name: 'Attack Fly', maxHp: 18, attack: 9, armor: 0, movementSpeed: 3, attackRange: 1, icon: '✣' },
-  pooter: { id: 'pooter', name: 'Pooter', maxHp: 24, attack: 12, armor: 0, movementSpeed: 2, attackRange: 5, icon: '◉' },
-  spider: { id: 'spider', name: 'Big Spider', maxHp: 30, attack: 14, armor: 1, movementSpeed: 3, attackRange: 1, icon: '✳' },
-  horf: { id: 'horf', name: 'Horf', maxHp: 34, attack: 16, armor: 1, movementSpeed: 2, attackRange: 5, icon: '●' },
-  charger: { id: 'charger', name: 'Charger', maxHp: 38, attack: 18, armor: 1, movementSpeed: 4, attackRange: 1, icon: '➤' },
-  globin: { id: 'globin', name: 'Globin', maxHp: 44, attack: 17, armor: 2, movementSpeed: 2, attackRange: 2, icon: '♟' },
-  knight: { id: 'knight', name: 'Knight', maxHp: 52, attack: 21, armor: 4, movementSpeed: 2, attackRange: 1, icon: '♞' },
-  vis: { id: 'vis', name: 'Vis', maxHp: 46, attack: 23, armor: 2, movementSpeed: 1, attackRange: 6, icon: '☢' },
-  'leaper': { id: 'leaper', name: 'Leaper', maxHp: 56, attack: 22, armor: 3, movementSpeed: 4, attackRange: 1, icon: '♣' },
-  'fat-bat': { id: 'fat-bat', name: 'Fat Bat', maxHp: 88, attack: 23, armor: 3, movementSpeed: 3, attackRange: 2, elite: true, icon: '◆' },
-  'champion-knight': { id: 'champion-knight', name: 'Champion Knight', maxHp: 110, attack: 27, armor: 5, movementSpeed: 3, attackRange: 1, elite: true, icon: '♛' },
-  monstro: { id: 'monstro', name: 'Monstro', maxHp: 120, attack: 22, armor: 2, movementSpeed: 2, attackRange: 3, boss: true, icon: '◉' },
-  duke: { id: 'duke', name: 'Duke of Flies', maxHp: 155, attack: 25, armor: 2, movementSpeed: 2, attackRange: 4, boss: true, icon: '♚' },
-  gurdy: { id: 'gurdy', name: 'Gurdy', maxHp: 190, attack: 28, armor: 3, movementSpeed: 1, attackRange: 6, boss: true, icon: '☉' },
-  fatty: { id: 'fatty', name: 'Mega Fatty', maxHp: 225, attack: 31, armor: 4, movementSpeed: 2, attackRange: 2, boss: true, icon: '⬤' },
-  cage: { id: 'cage', name: 'The Cage', maxHp: 270, attack: 35, armor: 5, movementSpeed: 3, attackRange: 3, boss: true, icon: '▣' },
-  mom: { id: 'mom', name: "Mom's Leg", maxHp: 360, attack: 40, armor: 6, movementSpeed: 2, attackRange: 5, boss: true, icon: '♠' },
+  fly: { id: 'fly', name: 'Attack Fly', maxHp: 18, attack: 9, armor: 0, movementSpeed: 3, attackRange: 1, visionRange: 6, footprintWidth: 1, footprintHeight: 1, movementPattern: 'cardinal', icon: '✣' },
+  pooter: { id: 'pooter', name: 'Pooter', maxHp: 24, attack: 12, armor: 0, movementSpeed: 2, attackRange: 5, visionRange: 8, footprintWidth: 1, footprintHeight: 1, movementPattern: 'cardinal', icon: '◉' },
+  spider: { id: 'spider', name: 'Big Spider', maxHp: 30, attack: 14, armor: 1, movementSpeed: 3, attackRange: 1, visionRange: 5, footprintWidth: 2, footprintHeight: 2, movementPattern: 'diagonal-jump', icon: '✳' },
+  horf: { id: 'horf', name: 'Horf', maxHp: 34, attack: 16, armor: 1, movementSpeed: 2, attackRange: 5, visionRange: 8, footprintWidth: 1, footprintHeight: 1, movementPattern: 'cardinal', icon: '●' },
+  charger: { id: 'charger', name: 'Charger', maxHp: 38, attack: 18, armor: 1, movementSpeed: 4, attackRange: 1, visionRange: 7, footprintWidth: 2, footprintHeight: 1, movementPattern: 'cardinal', icon: '➤' },
+  globin: { id: 'globin', name: 'Globin', maxHp: 44, attack: 17, armor: 2, movementSpeed: 2, attackRange: 2, visionRange: 6, footprintWidth: 1, footprintHeight: 1, movementPattern: 'cardinal', icon: '♟' },
+  knight: { id: 'knight', name: 'Knight', maxHp: 52, attack: 21, armor: 4, movementSpeed: 2, attackRange: 1, visionRange: 6, footprintWidth: 2, footprintHeight: 1, movementPattern: 'cardinal', icon: '♞' },
+  vis: { id: 'vis', name: 'Vis', maxHp: 46, attack: 23, armor: 2, movementSpeed: 1, attackRange: 6, visionRange: 9, footprintWidth: 2, footprintHeight: 1, movementPattern: 'cardinal', icon: '☢' },
+  'leaper': { id: 'leaper', name: 'Leaper', maxHp: 56, attack: 22, armor: 3, movementSpeed: 4, attackRange: 1, visionRange: 6, footprintWidth: 2, footprintHeight: 2, movementPattern: 'diagonal-jump', icon: '♣' },
+  'fat-bat': { id: 'fat-bat', name: 'Fat Bat', maxHp: 88, attack: 23, armor: 3, movementSpeed: 3, attackRange: 2, visionRange: 7, footprintWidth: 2, footprintHeight: 2, movementPattern: 'diagonal-jump', elite: true, icon: '◆' },
+  'champion-knight': { id: 'champion-knight', name: 'Champion Knight', maxHp: 110, attack: 27, armor: 5, movementSpeed: 3, attackRange: 1, visionRange: 7, footprintWidth: 2, footprintHeight: 2, movementPattern: 'cardinal', elite: true, icon: '♛' },
+  monstro: { id: 'monstro', name: 'Monstro', maxHp: 120, attack: 22, armor: 2, movementSpeed: 2, attackRange: 3, visionRange: 8, footprintWidth: 4, footprintHeight: 4, movementPattern: 'diagonal-jump', boss: true, icon: '◉' },
+  duke: { id: 'duke', name: 'Duke of Flies', maxHp: 155, attack: 25, armor: 2, movementSpeed: 2, attackRange: 4, visionRange: 9, footprintWidth: 4, footprintHeight: 4, movementPattern: 'cardinal', boss: true, icon: '♚' },
+  gurdy: { id: 'gurdy', name: 'Gurdy', maxHp: 190, attack: 28, armor: 3, movementSpeed: 1, attackRange: 6, visionRange: 10, footprintWidth: 4, footprintHeight: 4, movementPattern: 'cardinal', boss: true, icon: '☉' },
+  fatty: { id: 'fatty', name: 'Mega Fatty', maxHp: 225, attack: 31, armor: 4, movementSpeed: 2, attackRange: 2, visionRange: 8, footprintWidth: 4, footprintHeight: 4, movementPattern: 'diagonal-jump', boss: true, icon: '⬤' },
+  cage: { id: 'cage', name: 'The Cage', maxHp: 270, attack: 35, armor: 5, movementSpeed: 3, attackRange: 3, visionRange: 9, footprintWidth: 4, footprintHeight: 4, movementPattern: 'diagonal-jump', boss: true, icon: '▣' },
+  mom: { id: 'mom', name: "Mom's Leg", maxHp: 360, attack: 40, armor: 6, movementSpeed: 2, attackRange: 5, visionRange: 11, footprintWidth: 5, footprintHeight: 5, movementPattern: 'cardinal', boss: true, icon: '♠' },
 };
 
 const FLOOR_POOLS = [

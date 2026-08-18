@@ -1,4 +1,4 @@
-import { CARDS, ITEMS, passiveCardId } from './catalog.js';
+import { CARDS, ITEMS, itemUsesCombatCard, passiveCardId } from './catalog.js';
 import type { CardInstance, PlayerState, RunState } from './types.js';
 import { randomInt } from './random.js';
 
@@ -18,12 +18,12 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
       baseDamage: 6, damageMultiplier: 1, armor: 3, baseShield: 10,
       heartSize: 30, maxVitality: 5, drawCount: 7, maxRetain: 5,
       fireRate: 1, luck: 0, critChance: 0.05, dodgeChance: 0,
-      shopDiscount: 0, movementSpeed: 3, attackRange: 5, attackMode: 'tears',
+      shopDiscount: 0, movementSpeed: 3, attackRange: 5, attackMode: 'basic',
     },
     coins: 5, bombs: 1, keys: 1, items: ['d6'], activeItemId: 'd6', deck: [],
   };
   const starterCards = [
-    ...Array<string>(6).fill('isaacs-tears'),
+    ...Array<string>(6).fill('basic-attack'),
     ...Array<string>(3).fill('wooden-cross'),
     ...Array<string>(2).fill('half-heart'),
     'bad-trip', 'the-empress', 'skill-d6',
@@ -65,6 +65,7 @@ export function getItemEffectTotal(run: RunState, effect: 'damageCap'): number |
 export function equipItem(run: RunState, itemId: string): void {
   const item = ITEMS[itemId];
   if (!item) throw new Error(`Unknown item: ${itemId}`);
+  const newlyEquipped = !run.player.items.includes(item.id);
   if (item.kind === 'active') {
     if (run.player.activeItemId) {
       const previous = ITEMS[run.player.activeItemId];
@@ -75,9 +76,17 @@ export function equipItem(run: RunState, itemId: string): void {
     }
     run.player.activeItemId = item.id;
     if (item.skillCardId) run.player.deck.push(createCard(run, item.skillCardId));
+    if (!run.player.items.includes(item.id)) run.player.items.push(item.id);
   }
-  if (!run.player.items.includes(item.id)) run.player.items.push(item.id);
-  if (item.kind === 'passive') {
+  if (newlyEquipped && item.kind === 'passive') run.player.items.push(item.id);
+  if (newlyEquipped && item.kind === 'passive' && !itemUsesCombatCard(item)) {
+    for (const effect of item.effects ?? []) {
+      if (effect.stat === 'shopDiscount') {
+        run.player.stats.shopDiscount = Math.min(0.9, run.player.stats.shopDiscount + (effect.amount ?? 0));
+      }
+    }
+  }
+  if (itemUsesCombatCard(item)) {
     const definitionId = passiveCardId(item.id);
     if (!run.player.deck.some((card) => card.definitionId === definitionId)) {
       run.player.deck.push(createCard(run, definitionId));

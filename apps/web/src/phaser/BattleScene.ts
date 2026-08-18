@@ -1,5 +1,5 @@
 import * as Phaser from 'phaser';
-import type { CombatAnimationEvent, RunState } from '@isaac-spire/game';
+import type { CombatAnimationEvent, EnemyState, RunState } from '@isaac-spire/game';
 
 interface BattleLabels {
   round: string;
@@ -19,6 +19,8 @@ interface ActorVisual {
   parts: Phaser.GameObjects.GameObject[];
   x: number;
   y: number;
+  footprintWidth: number;
+  footprintHeight: number;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -132,9 +134,9 @@ export class BattleScene extends Phaser.Scene {
     allEnemies.forEach((enemy, index) => {
       if (enemy.hp <= 0) return;
       const position = enemy.position ?? { x: 15 - (index % 2), y: Math.min(8, 2 + index * 3) };
-      const point = this.gridPoint(position.x, position.y);
+      const point = this.gridEntityPoint(position.x, position.y, enemy.footprintWidth, enemy.footprintHeight);
       const visual = this.drawEnemy(
-        point.x, point.y, enemy.icon,
+        point.x, point.y, enemy,
         labels?.enemies[enemy.instanceId] ?? enemy.name,
         enemy.hp / enemy.maxHp, enemy.instanceId === run.combat?.selectedEnemyId,
       );
@@ -142,11 +144,11 @@ export class BattleScene extends Phaser.Scene {
     });
 
     this.add.text(42, 40, labels?.round ?? `ROUND ${run.combat!.round}`, {
-      fontFamily: 'Arial, sans-serif', fontSize: '12px', color: '#d6baa0', letterSpacing: 3,
-    });
+      fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ead3bd', letterSpacing: 3,
+    }).setResolution(2);
     this.add.text(width - 42, 40, labels?.room ?? run.combat!.roomKind.toUpperCase(), {
-      fontFamily: 'Arial, sans-serif', fontSize: '12px', color: '#d6baa0', letterSpacing: 3,
-    }).setOrigin(1, 0);
+      fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ead3bd', letterSpacing: 3,
+    }).setOrigin(1, 0).setResolution(2);
   }
 
   private actor(id?: string): ActorVisual | undefined {
@@ -158,6 +160,10 @@ export class BattleScene extends Phaser.Scene {
       x: this.gridLeft + (x + 0.5) * (this.gridWidth / 17),
       y: this.gridTop + (y + 0.5) * (this.gridHeight / 9),
     };
+  }
+
+  private gridEntityPoint(x: number, y: number, footprintWidth = 1, footprintHeight = 1): { x: number; y: number } {
+    return this.gridPoint(x + (footprintWidth - 1) / 2, y + (footprintHeight - 1) / 2);
   }
 
   private wait(duration: number): Promise<void> {
@@ -182,8 +188,10 @@ export class BattleScene extends Phaser.Scene {
       case 'enemy-attack': await this.animateEnemyAttack(event); break;
       case 'shield': await this.animateShield(event); break;
       case 'heal': await this.animateHeal(event); break;
+      case 'poison': await this.animatePoison(event); break;
       case 'curse': await this.animateCurse(event); break;
       case 'prepare': await this.animatePrepare(event); break;
+      case 'summon': await this.animateSummon(event); break;
       case 'idle': await this.animateIdle(event); break;
       case 'defeat': await this.animateDefeat(event); break;
       case 'black-heart': await this.animateBlackHeart(); break;
@@ -235,12 +243,18 @@ export class BattleScene extends Phaser.Scene {
   private async animateMove(event: CombatAnimationEvent): Promise<void> {
     const actor = this.actor(event.targetId ?? event.sourceId);
     if (!actor || event.toX === undefined || event.toY === undefined) return;
-    const destination = this.gridPoint(event.toX, event.toY);
+    const destination = this.gridEntityPoint(event.toX, event.toY, actor.footprintWidth, actor.footprintHeight);
     const deltaX = destination.x - actor.x;
     const deltaY = destination.y - actor.y;
-    const trail = this.add.circle(actor.x, actor.y, 15, event.sourceId === 'isaac' ? 0x7ed9e8 : 0xc07067, 0.24);
+    const jumping = event.movementStyle === 'jump';
+    const trail = this.add.circle(actor.x, actor.y, jumping ? 24 : 15, event.sourceId === 'isaac' ? 0x7ed9e8 : event.movementStyle === 'wander' ? 0xd0a56c : 0xc07067, 0.24);
     this.tweens.add({ targets: trail, scale: 1.8, alpha: 0, duration: 430, onComplete: () => trail.destroy() });
-    await this.tween(actor.parts, { x: `+=${deltaX}`, y: `+=${deltaY}`, duration: 410, ease: 'Cubic.easeInOut' });
+    if (jumping) {
+      await this.tween(actor.parts, { x: `+=${deltaX / 2}`, y: `+=${deltaY / 2 - 34}`, duration: 210, ease: 'Quad.easeOut' });
+      await this.tween(actor.parts, { x: `+=${deltaX / 2}`, y: `+=${deltaY / 2 + 34}`, duration: 230, ease: 'Bounce.easeOut' });
+    } else {
+      await this.tween(actor.parts, { x: `+=${deltaX}`, y: `+=${deltaY}`, duration: event.movementStyle === 'wander' ? 520 : 410, ease: event.movementStyle === 'wander' ? 'Sine.easeInOut' : 'Cubic.easeInOut' });
+    }
     actor.x = destination.x;
     actor.y = destination.y;
   }
@@ -251,23 +265,44 @@ export class BattleScene extends Phaser.Scene {
     if (!source || !target) return;
     this.tweens.add({ targets: source.parts, x: '+=8', duration: 100, yoyo: true, ease: 'Quad.easeOut' });
 
+    const projectileScale = Math.max(0.7, event.projectileScale ?? 1);
     if (event.attackMode === 'brimstone') {
       const beam = this.add.graphics();
-      beam.lineStyle(12, 0xb82135, 0.22); beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
-      beam.lineStyle(4, 0xff4761, 0.9); beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
+      beam.lineStyle(12 * projectileScale, 0xb82135, 0.22); beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
+      beam.lineStyle(4 * projectileScale, 0xff4761, 0.9); beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
       await this.tween(beam, { alpha: 0, duration: 330, ease: 'Quad.easeIn' });
       beam.destroy();
     } else {
+      const projectileColor = (event.poisonTurns ?? 0) > 0 ? 0x8bd36f : (event.slowTurns ?? 0) > 0 ? 0x70cbe4 : 0x93dff3;
       const projectile = event.attackMode === 'knife'
         ? this.add.text(source.x + 16, source.y, '◆', { fontFamily: 'Georgia, serif', fontSize: '23px', color: '#e7d7cc' }).setOrigin(0.5)
         : event.attackMode === 'tech-x'
-          ? this.add.circle(source.x + 16, source.y, 12, 0x62d4dd, 0.12).setStrokeStyle(4, 0x85f5f1, 0.95)
-          : this.add.circle(source.x + 16, source.y, 7, 0x93dff3, 0.95).setStrokeStyle(2, 0xd8f8ff, 0.8);
+          ? this.add.circle(source.x + 16, source.y, 12 * projectileScale, projectileColor, 0.12).setStrokeStyle(4, projectileColor, 0.95)
+          : this.add.circle(source.x + 16, source.y, 7 * projectileScale, projectileColor, 0.95).setStrokeStyle(2, 0xd8f8ff, 0.8);
+      if (event.attackMode === 'knife') projectile.setScale(projectileScale);
       this.tweens.add({ targets: projectile, angle: event.attackMode === 'knife' ? 360 : 0, duration: 250 });
       await this.tween(projectile, { x: target.x - 10, y: target.y, duration: 260, ease: 'Quad.easeIn' });
       projectile.destroy();
     }
     await this.impact(target, event.value ?? 0, 0xefa09a);
+    if ((event.poisonTurns ?? 0) > 0) {
+      const ring = this.add.circle(target.x, target.y, 12, 0x7dbd63, 0.08).setStrokeStyle(3, 0x9ee57d, .8);
+      this.tweens.add({ targets: ring, scale: 2.3, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
+    }
+    if ((event.slowTurns ?? 0) > 0) {
+      const frost = this.add.circle(target.x, target.y, 18, 0x69b9d0, .12).setStrokeStyle(2, 0x9de4ef, .72);
+      this.tweens.add({ targets: frost, scale: 1.7, alpha: 0, duration: 620, onComplete: () => frost.destroy() });
+    }
+  }
+
+  private async animatePoison(event: CombatAnimationEvent): Promise<void> {
+    const target = this.actor(event.targetId);
+    if (!target) return;
+    const bubbles = Array.from({ length: 4 }, (_, index) => this.add.circle(
+      target.x - 12 + index * 8, target.y + 8, 3 + (index % 2), 0x7fc467, .8,
+    ));
+    this.tweens.add({ targets: bubbles, y: '-=34', alpha: 0, duration: 520, stagger: 55, onComplete: () => bubbles.forEach((bubble) => bubble.destroy()) });
+    await this.impact(target, event.value ?? 0, 0x81c46c);
   }
 
   private async animateEnemyAttack(event: CombatAnimationEvent): Promise<void> {
@@ -400,6 +435,33 @@ export class BattleScene extends Phaser.Scene {
     warning.destroy();
   }
 
+  private async animateSummon(event: CombatAnimationEvent): Promise<void> {
+    const source = this.actor(event.sourceId);
+    if (!source) return;
+    this.cameras.main.shake(260, 0.009);
+    const portal = this.add.circle(source.x, source.y + 36, 20, 0x32133f, 0.72)
+      .setStrokeStyle(5, 0xc879d4, 0.88).setDepth(57).setScale(0.2, 0.08);
+    const mark = this.add.text(source.x, source.y - 58, '♟', {
+      fontFamily: 'Georgia, serif', fontSize: '38px', fontStyle: 'bold', color: '#e5a8eb',
+      stroke: '#4a1d53', strokeThickness: 6,
+    }).setOrigin(0.5).setDepth(60).setAlpha(0).setScale(0.35);
+    const smoke = Array.from({ length: 9 }, (_, index) => this.add.circle(
+      source.x + Phaser.Math.Between(-28, 28), source.y + Phaser.Math.Between(8, 48),
+      5 + index % 4, index % 2 ? 0x8f539a : 0x4c3158, 0.62,
+    ).setDepth(58));
+    this.tweens.add({
+      targets: smoke, x: `+=${Phaser.Math.Between(-18, 18)}`, y: '-=52', scale: 1.8, alpha: 0,
+      duration: 620, stagger: 35, onComplete: () => smoke.forEach((mote) => mote.destroy()),
+    });
+    await Promise.all([
+      this.tween(portal, { scaleX: 2.3, scaleY: 0.72, angle: 180, duration: 360, ease: 'Back.easeOut' }),
+      this.tween(mark, { alpha: 1, scale: 1.2, y: mark.y - 12, duration: 330, ease: 'Back.easeOut' }),
+    ]);
+    await this.wait(120);
+    await this.tween([portal, mark], { alpha: 0, scale: 1.75, duration: 220, ease: 'Quad.easeIn' });
+    portal.destroy(); mark.destroy();
+  }
+
   private async animateIdle(event: CombatAnimationEvent): Promise<void> {
     const source = this.actor(event.sourceId);
     if (!source) return;
@@ -411,14 +473,29 @@ export class BattleScene extends Phaser.Scene {
   private async animateDefeat(event: CombatAnimationEvent): Promise<void> {
     const target = this.actor(event.targetId ?? event.sourceId);
     if (!target) return;
-    for (let index = 0; index < 8; index += 1) {
-      const mote = this.add.circle(target.x, target.y, Phaser.Math.Between(3, 7), 0xb65b58, 0.85);
+    this.tweens.killTweensOf(target.parts);
+    this.cameras.main.shake(220, 0.008);
+    const collapseRing = this.add.circle(target.x, target.y, 34, 0x7f2528, 0.08)
+      .setStrokeStyle(5, 0xdb6f69, 0.82).setDepth(58);
+    const deathMark = this.add.text(target.x, target.y - 10, '✕', {
+      fontFamily: 'Georgia, serif', fontSize: '42px', fontStyle: 'bold', color: '#f0b1a7',
+      stroke: '#501a1c', strokeThickness: 7,
+    }).setOrigin(0.5).setDepth(60).setScale(0.2);
+    await this.tween(target.parts, { scaleX: 1.2, scaleY: 0.68, duration: 120, ease: 'Back.easeIn', yoyo: true });
+    this.bloodDrop(target, 15);
+    this.tweens.add({ targets: collapseRing, scale: 2.5, alpha: 0, duration: 520, ease: 'Cubic.easeOut', onComplete: () => collapseRing.destroy() });
+    for (let index = 0; index < 14; index += 1) {
+      const mote = this.add.circle(target.x, target.y, Phaser.Math.Between(3, 8), index % 3 === 0 ? 0xe0a08d : 0x9f3337, 0.9).setDepth(59);
       this.tweens.add({
-        targets: mote, x: target.x + Phaser.Math.Between(-65, 65), y: target.y + Phaser.Math.Between(-55, 70),
-        alpha: 0, duration: 420, onComplete: () => mote.destroy(),
+        targets: mote, x: target.x + Phaser.Math.Between(-90, 90), y: target.y + Phaser.Math.Between(-75, 90),
+        scale: 0.15, alpha: 0, duration: Phaser.Math.Between(420, 620), ease: 'Quad.easeOut', onComplete: () => mote.destroy(),
       });
     }
-    await this.tween(target.parts, { alpha: 0, y: '+=22', duration: 360, ease: 'Back.easeIn' });
+    const fadingActor = this.tween(target.parts, { alpha: 0, y: '+=28', scale: 0.45, duration: 480, ease: 'Back.easeIn' });
+    await this.tween(deathMark, { scale: 1.25, y: deathMark.y - 22, alpha: 0, duration: 450, ease: 'Back.easeOut' });
+    deathMark.destroy();
+    await fadingActor;
+    this.enemies.delete(event.targetId ?? event.sourceId);
   }
 
   private async animateBlackHeart(): Promise<void> {
@@ -431,34 +508,48 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawIsaac(x: number, y: number, run: RunState, labels?: BattleLabels): ActorVisual {
-    const shadow = this.add.ellipse(x, y + 17, 34, 9, 0x080707, 0.35);
+    const shadow = this.add.ellipse(x, y + 23, 44, 11, 0x080707, 0.35);
     const body = this.add.graphics();
     body.fillStyle(0xe3c6b4, 1);
-    body.fillRoundedRect(x - 10, y + 5, 20, 20, 8);
-    body.fillCircle(x, y - 3, 16);
+    body.fillRoundedRect(x - 13, y + 7, 26, 27, 10);
+    body.fillCircle(x, y - 5, 21);
     body.fillStyle(0x303337, 1);
-    body.fillCircle(x - 6, y - 5, 3);
-    body.fillCircle(x + 6, y - 5, 3);
+    body.fillCircle(x - 8, y - 7, 4);
+    body.fillCircle(x + 8, y - 7, 4);
     body.fillStyle(0x7ec4dc, 0.9);
-    body.fillCircle(x - 6, y, 2);
-    body.fillCircle(x + 6, y, 2);
-    const label = this.add.text(x, y + 22, labels?.isaac ?? 'ISAAC', {
-      fontFamily: 'Arial, sans-serif', fontSize: '7px', color: '#dbc0aa',
-    }).setOrigin(0.5);
+    body.fillCircle(x - 8, y, 2.5);
+    body.fillCircle(x + 8, y, 2.5);
+    const label = this.add.text(x, y + 38, labels?.isaac ?? 'ISAAC', {
+      fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: '12px', fontStyle: 'bold', color: '#f0d6bf',
+      stroke: '#211816', strokeThickness: 3,
+    }).setOrigin(0.5).setResolution(2);
     this.tweens.add({ targets: [body, shadow], y: '-=1.5', duration: 1100, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-    return { parts: [shadow, body, label], x, y };
+    return { parts: [shadow, body, label], x, y, footprintWidth: 1, footprintHeight: 1 };
   }
 
-  private drawEnemy(x: number, y: number, icon: string, name: string, health: number, selected: boolean): ActorVisual {
-    const glow = this.add.circle(x, y, 24, selected ? 0xe8b76d : 0x8a5b57, selected ? 0.2 : 0.08);
-    const body = this.add.circle(x, y, 17, selected ? 0xa46058 : 0x744c4b, 1);
+  private drawEnemy(x: number, y: number, enemy: EnemyState, name: string, health: number, selected: boolean): ActorVisual {
+    const cellWidth = this.gridWidth / 17;
+    const cellHeight = this.gridHeight / 9;
+    const bodyWidth = Math.max(38, cellWidth * enemy.footprintWidth * 0.76);
+    const bodyHeight = Math.max(38, cellHeight * enemy.footprintHeight * 0.72);
+    const glow = this.add.ellipse(x, y, bodyWidth * 1.13, bodyHeight * 1.13, selected ? 0xe8b76d : 0x8a5b57, selected ? 0.2 : 0.08);
+    const body = this.add.ellipse(x, y, bodyWidth, bodyHeight, selected ? 0xa46058 : 0x744c4b, 1);
     body.setStrokeStyle(selected ? 3 : 1, selected ? 0xf3cb83 : 0xb78a7f, selected ? 0.8 : 0.35);
-    const symbol = this.add.text(x, y - 1, icon, { fontFamily: 'Georgia, serif', fontSize: '18px', color: '#24191a' }).setOrigin(0.5);
-    const label = this.add.text(x, y + 22, name, { fontFamily: 'Arial, sans-serif', fontSize: '6px', color: '#dbc0aa' }).setOrigin(0.5);
+    const symbolSize = Math.min(66, Math.max(22, Math.min(bodyWidth, bodyHeight) * 0.45));
+    const symbol = this.add.text(x, y - 1, enemy.icon, { fontFamily: 'Georgia, serif', fontSize: `${symbolSize}px`, color: '#24191a' }).setOrigin(0.5).setResolution(2);
+    const detailY = y + bodyHeight * 0.5 + 8;
+    const label = this.add.text(x, detailY, name, {
+      fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: enemy.boss ? '15px' : '11px', fontStyle: 'bold', color: '#f0d2ba',
+      stroke: '#211615', strokeThickness: 3,
+    }).setOrigin(0.5).setResolution(2);
     const bar = this.add.graphics();
-    bar.fillStyle(0x1a1515, 0.9); bar.fillRoundedRect(x - 19, y + 27, 38, 4, 2);
-    bar.fillStyle(health > 0.35 ? 0xb45555 : 0xe07b65, 1); bar.fillRoundedRect(x - 19, y + 27, 38 * health, 4, 2);
+    const barWidth = Math.max(42, bodyWidth * 0.86);
+    bar.fillStyle(0x1a1515, 0.9); bar.fillRoundedRect(x - barWidth / 2, detailY + 10, barWidth, 6, 3);
+    bar.fillStyle(health > 0.35 ? 0xb45555 : 0xe07b65, 1); bar.fillRoundedRect(x - barWidth / 2, detailY + 10, barWidth * health, 6, 3);
     this.tweens.add({ targets: [body, glow], scaleX: 1.04, scaleY: 0.97, duration: 850 + x, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-    return { parts: [glow, body, symbol, label, bar], x, y };
+    return {
+      parts: [glow, body, symbol, label, bar], x, y,
+      footprintWidth: enemy.footprintWidth, footprintHeight: enemy.footprintHeight,
+    };
   }
 }

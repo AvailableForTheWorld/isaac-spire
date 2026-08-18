@@ -20,10 +20,11 @@ export type RunPhase =
   | 'defeat';
 
 export type CardType = 'attack' | 'skill' | 'item' | 'recovery' | 'shield' | 'hex' | 'tarot' | 'curse';
-export type AttackMode = 'tears' | 'knife' | 'brimstone' | 'tech-x';
+export type AttackMode = 'basic' | 'knife' | 'brimstone' | 'tech-x';
 export type HeartKind = 'soul' | 'black';
-export type IntentKind = 'attack' | 'shield' | 'curse' | 'heal' | 'prepare' | 'idle';
+export type IntentKind = 'attack' | 'shield' | 'curse' | 'heal' | 'prepare' | 'summon' | 'idle';
 export type EnemyBehavior = 'swarm' | 'hunter' | 'hexer' | 'tank' | 'boss';
+export type EnemyMovementPattern = 'cardinal' | 'diagonal-jump';
 export type CombatAnimationKind =
   | 'card-play'
   | 'card-discard'
@@ -35,8 +36,10 @@ export type CombatAnimationKind =
   | 'enemy-attack'
   | 'shield'
   | 'heal'
+  | 'poison'
   | 'curse'
   | 'prepare'
+  | 'summon'
   | 'idle'
   | 'defeat'
   | 'black-heart';
@@ -100,6 +103,7 @@ export interface CardDefinition {
   exhaust?: boolean;
   itemId?: string;
   icon: string;
+  rewardWeight?: number;
 }
 
 export interface CardInstance {
@@ -123,6 +127,31 @@ export interface ItemEffect {
   curvedShots?: boolean;
 }
 
+export interface AttackFusionEffect {
+  damageMultiplier?: number;
+  flatDamage?: number;
+  projectileScale?: number;
+  knockback?: number;
+  poisonTurns?: number;
+  poisonDamage?: number;
+  slowTurns?: number;
+  curvedShots?: boolean;
+  attackMode?: AttackMode;
+}
+
+export interface AttackFusionPreview {
+  totalCost: number;
+  damageMultiplier: number;
+  flatDamage: number;
+  projectileScale: number;
+  knockback: number;
+  poisonTurns: number;
+  poisonDamage: number;
+  slowTurns: number;
+  curvedShots: boolean;
+  attackMode?: AttackMode;
+}
+
 export interface ItemDefinition {
   id: string;
   name: string;
@@ -133,7 +162,9 @@ export interface ItemDefinition {
   quality: 1 | 2 | 3 | 4;
   chargeRounds?: number;
   skillCardId?: string;
+  combatCard?: boolean;
   effects?: ItemEffect[];
+  fusion?: AttackFusionEffect;
   unlock?: { event: string; label: string };
 }
 
@@ -171,6 +202,10 @@ export interface EnemyDefinition {
   armor: number;
   movementSpeed: number;
   attackRange: number;
+  visionRange: number;
+  footprintWidth: number;
+  footprintHeight: number;
+  movementPattern: EnemyMovementPattern;
   elite?: boolean;
   boss?: boolean;
   icon: string;
@@ -194,12 +229,16 @@ export interface EnemyState extends EnemyDefinition {
   shield: number;
   cursedTurns: number;
   staggeredTurns: number;
+  poisonTurns: number;
+  poisonDamage: number;
+  slowedTurns: number;
   prepared: boolean;
   behavior: EnemyBehavior;
   behaviorStep: number;
   damageTakenThisRound: number;
   reactionCooldown: number;
   turnsSinceAttack: number;
+  alerted: boolean;
   position: GridPosition;
   intent: EnemyIntent;
 }
@@ -219,6 +258,10 @@ export interface CombatAnimationEvent {
   toX?: number;
   toY?: number;
   attackMode?: AttackMode;
+  projectileScale?: number;
+  poisonTurns?: number;
+  slowTurns?: number;
+  movementStyle?: 'walk' | 'jump' | 'wander';
 }
 
 export interface CombatLogEntry {
@@ -231,6 +274,7 @@ export interface CombatLogEntry {
 
 export interface CombatState {
   roomKind: 'combat' | 'elite' | 'boss';
+  deploymentPending?: boolean;
   round: number;
   vitality: number;
   playerShield: number;
@@ -245,7 +289,7 @@ export interface CombatState {
   damageCap?: number;
   usedPassiveItems: string[];
   playerPosition: GridPosition;
-  tearMeter: number;
+  attackMeter: number;
   hand: string[];
   drawPile: string[];
   discardPile: string[];

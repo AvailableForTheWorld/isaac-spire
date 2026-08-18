@@ -1,11 +1,11 @@
 import {
-  CARDS, DEFAULT_UNLOCKS, FLOORS, ITEMS, bossForFloor, eliteForFloor, enemyPoolForFloor,
+  CARDS, DEFAULT_UNLOCKS, FLOORS, ITEMS, bossForFloor, eliteForFloor, enemyPoolForFloor, itemUsesCombatCard, passiveCardId,
 } from './catalog.js';
 import { availableNodeIds, createFloorMap, getMapNode, revealFromCurrent } from './map.js';
 import { addPocketHeart, createCard, createIsaac, equipItem, healRed, maxRedHp } from './player.js';
 import { hashSeed, nextRandom, pickOne, randomInt, shuffle, weightedPick } from './random.js';
 import type {
-  CardDefinition, CardInstance, ChoiceState, CombatAnimationEvent, CombatLogEntry, CombatState,
+  AttackFusionPreview, CardDefinition, CardInstance, ChoiceState, CombatAnimationEvent, CombatLogEntry, CombatState,
   EnemyAction, EnemyBehavior, EnemyDefinition, EnemyIntent, EnemyState, IntentKind,
   GridPosition, ItemDefinition, RewardOption, RoomKind, RunState,
 } from './types.js';
@@ -15,6 +15,7 @@ const clone = <T>(value: T): T => structuredClone(value);
 export const COMBAT_GRID_WIDTH = 17;
 export const COMBAT_GRID_HEIGHT = 9;
 export const ISAAC_DOOR_POSITION: GridPosition = { x: 0, y: 4 };
+export const PLAYER_DEPLOYMENT_MAX_X = 8;
 
 function gridDistance(left: GridPosition, right: GridPosition): number {
   return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
@@ -34,24 +35,110 @@ function positionKey(position: GridPosition): string {
   return `${position.x}:${position.y}`;
 }
 
-function fallbackEnemyPosition(index: number, boss = false): GridPosition {
-  return boss ? { x: 15, y: 4 } : { x: 15 - (index % 2), y: Math.min(8, 2 + index * 3) };
+function enemyFootprint(enemy: Pick<EnemyDefinition, 'footprintWidth' | 'footprintHeight'>): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.min(COMBAT_GRID_WIDTH, Math.round(enemy.footprintWidth ?? 1))),
+    height: Math.max(1, Math.min(COMBAT_GRID_HEIGHT, Math.round(enemy.footprintHeight ?? 1))),
+  };
+}
+
+function footprintCellsAt(
+  enemy: Pick<EnemyDefinition, 'footprintWidth' | 'footprintHeight'>,
+  position: GridPosition,
+): GridPosition[] {
+  const { width, height } = enemyFootprint(enemy);
+  return Array.from({ length: width * height }, (_, index) => ({
+    x: position.x + index % width,
+    y: position.y + Math.floor(index / width),
+  }));
+}
+
+export function getEnemyOccupiedCells(enemy: EnemyState, position = enemy.position): GridPosition[] {
+  return footprintCellsAt(enemy, position);
+}
+
+function enemyPositionFits(enemy: EnemyState, position: GridPosition, blocked = new Set<string>()): boolean {
+  return footprintCellsAt(enemy, position).every((cell) => insideGrid(cell) && !blocked.has(positionKey(cell)));
+}
+
+function fallbackEnemyPosition(
+  index: number,
+  boss = false,
+  footprintWidth = 1,
+  footprintHeight = 1,
+): GridPosition {
+  const x = Math.max(PLAYER_DEPLOYMENT_MAX_X + 1, COMBAT_GRID_WIDTH - footprintWidth - 1);
+  const maxY = Math.max(0, COMBAT_GRID_HEIGHT - footprintHeight);
+  if (boss) return { x, y: Math.floor(maxY / 2) };
+  const preferredRows = [1, Math.max(0, maxY - 1), Math.floor(maxY / 2), 0, maxY];
+  return { x, y: Math.max(0, Math.min(maxY, preferredRows[index % preferredRows.length] ?? 0)) };
+}
+
+function findAvailableEnemyPosition(enemy: EnemyState, preferred: GridPosition, blocked: Set<string>): GridPosition {
+  const { width, height } = enemyFootprint(enemy);
+  const maxX = COMBAT_GRID_WIDTH - width;
+  const maxY = COMBAT_GRID_HEIGHT - height;
+  const candidates = Array.from({ length: (maxX - PLAYER_DEPLOYMENT_MAX_X) * (maxY + 1) }, (_, index) => ({
+    x: PLAYER_DEPLOYMENT_MAX_X + 1 + index % (maxX - PLAYER_DEPLOYMENT_MAX_X),
+    y: Math.floor(index / (maxX - PLAYER_DEPLOYMENT_MAX_X)),
+  })).sort((left, right) => (
+    Math.abs(left.x - maxX) - Math.abs(right.x - maxX)
+    || gridDistance(left, preferred) - gridDistance(right, preferred)
+  ));
+  return candidates.find((candidate) => enemyPositionFits(enemy, candidate, blocked))
+    ?? { x: Math.max(0, Math.min(maxX, preferred.x)), y: Math.max(0, Math.min(maxY, preferred.y)) };
 }
 
 function ensureCombatGrid(run: RunState): void {
   const combat = run.combat;
   if (!combat) return;
+  const stats = run.player.stats;
+  stats.baseDamage ??= 6;
+  stats.damageMultiplier ??= 1;
+  stats.armor ??= 3;
+  stats.baseShield ??= 10;
+  stats.heartSize ??= 30;
+  stats.maxVitality ??= 5;
+  stats.drawCount ??= 7;
+  stats.maxRetain ??= 5;
+  stats.fireRate ??= 1;
+  stats.luck ??= 0;
+  stats.critChance ??= .05;
+  stats.dodgeChance ??= 0;
+  stats.shopDiscount ??= 0;
+  stats.movementSpeed ??= 3;
+  stats.attackRange ??= 5;
+  stats.attackMode ??= 'basic';
   combat.playerPosition ??= { ...ISAAC_DOOR_POSITION };
+  combat.deploymentPending ??= false;
   combat.playerDamageMultiplier ??= 1;
   combat.playerFireRateBuff ??= 0;
   combat.playerCritChanceBuff ??= 0;
   combat.playerRangeBuff ??= 0;
   combat.playerMovementBuff ??= 0;
+  combat.attackMeter ??= 0;
   combat.usedPassiveItems ??= [];
+  const occupied = new Set<string>();
   combat.enemies.forEach((enemy, index) => {
     enemy.movementSpeed ??= enemy.boss ? 2 : 3;
     enemy.attackRange ??= enemy.id === 'pooter' || enemy.id === 'horf' || enemy.id === 'vis' ? 5 : 1;
-    enemy.position ??= fallbackEnemyPosition(index, enemy.boss);
+    enemy.visionRange ??= enemy.boss ? 9 : enemy.attackRange + 3;
+    enemy.footprintWidth ??= enemy.boss ? (enemy.id === 'mom' ? 5 : 4) : enemy.elite ? 2 : enemy.id === 'spider' || enemy.id === 'leaper' ? 2 : 1;
+    enemy.footprintHeight ??= enemy.boss ? (enemy.id === 'mom' ? 5 : 4) : enemy.elite || enemy.id === 'spider' || enemy.id === 'leaper' ? 2 : 1;
+    enemy.movementPattern ??= enemy.id === 'spider' || enemy.id === 'leaper' || enemy.id === 'monstro' || enemy.id === 'fatty' || enemy.id === 'cage'
+      ? 'diagonal-jump'
+      : 'cardinal';
+    enemy.alerted ??= false;
+    const { width, height } = enemyFootprint(enemy);
+    const preferred = enemy.position ?? fallbackEnemyPosition(index, enemy.boss, width, height);
+    const clamped = {
+      x: Math.max(0, Math.min(COMBAT_GRID_WIDTH - width, preferred.x)),
+      y: Math.max(0, Math.min(COMBAT_GRID_HEIGHT - height, preferred.y)),
+    };
+    enemy.position = enemy.hp > 0 && !enemyPositionFits(enemy, clamped, occupied)
+      ? findAvailableEnemyPosition(enemy, clamped, occupied)
+      : clamped;
+    if (enemy.hp > 0) getEnemyOccupiedCells(enemy).forEach((cell) => occupied.add(positionKey(cell)));
   });
 }
 
@@ -78,11 +165,11 @@ function reachablePositions(start: GridPosition, maxSteps: number, blocked: Set<
 }
 
 export function getPlayerAttackRange(run: RunState): number {
-  return run.player.stats.attackRange + (run.combat?.playerRangeBuff ?? 0);
+  return (run.player.stats.attackRange ?? 5) + (run.combat?.playerRangeBuff ?? 0);
 }
 
 export function getPlayerMovementSpeed(run: RunState): number {
-  return run.player.stats.movementSpeed + (run.combat?.playerMovementBuff ?? 0);
+  return (run.player.stats.movementSpeed ?? 3) + (run.combat?.playerMovementBuff ?? 0);
 }
 
 export function playerHasCurvedShots(run: RunState): boolean {
@@ -92,9 +179,13 @@ export function playerHasCurvedShots(run: RunState): boolean {
 }
 
 export function isPositionInPlayerAttackRange(run: RunState, position: GridPosition): boolean {
+  return isPositionInPlayerAttackRangeWithFusion(run, position, false);
+}
+
+function isPositionInPlayerAttackRangeWithFusion(run: RunState, position: GridPosition, curvedShots: boolean): boolean {
   const origin = run.combat?.playerPosition ?? ISAAC_DOOR_POSITION;
   const range = getPlayerAttackRange(run);
-  return playerHasCurvedShots(run)
+  return playerHasCurvedShots(run) || curvedShots
     ? gridDistance(origin, position) <= range
     : isStraightLineInRange(origin, position, range);
 }
@@ -102,15 +193,63 @@ export function isPositionInPlayerAttackRange(run: RunState, position: GridPosit
 export function getReachablePlayerCells(run: RunState): GridPosition[] {
   if (run.phase !== 'combat' || !run.combat || run.combat.vitality < 1) return [];
   const playerPosition = run.combat.playerPosition ?? ISAAC_DOOR_POSITION;
-  const blocked = new Set(run.combat.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => positionKey(enemy.position ?? ISAAC_DOOR_POSITION)));
+  const blocked = new Set(run.combat.enemies
+    .filter((enemy) => enemy.hp > 0)
+    .flatMap((enemy) => getEnemyOccupiedCells(enemy))
+    .map(positionKey));
   return reachablePositions(playerPosition, getPlayerMovementSpeed(run), blocked);
+}
+
+export function getPlayerDeploymentCells(run: RunState): GridPosition[] {
+  const combat = run.combat;
+  if (run.phase !== 'combat' || !combat?.deploymentPending) return [];
+  const occupied = new Set(combat.enemies
+    .filter((enemy) => enemy.hp > 0)
+    .flatMap((enemy) => getEnemyOccupiedCells(enemy))
+    .map(positionKey));
+  return Array.from({ length: (PLAYER_DEPLOYMENT_MAX_X + 1) * COMBAT_GRID_HEIGHT }, (_, index) => ({
+    x: index % (PLAYER_DEPLOYMENT_MAX_X + 1),
+    y: Math.floor(index / (PLAYER_DEPLOYMENT_MAX_X + 1)),
+  })).filter((position) => !occupied.has(positionKey(position)));
 }
 
 export function isEnemyInPlayerRange(run: RunState, enemyId: string): boolean {
   const combat = run.combat;
   if (!combat) return false;
   const enemy = combat.enemies.find((entry) => entry.instanceId === enemyId && entry.hp > 0);
-  return Boolean(enemy && isPositionInPlayerAttackRange(run, enemy.position ?? ISAAC_DOOR_POSITION));
+  return Boolean(enemy && getEnemyOccupiedCells(enemy).some((cell) => isPositionInPlayerAttackRange(run, cell)));
+}
+
+function enemyDistanceToPosition(enemy: EnemyState, position: GridPosition, anchor = enemy.position): number {
+  return Math.min(...footprintCellsAt(enemy, anchor).map((cell) => gridDistance(cell, position)));
+}
+
+function enemyChebyshevDistanceToPosition(enemy: EnemyState, position: GridPosition, anchor = enemy.position): number {
+  return Math.min(...footprintCellsAt(enemy, anchor).map((cell) => Math.max(
+    Math.abs(cell.x - position.x), Math.abs(cell.y - position.y),
+  )));
+}
+
+function enemyCanAttackPosition(enemy: EnemyState, position: GridPosition, anchor = enemy.position): boolean {
+  if (enemy.movementPattern === 'diagonal-jump') {
+    return enemyChebyshevDistanceToPosition(enemy, position, anchor) <= enemy.attackRange;
+  }
+  return footprintCellsAt(enemy, anchor).some((cell) => isStraightLineInRange(cell, position, enemy.attackRange));
+}
+
+function enemyCanSeePosition(enemy: EnemyState, position: GridPosition): boolean {
+  return enemyChebyshevDistanceToPosition(enemy, position) <= enemy.visionRange;
+}
+
+export function isPlayerInEnemyVision(run: RunState, enemyId: string): boolean {
+  const combat = run.combat;
+  const enemy = combat?.enemies.find((entry) => entry.instanceId === enemyId && entry.hp > 0);
+  return Boolean(combat && enemy && enemyCanSeePosition(enemy, combat.playerPosition));
+}
+
+export function getEnemyMovementSpeed(enemy: EnemyState): number {
+  const movementSpeed = enemy.movementSpeed ?? (enemy.boss ? 2 : 3);
+  return enemy.slowedTurns > 0 ? Math.max(1, Math.ceil(movementSpeed / 2)) : movementSpeed;
 }
 
 function now(): string {
@@ -137,7 +276,11 @@ function pushLog(
   messageKey?: string,
   params?: Record<string, string | number>,
 ): void {
-  combat.log.unshift({ id: `${combat.round}-${combat.log.length}-${message}`, message, tone, messageKey, params });
+  const idBase = `${combat.round}-${message}`;
+  let id = idBase;
+  let duplicate = 1;
+  while (combat.log.some((entry) => entry.id === id)) id = `${idBase}-${duplicate++}`;
+  combat.log.unshift({ id, message, tone, messageKey, params });
   combat.log = combat.log.slice(0, 8);
 }
 
@@ -195,6 +338,47 @@ export function getCardDefinition(run: RunState, instanceId: string): CardDefini
   return instance ? CARDS[instance.definitionId] : undefined;
 }
 
+export function getAttackFusionMaterialIds(run: RunState, attackInstanceId: string): string[] {
+  const attack = getCardDefinition(run, attackInstanceId);
+  if (!run.combat || attack?.type !== 'attack') return [];
+  return run.combat.hand.filter((instanceId) => {
+    if (instanceId === attackInstanceId) return false;
+    const card = getCardDefinition(run, instanceId);
+    return Boolean(card?.type === 'item' && card.itemId && ITEMS[card.itemId]?.fusion);
+  });
+}
+
+export function getAttackFusionPreview(run: RunState, attackInstanceId: string, itemInstanceIds: readonly string[]): AttackFusionPreview | undefined {
+  const attack = getCardDefinition(run, attackInstanceId);
+  if (!attack || attack.type !== 'attack') return undefined;
+  const preview: AttackFusionPreview = {
+    totalCost: attack.cost,
+    damageMultiplier: 1,
+    flatDamage: 0,
+    projectileScale: 1,
+    knockback: 0,
+    poisonTurns: 0,
+    poisonDamage: 0,
+    slowTurns: 0,
+    curvedShots: false,
+  };
+  for (const instanceId of [...new Set(itemInstanceIds)]) {
+    const card = getCardDefinition(run, instanceId);
+    const item = card?.type === 'item' && card.itemId ? ITEMS[card.itemId] : undefined;
+    if (!card || !item?.fusion) continue;
+    preview.damageMultiplier *= item.fusion.damageMultiplier ?? 1;
+    preview.flatDamage += item.fusion.flatDamage ?? 0;
+    preview.projectileScale *= item.fusion.projectileScale ?? 1;
+    preview.knockback += item.fusion.knockback ?? 0;
+    preview.poisonTurns = Math.max(preview.poisonTurns, item.fusion.poisonTurns ?? 0);
+    preview.poisonDamage = Math.max(preview.poisonDamage, item.fusion.poisonDamage ?? 0);
+    preview.slowTurns = Math.max(preview.slowTurns, item.fusion.slowTurns ?? 0);
+    preview.curvedShots ||= item.fusion.curvedShots === true;
+    if (item.fusion.attackMode) preview.attackMode = item.fusion.attackMode;
+  }
+  return preview;
+}
+
 function unlockedPool(run: RunState, pool: ItemDefinition['pool'][number]): ItemDefinition[] {
   const eligible = Object.values(ITEMS).filter((item) =>
     run.unlocks.includes(item.id) && item.pool.includes(pool) && !run.player.items.includes(item.id));
@@ -202,9 +386,21 @@ function unlockedPool(run: RunState, pool: ItemDefinition['pool'][number]): Item
   return Object.values(ITEMS).filter((item) => run.unlocks.includes(item.id) && item.pool.includes(pool));
 }
 
+const ITEM_QUALITY_WEIGHTS: Record<ItemDefinition['quality'], number> = { 1: 12, 2: 7, 3: 3, 4: 1 };
+
+function weightedUnique<T>(run: RunState, values: readonly T[], count: number, weight: (value: T) => number): T[] {
+  const remaining = [...values];
+  const selected: T[] = [];
+  while (remaining.length && selected.length < count) {
+    const picked = weightedPick(run, remaining.map((value) => ({ value, weight: weight(value) })));
+    selected.push(picked);
+    remaining.splice(remaining.indexOf(picked), 1);
+  }
+  return selected;
+}
+
 function pickUniqueItems(run: RunState, pool: ItemDefinition['pool'][number], count: number): ItemDefinition[] {
-  const candidates = shuffle(run, unlockedPool(run, pool));
-  return candidates.slice(0, Math.min(count, candidates.length));
+  return weightedUnique(run, unlockedPool(run, pool), count, (item) => ITEM_QUALITY_WEIGHTS[item.quality]);
 }
 
 function itemOptions(run: RunState, pool: ItemDefinition['pool'][number], count: number, price?: number): RewardOption[] {
@@ -216,11 +412,16 @@ function itemOptions(run: RunState, pool: ItemDefinition['pool'][number], count:
 
 function cardOptions(run: RunState, count: number, price?: number): RewardOption[] {
   const pool = Object.values(CARDS).filter((card) =>
-    !['skill', 'curse'].includes(card.type) && card.id !== 'isaacs-tears');
-  return shuffle(run, pool).slice(0, count).map((card) => ({
+    !['skill', 'curse'].includes(card.type) && card.id !== 'basic-attack');
+  return weightedUnique(run, pool, count, cardRewardWeight).map((card) => ({
     id: makeId('option', run), type: 'card', cardId: card.id, label: card.name,
     description: card.description, icon: card.icon, price,
   }));
+}
+
+function cardRewardWeight(card: CardDefinition): number {
+  const item = card.itemId ? ITEMS[card.itemId] : undefined;
+  return item ? ITEM_QUALITY_WEIGHTS[item.quality] : (card.rewardWeight ?? 8);
 }
 
 function setChoice(run: RunState, choice: ChoiceState): void {
@@ -373,6 +574,7 @@ function intentLabel(kind: IntentKind, value: number): string {
     curse: 'Curse',
     heal: `Recover ${value}`,
     prepare: 'Preparing…',
+    summon: `Summon ${value}`,
     idle: 'Staggered',
   };
   return labels[kind];
@@ -435,14 +637,7 @@ function behaviorPattern(run: RunState, enemy: EnemyState): EnemyAction[][] {
         [action('heal', healValue(run))],
       ];
     case 'boss':
-      return [
-        [action('prepare')],
-        [action('attack', attackValue(enemy, 1.1))],
-        [action('curse')],
-        [action('shield', shieldValue(run, 1.5))],
-        [action('heal', healValue(run, 1.25))],
-        [action('attack', attackValue(enemy, 1.25))],
-      ];
+      return [[action('attack', attackValue(enemy)), action('attack', attackValue(enemy, 0.7))]];
     case 'swarm':
     default:
       return [
@@ -471,14 +666,115 @@ function reactionIntent(run: RunState, enemy: EnemyState): EnemyIntent {
 }
 
 function ensureEnemyBehavior(enemy: EnemyState): void {
+  enemy.intent ??= { kind: 'idle', value: 0, label: 'Watching' };
   enemy.behavior ??= behaviorFor(enemy);
   enemy.behaviorStep ??= 0;
   enemy.damageTakenThisRound ??= 0;
   enemy.reactionCooldown ??= 0;
   enemy.turnsSinceAttack ??= 0;
   enemy.staggeredTurns ??= 0;
-  const nextAction = enemy.intent.actions?.[0] ?? action(enemy.intent.kind, enemy.intent.value);
-  enemy.intent = makeIntent([nextAction]);
+  enemy.poisonTurns ??= 0;
+  enemy.poisonDamage ??= 0;
+  enemy.slowedTurns ??= 0;
+  const intendedActions = enemy.intent.actions?.length
+    ? enemy.intent.actions
+    : [action(enemy.intent.kind, enemy.intent.value)];
+  enemy.intent = makeIntent(intendedActions.slice(0, enemy.boss ? 2 : 1));
+}
+
+export function hydrateRunState(state: RunState): RunState {
+  const run = clone(state);
+  const legacyCardIds: Record<string, string> = {
+    'isaacs-tears': 'basic-attack',
+    'wide-tears': 'sweeping-attack',
+  };
+  run.player.deck.forEach((card) => {
+    card.definitionId = legacyCardIds[card.definitionId] ?? card.definitionId;
+  });
+  if ((run.player.stats.attackMode as string) === 'tears') run.player.stats.attackMode = 'basic';
+  run.choice?.options.forEach((option) => {
+    if (option.cardId) option.cardId = legacyCardIds[option.cardId] ?? option.cardId;
+  });
+  if (run.combat) {
+    const legacyCombat = run.combat as CombatState & { tearMeter?: number };
+    legacyCombat.attackMeter ??= legacyCombat.tearMeter ?? 0;
+    delete legacyCombat.tearMeter;
+    if ((legacyCombat.attackModeOverride as string | undefined) === 'tears') legacyCombat.attackModeOverride = 'basic';
+    (legacyCombat.animationEvents ?? []).forEach((event) => {
+      if ((event.attackMode as string | undefined) === 'tears') event.attackMode = 'basic';
+    });
+    (legacyCombat.log ?? []).forEach((entry) => {
+      if (typeof entry.params?.cardId === 'string') entry.params.cardId = legacyCardIds[entry.params.cardId] ?? entry.params.cardId;
+      if (entry.params?.mode === 'tears') entry.params.mode = 'basic';
+    });
+  }
+  const retiredCardIds = new Set(Object.values(ITEMS)
+    .filter((item) => item.kind === 'passive' && !itemUsesCombatCard(item))
+    .map((item) => passiveCardId(item.id)));
+  const retiredInstances = new Set(run.player.deck
+    .filter((card) => retiredCardIds.has(card.definitionId))
+    .map((card) => card.instanceId));
+  run.player.deck = run.player.deck.filter((card) => !retiredInstances.has(card.instanceId));
+  for (const itemId of run.player.items) {
+    const item = ITEMS[itemId];
+    if (!item || itemUsesCombatCard(item)) continue;
+    for (const effect of item.effects ?? []) {
+      if (effect.stat === 'shopDiscount') {
+        run.player.stats.shopDiscount = Math.max(run.player.stats.shopDiscount ?? 0, effect.amount ?? 0);
+      }
+    }
+  }
+  if (run.combat && retiredInstances.size) {
+    run.combat.hand = run.combat.hand.filter((id) => !retiredInstances.has(id));
+    run.combat.drawPile = run.combat.drawPile.filter((id) => !retiredInstances.has(id));
+    run.combat.discardPile = run.combat.discardPile.filter((id) => !retiredInstances.has(id));
+    run.combat.exhausted = run.combat.exhausted.filter((id) => !retiredInstances.has(id));
+    retiredInstances.forEach((id) => { delete run.combat!.cooldowns[id]; });
+  }
+  ensureCombatGrid(run);
+  run.combat?.enemies.forEach(ensureEnemyBehavior);
+  return run;
+}
+
+function rollBossIntent(run: RunState, enemy: EnemyState, canReact: boolean): EnemyIntent {
+  const playerPosition = run.combat?.playerPosition ?? ISAAC_DOOR_POSITION;
+  const inRange = enemyCanAttackPosition(enemy, playerPosition);
+  let patterns: EnemyAction[][];
+
+  if (canReact) {
+    enemy.reactionCooldown = 2;
+    patterns = inRange
+      ? [[action('attack', attackValue(enemy, 1.1)), action('heal', healValue(run, 1.35))]]
+      : [[action('heal', healValue(run, 1.35)), action('shield', shieldValue(run, 1.25))]];
+  } else if (inRange && enemy.prepared) {
+    patterns = [
+      [action('attack', attackValue(enemy, 2)), action('attack', attackValue(enemy, 0.7))],
+      [action('attack', attackValue(enemy, 2)), action('curse')],
+      [action('attack', attackValue(enemy, 2)), action('summon', 1)],
+      [action('attack', attackValue(enemy, 2)), action('shield', shieldValue(run))],
+    ];
+  } else if (inRange) {
+    patterns = [
+      [action('attack', attackValue(enemy)), action('attack', attackValue(enemy, 0.7))],
+      [action('curse'), action('attack', attackValue(enemy))],
+      [action('summon', 1), action('attack', attackValue(enemy, 0.9))],
+      [action('prepare'), action('attack', attackValue(enemy, 2))],
+      [action('attack', attackValue(enemy, 1.15)), action('shield', shieldValue(run))],
+      [action('attack', attackValue(enemy)), action('prepare')],
+    ];
+  } else {
+    patterns = [
+      [action('summon', 1), action('prepare')],
+      [action('curse'), action('shield', shieldValue(run, 1.25))],
+      [action('heal', healValue(run, 1.15)), action('summon', 1)],
+      [action('prepare'), action('shield', shieldValue(run))],
+    ];
+  }
+
+  const actions = patterns[enemy.behaviorStep % patterns.length]
+    ?? [action('attack', attackValue(enemy)), action('attack', attackValue(enemy, 0.7))];
+  enemy.behaviorStep = (enemy.behaviorStep + 1) % patterns.length;
+  return makeIntent(actions);
 }
 
 function rollIntent(run: RunState, enemy: EnemyState): EnemyIntent {
@@ -489,6 +785,7 @@ function rollIntent(run: RunState, enemy: EnemyState): EnemyIntent {
     && enemy.damageTakenThisRound >= Math.max(5, Math.round(enemy.maxHp * 0.12))
     && enemy.hp < enemy.maxHp;
   enemy.damageTakenThisRound = 0;
+  if (enemy.boss) return rollBossIntent(run, enemy, canReact);
   if (enemy.prepared) return makeIntent([action('attack', attackValue(enemy, 2))]);
   if (enemy.turnsSinceAttack >= 1) return makeIntent([action('attack', attackValue(enemy, 1.15))]);
   if (canReact) {
@@ -511,13 +808,17 @@ function makeEnemy(run: RunState, definition: EnemyDefinition, index: number): E
     shield: 0,
     cursedTurns: 0,
     staggeredTurns: 0,
+    poisonTurns: 0,
+    poisonDamage: 0,
+    slowedTurns: 0,
     prepared: false,
     behavior: behaviorFor(definition),
     behaviorStep: index,
     damageTakenThisRound: 0,
     reactionCooldown: 0,
     turnsSinceAttack: 0,
-    position: fallbackEnemyPosition(index, definition.boss),
+    alerted: false,
+    position: fallbackEnemyPosition(index, definition.boss, definition.footprintWidth, definition.footprintHeight),
     intent: { kind: 'idle', value: 0, label: 'Watching' },
   };
   enemy.intent = rollIntent(run, enemy);
@@ -552,6 +853,7 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
   const others = run.player.deck.filter((card) => CARDS[card.definitionId]?.type !== 'skill').map((card) => card.instanceId);
   const combat: CombatState = {
     roomKind,
+    deploymentPending: true,
     round: 1,
     vitality: run.player.stats.maxVitality,
     playerShield: run.player.stats.baseShield,
@@ -564,7 +866,7 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
     playerMovementBuff: 0,
     usedPassiveItems: [],
     playerPosition: { ...ISAAC_DOOR_POSITION },
-    tearMeter: 0,
+    attackMeter: 0,
     hand: [...skills],
     drawPile: shuffle(run, others),
     discardPile: [],
@@ -579,7 +881,9 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
   combat.enemies = definitions.map((definition, index) => makeEnemy(run, definition, index));
   if (!combat.enemies.some((enemy) => enemy.intent.actions?.some((entry) => entry.kind === 'attack'))) {
     const attacker = combat.enemies.at(-1);
-    if (attacker) attacker.intent = makeIntent([action('attack', attackValue(attacker))]);
+    if (attacker) attacker.intent = makeIntent(attacker.boss
+      ? [action('attack', attackValue(attacker)), action('attack', attackValue(attacker, 0.7))]
+      : [action('attack', attackValue(attacker))]);
   }
   drawToHand(run, combat);
   pushLog(combat, `Round 1 — ${combat.enemies.map((enemy) => enemy.name).join(', ')} entered the room.`, 'special', 'enter', {
@@ -597,6 +901,7 @@ function selectedTarget(combat: CombatState, requestedId?: string): EnemyState |
 
 function hurtEnemy(enemy: EnemyState, rawDamage: number, armorPierce = 0): number {
   ensureEnemyBehavior(enemy);
+  enemy.alerted = true;
   const durabilityBefore = enemy.hp + enemy.shield;
   const afterArmor = Math.max(1, Math.round(rawDamage) - Math.max(0, enemy.armor - armorPierce));
   const absorbed = Math.min(enemy.shield, afterArmor);
@@ -615,31 +920,73 @@ function attackDamage(run: RunState, combat: CombatState, card: CardDefinition, 
     * run.player.stats.damageMultiplier * combat.playerDamageMultiplier * factor);
 }
 
-function playAttack(run: RunState, combat: CombatState, card: CardDefinition, instance: CardInstance, targetId?: string): void {
+function knockbackEnemy(combat: CombatState, enemy: EnemyState, distance: number): void {
+  if (distance <= 0 || enemy.hp <= 0) return;
+  const origin = combat.playerPosition;
+  const horizontal = Math.abs(enemy.position.x - origin.x) >= Math.abs(enemy.position.y - origin.y);
+  const stepX = horizontal ? Math.sign(enemy.position.x - origin.x) : 0;
+  const stepY = horizontal ? 0 : Math.sign(enemy.position.y - origin.y);
+  if (stepX === 0 && stepY === 0) return;
+  const occupied = new Set(combat.enemies
+    .filter((entry) => entry.hp > 0 && entry.instanceId !== enemy.instanceId)
+    .flatMap((entry) => getEnemyOccupiedCells(entry))
+    .map(positionKey));
+  occupied.add(positionKey(origin));
+  let destination = { ...enemy.position };
+  for (let step = 0; step < distance; step += 1) {
+    const candidate = { x: destination.x + stepX, y: destination.y + stepY };
+    if (!enemyPositionFits(enemy, candidate, occupied)) break;
+    destination = candidate;
+  }
+  if (destination.x === enemy.position.x && destination.y === enemy.position.y) return;
+  const from = { ...enemy.position };
+  enemy.position = destination;
+  pushAnimation(combat, {
+    kind: 'move', sourceId: enemy.instanceId, targetId: enemy.instanceId,
+    fromX: from.x, fromY: from.y, toX: destination.x, toY: destination.y,
+  });
+}
+
+function playAttack(
+  run: RunState,
+  combat: CombatState,
+  card: CardDefinition,
+  instance: CardInstance,
+  targetId?: string,
+  fusion?: AttackFusionPreview,
+  fusedItemCount = 0,
+): void {
   ensureCombatGrid(run);
+  const modifier = fusion ?? {
+    totalCost: card.cost, damageMultiplier: 1, flatDamage: 0, projectileScale: 1,
+    knockback: 0, poisonTurns: 0, poisonDamage: 0, slowTurns: 0, curvedShots: false,
+  } satisfies AttackFusionPreview;
+  const inRange = (enemy: EnemyState) => getEnemyOccupiedCells(enemy)
+    .some((cell) => isPositionInPlayerAttackRangeWithFusion(run, cell, modifier.curvedShots));
   let targets = card.target === 'all-enemies'
-    ? combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId))
+    ? combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy))
     : [selectedTarget(combat, targetId)].filter((enemy): enemy is EnemyState => Boolean(enemy));
   let multiplier = 1;
   let armorPierce = 0;
-  const attackMode = combat.attackModeOverride ?? run.player.stats.attackMode;
+  const attackMode = modifier.attackMode ?? combat.attackModeOverride ?? run.player.stats.attackMode;
   if (attackMode === 'knife') { multiplier = 1.6; armorPierce = 3; }
   if (attackMode === 'brimstone') {
-    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
+    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy));
     multiplier = 0.85;
   }
   if (attackMode === 'tech-x') {
-    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
+    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy));
     targets.forEach((enemy) => { enemy.shield = Math.max(0, enemy.shield - 3); });
   }
 
-  combat.tearMeter += Math.max(0, run.player.stats.fireRate + combat.playerFireRateBuff - 1);
-  const echoHits = Math.floor(combat.tearMeter + 0.00001);
-  combat.tearMeter -= echoHits;
+  combat.attackMeter += Math.max(0, run.player.stats.fireRate + combat.playerFireRateBuff - 1);
+  const echoHits = Math.floor(combat.attackMeter + 0.00001);
+  combat.attackMeter -= echoHits;
   const hits = (card.hits ?? 1) + echoHits;
-  const base = attackDamage(run, combat, card, instance) * multiplier;
+  const base = attackDamage(run, combat, card, instance) * multiplier * modifier.damageMultiplier + modifier.flatDamage;
   let total = 0;
   for (const target of targets) {
+    target.alerted = true;
     const wasAlive = target.hp > 0;
     let targetTotal = 0;
     for (let hit = 0; hit < hits; hit += 1) {
@@ -650,13 +997,23 @@ function playAttack(run: RunState, combat: CombatState, card: CardDefinition, in
     }
     pushAnimation(combat, {
       kind: 'player-attack', sourceId: 'isaac', targetId: target.instanceId,
-      value: targetTotal, secondaryValue: hits, attackMode,
+      value: targetTotal, secondaryValue: hits, attackMode, projectileScale: modifier.projectileScale,
+      poisonTurns: modifier.poisonTurns, slowTurns: modifier.slowTurns,
     });
+    if (target.hp > 0 && modifier.poisonTurns > 0) {
+      target.poisonTurns = Math.max(target.poisonTurns, modifier.poisonTurns);
+      target.poisonDamage = Math.max(target.poisonDamage, modifier.poisonDamage || 3);
+    }
+    if (target.hp > 0 && modifier.slowTurns > 0) target.slowedTurns = Math.max(target.slowedTurns, modifier.slowTurns);
+    if (target.hp > 0) knockbackEnemy(combat, target, modifier.knockback);
     if (wasAlive && target.hp <= 0) pushAnimation(combat, { kind: 'defeat', sourceId: target.instanceId, targetId: target.instanceId });
   }
-  const mode = attackMode === 'tears' ? '' : ` ${attackMode}`;
+  const mode = attackMode === 'basic' ? '' : ` ${attackMode}`;
   pushLog(combat, `${card.name} dealt ${total}${mode} damage${echoHits ? ` with ${echoHits} echo hit` : ''}.`, 'good', 'attack', {
-    cardId: card.id, damage: total, mode: attackMode === 'tears' ? '' : attackMode, echoCount: echoHits,
+    cardId: card.id, damage: total, mode: attackMode === 'basic' ? '' : attackMode, echoCount: echoHits,
+  });
+  if (fusedItemCount > 0) pushLog(combat, `Fusion attack used ${fusedItemCount} item cards for this attack only at ×${modifier.damageMultiplier.toFixed(2)} power.`, 'special', 'fusionAttack', {
+    count: fusedItemCount, multiplier: modifier.damageMultiplier.toFixed(2),
   });
 }
 
@@ -679,34 +1036,35 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
       for (const rerolledCard of rerolled) {
         const candidates = pool.filter((card) => card.id !== rerolledCard.definitionId);
         if (!candidates.length) continue;
-        rerolledCard.definitionId = pickOne(run, candidates).id;
+        rerolledCard.definitionId = weightedPick(run, candidates.map((card) => ({ value: card, weight: cardRewardWeight(card) }))).id;
         rerolledCard.upgraded = false;
       }
       pushLog(combat, `The D6 rerolled ${rerolled.length} cards.`, 'special', 'reroll', { count: rerolled.length });
       break;
     }
     case 'skill-yum-heart': {
-      const healed = healRed(run.player, run.player.stats.heartSize);
+      const healed = healRed(run.player, 15);
       pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
       pushLog(combat, `Yum Heart recovered ${healed} HP.`, 'good', 'heal', { sourceCardId: instance.definitionId, amount: healed });
       break;
     }
     case 'skill-belial':
-      combat.playerDamageBuff += 2;
-      pushAnimation(combat, { kind: 'prepare', sourceId: 'isaac', targetId: 'isaac', value: 2 });
-      pushLog(combat, 'Book of Belial granted +2 room damage.', 'special', 'belial');
+      combat.playerDamageBuff += 1;
+      pushAnimation(combat, { kind: 'prepare', sourceId: 'isaac', targetId: 'isaac', value: 1 });
+      pushLog(combat, 'Book of Belial granted +1 room damage.', 'special', 'belial');
       break;
     case 'skill-shadows':
-      combat.playerShield += 20;
-      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 20 });
-      pushLog(combat, 'Book of Shadows granted 20 shield.', 'good', 'shadows');
+      combat.playerShield += 12;
+      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 12 });
+      pushLog(combat, 'Book of Shadows granted 12 shield.', 'good', 'shadows');
       break;
     case 'skill-tammy': {
-      const damage = (run.player.stats.baseDamage + combat.playerDamageBuff) * run.player.stats.damageMultiplier;
+      const damage = (run.player.stats.baseDamage + combat.playerDamageBuff)
+        * run.player.stats.damageMultiplier * combat.playerDamageMultiplier;
       combat.enemies.filter((enemy) => enemy.hp > 0).forEach((enemy) => {
         const wasAlive = enemy.hp > 0;
         const dealt = hurtEnemy(enemy, damage);
-        pushAnimation(combat, { kind: 'player-attack', sourceId: 'isaac', targetId: enemy.instanceId, value: dealt, attackMode: 'tears' });
+        pushAnimation(combat, { kind: 'player-attack', sourceId: 'isaac', targetId: enemy.instanceId, value: dealt, attackMode: 'basic' });
         if (wasAlive && enemy.hp <= 0) pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
       });
       pushLog(combat, `Tammy's Head burst for ${Math.round(damage)} damage to all enemies.`, 'good', 'tammy', { damage: Math.round(damage) });
@@ -714,9 +1072,9 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
     }
     case 'skill-nail':
       addPocketHeart(run, 'black');
-      combat.playerArmorBuff += 2;
-      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 2 });
-      pushLog(combat, 'The Nail granted a black heart and +2 room armor.', 'special', 'nail');
+      combat.playerArmorBuff += 1;
+      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 1 });
+      pushLog(combat, 'The Nail granted a black heart and +1 room armor.', 'special', 'nail');
       break;
     case 'skill-hourglass':
       combat.enemies.filter((enemy) => enemy.hp > 0).forEach((enemy) => {
@@ -750,7 +1108,7 @@ function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefin
     if (effect.stat === 'baseShield') shieldGained += effect.amount ?? 0;
     if (effect.stat === 'shopDiscount') run.player.coins += 2;
     if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
-    if (effect.redContainers) healed += healRed(run.player, item.id === 'magic-mushroom' ? 15 : run.player.stats.heartSize);
+    if (effect.redContainers) healed += healRed(run.player, 15);
     if (effect.soulHearts) shieldGained += effect.soulHearts * 10;
     if (effect.damageCap !== undefined) combat.damageCap = Math.min(combat.damageCap ?? Number.POSITIVE_INFINITY, effect.damageCap);
   }
@@ -765,6 +1123,37 @@ function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefin
 
 function allEnemiesDefeated(combat: CombatState): boolean {
   return combat.enemies.every((enemy) => enemy.hp <= 0);
+}
+
+export function canPlayFusedAttack(
+  run: RunState,
+  attackInstanceId: string,
+  itemInstanceIds: readonly string[],
+  targetId?: string,
+): { ok: boolean; reason?: string } {
+  if (run.phase !== 'combat' || !run.combat) return { ok: false, reason: 'Not in combat' };
+  if (!run.combat.hand.includes(attackInstanceId)) return { ok: false, reason: 'Card is not in hand' };
+  const attack = getCardDefinition(run, attackInstanceId);
+  if (!attack || attack.type !== 'attack') return { ok: false, reason: 'Choose an attack card' };
+  if (new Set(itemInstanceIds).size !== itemInstanceIds.length) return { ok: false, reason: 'The same item card cannot be fused twice' };
+  for (const instanceId of itemInstanceIds) {
+    if (instanceId === attackInstanceId || !run.combat.hand.includes(instanceId)) return { ok: false, reason: 'Fusion card is not in hand' };
+    const card = getCardDefinition(run, instanceId);
+    const item = card?.type === 'item' && card.itemId ? ITEMS[card.itemId] : undefined;
+    if (!item?.fusion) return { ok: false, reason: 'That item card cannot enhance an attack' };
+  }
+  const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
+  if (run.combat.vitality < preview.totalCost) return { ok: false, reason: 'Not enough vitality for this fusion' };
+  const inRange = (enemy: EnemyState) => enemy.hp > 0
+    && getEnemyOccupiedCells(enemy).some((cell) => isPositionInPlayerAttackRangeWithFusion(run, cell, preview.curvedShots));
+  if (targetId === undefined) {
+    if (!run.combat.enemies.some(inRange)) return { ok: false, reason: 'Target is outside attack range' };
+  } else {
+    const target = selectedTarget(run.combat, targetId);
+    if (!target) return { ok: false, reason: 'Choose an enemy target' };
+    if (!inRange(target)) return { ok: false, reason: 'Target is outside attack range' };
+  }
+  return { ok: true };
 }
 
 export function canPlayCard(run: RunState, instanceId: string, targetId?: string): { ok: boolean; reason?: string } {
@@ -792,11 +1181,80 @@ export function canPlayCard(run: RunState, instanceId: string, targetId?: string
   return { ok: true };
 }
 
+export function playFusedAttack(
+  state: RunState,
+  attackInstanceId: string,
+  itemInstanceIds: readonly string[],
+  targetId?: string,
+): RunState {
+  const playable = canPlayFusedAttack(state, attackInstanceId, itemInstanceIds, targetId);
+  if (!playable.ok) throw new Error(playable.reason);
+  const pendingAttack = getCardDefinition(state, attackInstanceId)!;
+  if (pendingAttack.target === 'enemy' && targetId === undefined) throw new Error('Choose an enemy target');
+
+  const run = clone(state);
+  const combat = run.combat!;
+  const attackInstance = getCard(run, attackInstanceId)!;
+  const attack = CARDS[attackInstance.definitionId]!;
+  const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
+  if (targetId) combat.selectedEnemyId = targetId;
+  combat.vitality -= preview.totalCost;
+  pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: attack.id, value: attack.cost });
+  for (const itemInstanceId of itemInstanceIds) {
+    const itemCard = getCardDefinition(run, itemInstanceId)!;
+    pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: itemCard.id, value: 0 });
+  }
+  playAttack(run, combat, attack, attackInstance, targetId, preview, itemInstanceIds.length);
+
+  for (const instanceId of [attackInstanceId, ...itemInstanceIds]) {
+    const card = getCardDefinition(run, instanceId)!;
+    combat.hand = combat.hand.filter((id) => id !== instanceId);
+    if (card.exhaust) {
+      combat.exhausted.push(instanceId);
+      run.player.deck = run.player.deck.filter((entry) => entry.instanceId !== instanceId);
+    } else {
+      combat.discardPile.push(instanceId);
+    }
+  }
+  if (allEnemiesDefeated(combat)) finishCombat(run);
+  return touch(run);
+}
+
 export function selectEnemy(state: RunState, enemyId: string): RunState {
   const run = clone(state);
   if (run.combat?.enemies.some((enemy) => enemy.instanceId === enemyId && enemy.hp > 0)) {
     run.combat.selectedEnemyId = enemyId;
   }
+  return touch(run);
+}
+
+export function placePlayerForDeployment(state: RunState, x: number, y: number): RunState {
+  const run = clone(state);
+  if (run.phase !== 'combat' || !run.combat?.deploymentPending) throw new Error('Player deployment is not active');
+  const destination = { x, y };
+  if (!getPlayerDeploymentCells(run).some((position) => position.x === x && position.y === y)) {
+    throw new Error('That grid cell is outside the deployment zone');
+  }
+  const from = { ...run.combat.playerPosition };
+  run.combat.playerPosition = destination;
+  run.combat.selectedEnemyId = undefined;
+  pushAnimation(run.combat, {
+    kind: 'move', sourceId: 'isaac', targetId: 'isaac', fromX: from.x, fromY: from.y, toX: x, toY: y,
+  });
+  return touch(run);
+}
+
+export function confirmPlayerDeployment(state: RunState): RunState {
+  const run = clone(state);
+  if (run.phase !== 'combat' || !run.combat?.deploymentPending) throw new Error('Player deployment is not active');
+  run.combat.deploymentPending = false;
+  run.combat.enemies.filter((enemy) => enemy.hp > 0 && enemy.boss).forEach((enemy) => {
+    enemy.intent = rollIntent(run, enemy);
+  });
+  pushAnimation(run.combat, { kind: 'round-start', sourceId: 'isaac', value: run.combat.round });
+  pushLog(run.combat, `Isaac deployed at (${run.combat.playerPosition.x}, ${run.combat.playerPosition.y}).`, 'special', 'deploymentConfirmed', {
+    x: run.combat.playerPosition.x, y: run.combat.playerPosition.y,
+  });
   return touch(run);
 }
 
@@ -821,6 +1279,9 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
 }
 
 export function playCard(state: RunState, instanceId: string, targetId?: string): RunState {
+  if (getCardDefinition(state, instanceId)?.type === 'attack') {
+    return playFusedAttack(state, instanceId, [], targetId);
+  }
   const playable = canPlayCard(state, instanceId, targetId);
   if (!playable.ok) throw new Error(playable.reason);
   const pendingInstance = getCard(state, instanceId);
@@ -836,7 +1297,6 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   combat.vitality -= card.cost;
   pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: card.id, value: card.cost });
 
-  if (card.type === 'attack') playAttack(run, combat, card, instance, targetId);
   if (card.type === 'shield') {
     const amount = (card.value ?? 5) + (instance.upgraded ? 3 : 0);
     combat.playerShield += amount;
@@ -867,7 +1327,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
         if (wasAlive && enemy.hp <= 0) pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
       });
       if (card.id === 'the-sun') {
-        const healed = healRed(run.player, 20);
+        const healed = healRed(run.player, 10);
         pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
       }
       pushLog(combat, `${card.name} consumed in a burst of power.`, 'special', 'tarot', { cardId: card.id });
@@ -1001,44 +1461,100 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
 }
 
 function cursedActions(enemy: EnemyState, actions: EnemyAction[]): EnemyAction[] {
-  const intendedAttack = actions.find((entry) => entry.kind === 'attack');
-  const raw = intendedAttack?.value ?? enemy.attack;
-  return [action('attack', Math.max(1, Math.round(raw * 0.6)))];
+  const intendedAttacks = actions.filter((entry) => entry.kind === 'attack');
+  const count = enemy.boss ? 2 : 1;
+  return Array.from({ length: count }, (_, index) => {
+    const raw = intendedAttacks[index]?.value ?? intendedAttacks[0]?.value ?? enemy.attack;
+    return action('attack', Math.max(1, Math.round(raw * 0.6)));
+  });
 }
 
-function moveEnemyTowardPlayer(combat: CombatState, enemy: EnemyState): boolean {
-  const playerPosition = combat.playerPosition;
-  if (isStraightLineInRange(enemy.position, playerPosition, enemy.attackRange)) return false;
+function reachableEnemyPositions(combat: CombatState, enemy: EnemyState): GridPosition[] {
   const blocked = new Set(combat.enemies
     .filter((entry) => entry.hp > 0 && entry.instanceId !== enemy.instanceId)
-    .map((entry) => positionKey(entry.position)));
-  blocked.add(positionKey(playerPosition));
-  const destination = reachablePositions(enemy.position, enemy.movementSpeed, blocked)
-    .sort((left, right) => {
-      const leftCanAttack = isStraightLineInRange(left, playerPosition, enemy.attackRange) ? 0 : 1;
-      const rightCanAttack = isStraightLineInRange(right, playerPosition, enemy.attackRange) ? 0 : 1;
-      if (leftCanAttack !== rightCanAttack) return leftCanAttack - rightCanAttack;
-      const leftAlignment = Math.min(Math.abs(left.x - playerPosition.x), Math.abs(left.y - playerPosition.y));
-      const rightAlignment = Math.min(Math.abs(right.x - playerPosition.x), Math.abs(right.y - playerPosition.y));
-      return leftAlignment - rightAlignment || gridDistance(left, playerPosition) - gridDistance(right, playerPosition);
-    })[0];
-  if (!destination || gridDistance(destination, playerPosition) >= gridDistance(enemy.position, playerPosition)) return false;
+    .flatMap((entry) => getEnemyOccupiedCells(entry))
+    .map(positionKey));
+  blocked.add(positionKey(combat.playerPosition));
+  const diagonal = enemy.movementPattern === 'diagonal-jump';
+  const directions = [
+    { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+    ...(diagonal ? [{ x: 1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: -1, y: -1 }] : []),
+  ];
+  const queue: Array<{ position: GridPosition; steps: number }> = [{ position: enemy.position, steps: 0 }];
+  const visited = new Set<string>([positionKey(enemy.position)]);
+  const reachable: GridPosition[] = [];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (current.steps > 0) reachable.push(current.position);
+    if (current.steps >= getEnemyMovementSpeed(enemy)) continue;
+    for (const direction of directions) {
+      const candidate = { x: current.position.x + direction.x, y: current.position.y + direction.y };
+      const key = positionKey(candidate);
+      if (visited.has(key) || !enemyPositionFits(enemy, candidate, blocked)) continue;
+      visited.add(key);
+      queue.push({ position: candidate, steps: current.steps + 1 });
+    }
+  }
+  return reachable;
+}
+
+function moveEnemyTo(combat: CombatState, enemy: EnemyState, destination: GridPosition, wandering = false): boolean {
+  if (destination.x === enemy.position.x && destination.y === enemy.position.y) return false;
   const from = { ...enemy.position };
   enemy.position = destination;
   pushAnimation(combat, {
     kind: 'move', sourceId: enemy.instanceId, targetId: enemy.instanceId,
     fromX: from.x, fromY: from.y, toX: destination.x, toY: destination.y,
+    movementStyle: wandering ? 'wander' : enemy.movementPattern === 'diagonal-jump' ? 'jump' : 'walk',
   });
-  pushLog(combat, `${enemy.name} moved to (${destination.x}, ${destination.y}).`, 'normal', 'enemyMoved', {
-    enemyId: enemy.id, enemy: enemy.name, x: destination.x, y: destination.y,
-  });
+  pushLog(
+    combat,
+    wandering
+      ? `${enemy.name} wandered to (${destination.x}, ${destination.y}) while Isaac was out of sight.`
+      : `${enemy.name} moved to (${destination.x}, ${destination.y}).`,
+    'normal',
+    wandering ? 'enemyWandered' : 'enemyMoved',
+    { enemyId: enemy.id, enemy: enemy.name, x: destination.x, y: destination.y },
+  );
   return true;
+}
+
+function moveEnemyRandomly(run: RunState, combat: CombatState, enemy: EnemyState): boolean {
+  const destinations = reachableEnemyPositions(combat, enemy);
+  if (!destinations.length || nextRandom(run) < 0.2) {
+    pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+    pushLog(combat, `${enemy.name} listened in the dark and stayed put.`, 'normal', 'enemyWanderIdle', {
+      enemyId: enemy.id, enemy: enemy.name,
+    });
+    return false;
+  }
+  return moveEnemyTo(combat, enemy, pickOne(run, destinations), true);
+}
+
+function moveEnemyTowardPlayer(combat: CombatState, enemy: EnemyState): boolean {
+  const playerPosition = combat.playerPosition;
+  if (enemyCanAttackPosition(enemy, playerPosition)) return false;
+  const destination = reachableEnemyPositions(combat, enemy)
+    .sort((left, right) => {
+      const leftCanAttack = enemyCanAttackPosition(enemy, playerPosition, left) ? 0 : 1;
+      const rightCanAttack = enemyCanAttackPosition(enemy, playerPosition, right) ? 0 : 1;
+      if (leftCanAttack !== rightCanAttack) return leftCanAttack - rightCanAttack;
+      const leftAlignment = enemy.movementPattern === 'diagonal-jump'
+        ? enemyChebyshevDistanceToPosition(enemy, playerPosition, left)
+        : Math.min(Math.abs(left.x - playerPosition.x), Math.abs(left.y - playerPosition.y));
+      const rightAlignment = enemy.movementPattern === 'diagonal-jump'
+        ? enemyChebyshevDistanceToPosition(enemy, playerPosition, right)
+        : Math.min(Math.abs(right.x - playerPosition.x), Math.abs(right.y - playerPosition.y));
+      return leftAlignment - rightAlignment || gridDistance(left, playerPosition) - gridDistance(right, playerPosition);
+    })[0];
+  if (!destination || enemyDistanceToPosition(enemy, playerPosition, destination) >= enemyDistanceToPosition(enemy, playerPosition)) return false;
+  return moveEnemyTo(combat, enemy, destination);
 }
 
 function resolveEnemyAction(run: RunState, combat: CombatState, enemy: EnemyState, enemyAction: EnemyAction): void {
   switch (enemyAction.kind) {
     case 'attack': {
-      if (isStraightLineInRange(enemy.position, combat.playerPosition, enemy.attackRange)) {
+      if (enemyCanAttackPosition(enemy, combat.playerPosition)) {
         hurtPlayer(run, combat, enemyAction.value, enemy);
         enemy.prepared = false;
       } else {
@@ -1074,6 +1590,31 @@ function resolveEnemyAction(run: RunState, combat: CombatState, enemy: EnemyStat
       pushAnimation(combat, { kind: 'prepare', sourceId: enemy.instanceId, targetId: enemy.instanceId, value: enemy.attack * 2 });
       pushLog(combat, `${enemy.name} prepares a doubled attack!`, 'danger', 'prepare', { enemyId: enemy.id, enemy: enemy.name });
       break;
+    case 'summon': {
+      const livingMinions = combat.enemies.filter((entry) => entry.hp > 0 && !entry.boss).length;
+      const summonCount = Math.max(0, Math.min(enemyAction.value || 1, 3 - livingMinions));
+      if (summonCount <= 0) {
+        pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+        pushLog(combat, `${enemy.name}'s call went unanswered.`, 'normal', 'bossSummonBlocked', {
+          enemyId: enemy.id, enemy: enemy.name,
+        });
+        break;
+      }
+      const pool = enemyPoolForFloor(run.floorIndex).filter((definition) => !definition.boss && !definition.elite);
+      for (let index = 0; index < summonCount; index += 1) {
+        const summoned = makeEnemy(run, pickOne(run, pool), combat.enemies.length + index);
+        summoned.alerted = true;
+        combat.enemies.push(summoned);
+        pushAnimation(combat, {
+          kind: 'summon', sourceId: enemy.instanceId, targetId: summoned.instanceId, value: 1,
+        });
+      }
+      ensureCombatGrid(run);
+      pushLog(combat, `${enemy.name} summoned ${summonCount} minion.`, 'danger', 'bossSummon', {
+        enemyId: enemy.id, enemy: enemy.name, count: summonCount,
+      });
+      break;
+    }
     case 'idle':
       pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
       pushLog(combat, `${enemy.name} hesitates.`, 'normal', 'hesitate', { enemyId: enemy.id, enemy: enemy.name });
@@ -1088,25 +1629,55 @@ function resolveEnemyTurn(run: RunState): void {
   for (const enemy of combat.enemies.filter((entry) => entry.hp > 0)) {
     if (enemy.hp <= 0) continue;
     ensureEnemyBehavior(enemy);
+    if (enemy.poisonTurns > 0) {
+      const wasAlive = enemy.hp > 0;
+      const dealt = hurtEnemy(enemy, enemy.poisonDamage || 3, 99);
+      enemy.poisonTurns -= 1;
+      pushAnimation(combat, { kind: 'poison', sourceId: 'isaac', targetId: enemy.instanceId, value: dealt, poisonTurns: enemy.poisonTurns });
+      pushLog(combat, `${enemy.name} took ${dealt} poison damage.`, 'good', 'enemyPoisoned', {
+        enemyId: enemy.id, enemy: enemy.name, damage: dealt, turns: enemy.poisonTurns,
+      });
+      if (wasAlive && enemy.hp <= 0) {
+        pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+        continue;
+      }
+    }
     if (enemy.staggeredTurns > 0) {
       enemy.staggeredTurns -= 1;
       enemy.turnsSinceAttack += 1;
       pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
       pushLog(combat, `${enemy.name} is staggered and loses its action.`, 'good', 'enemyStaggered', { enemyId: enemy.id, enemy: enemy.name });
     } else {
-      moveEnemyTowardPlayer(combat, enemy);
-      const intendedAction = enemy.intent.actions?.[0] ?? action(enemy.intent.kind, enemy.intent.value);
-      const weakened = enemy.cursedTurns > 0;
-      const enemyAction = weakened ? cursedActions(enemy, [intendedAction])[0]! : intendedAction;
+      const roaming = !enemy.alerted && !enemyCanSeePosition(enemy, combat.playerPosition);
+      if (roaming) moveEnemyRandomly(run, combat, enemy);
+      else moveEnemyTowardPlayer(combat, enemy);
+      const actionLimit = enemy.boss ? 2 : 1;
+      const rolledActions = (enemy.intent.actions?.length
+        ? enemy.intent.actions
+        : [action(enemy.intent.kind, enemy.intent.value)]).slice(0, actionLimit);
+      const intendedActions = rolledActions.map((rolledAction) => (
+        roaming && (rolledAction.kind === 'attack' || rolledAction.kind === 'curse')
+          ? action('idle', 0)
+          : rolledAction
+      ));
+      const weakened = enemy.cursedTurns > 0 && !roaming;
+      if (roaming && enemy.cursedTurns > 0) enemy.cursedTurns -= 1;
+      const enemyActions = weakened ? cursedActions(enemy, intendedActions) : intendedActions;
       if (weakened) {
         enemy.cursedTurns -= 1;
         pushLog(combat, `${enemy.name}'s curse suppresses its special action and weakens its attack.`, 'good', 'enemyWeakened', {
-          enemyId: enemy.id, enemy: enemy.name, damage: enemyAction.value,
+          enemyId: enemy.id, enemy: enemy.name, damage: enemyActions[0]?.value ?? 0,
         });
       }
-      resolveEnemyAction(run, combat, enemy, enemyAction);
-      enemy.turnsSinceAttack = enemyAction.kind === 'attack' ? 0 : enemy.turnsSinceAttack + 1;
+      let attacked = false;
+      for (const enemyAction of enemyActions) {
+        if (run.player.redHp <= 0) break;
+        resolveEnemyAction(run, combat, enemy, enemyAction);
+        attacked ||= enemyAction.kind === 'attack';
+      }
+      enemy.turnsSinceAttack = attacked ? 0 : enemy.turnsSinceAttack + 1;
     }
+    if (enemy.slowedTurns > 0) enemy.slowedTurns -= 1;
     if (run.player.redHp <= 0) break;
   }
 
@@ -1152,12 +1723,14 @@ function rollLoot(run: RunState): string {
 
 function makeFloorUpgrade(run: RunState): void {
   const options: RewardOption[] = shuffle(run, [
-    { id: makeId('up', run), type: 'upgrade', upgrade: 'damage', label: 'Tears Up', description: '+2 base attack damage.', icon: '↑' },
+    { id: makeId('up', run), type: 'upgrade', upgrade: 'damage', label: 'Attack Up', description: '+2 base attack damage.', icon: '↑' },
     { id: makeId('up', run), type: 'upgrade', upgrade: 'heart', label: 'Heart Training', description: '+5 HP per red container and fully heal.', icon: '♥' },
     { id: makeId('up', run), type: 'upgrade', upgrade: 'armor', label: 'Tough Skin', description: '+1 permanent armor.', icon: '⬡' },
-    { id: makeId('up', run), type: 'upgrade', upgrade: 'speed', label: 'Tears Accelerator', description: '+0.25 fire rate.', icon: '»' },
+    { id: makeId('up', run), type: 'upgrade', upgrade: 'speed', label: 'Attack Accelerator', description: '+0.25 fire rate.', icon: '»' },
     { id: makeId('up', run), type: 'upgrade', upgrade: 'skill', label: 'Battery Pack', description: 'Reduce active recharge by one round.', icon: '▣' },
-    ...(run.floorIndex >= 2 ? [{ id: makeId('up', run), type: 'upgrade' as const, upgrade: 'vitality' as const, label: 'Adrenaline', description: '+1 maximum vitality.', icon: '✦' }] : []),
+    ...(run.floorIndex >= 4 && run.player.stats.maxVitality < 6
+      ? [{ id: makeId('up', run), type: 'upgrade' as const, upgrade: 'vitality' as const, label: 'Adrenaline', description: '+1 maximum vitality (maximum 6).', icon: '✦' }]
+      : []),
   ] satisfies RewardOption[]).slice(0, 3);
   setChoice(run, {
     kind: 'upgrade', title: `${FLOORS[run.floorIndex]?.name} cleared`,

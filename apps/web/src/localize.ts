@@ -169,6 +169,7 @@ export function errorText(t: TFunction, message: string): string {
     'Active item is recharging': 'recharging', 'Not enough coins': 'coins',
     'Choose an enemy target': 'chooseTarget',
     'Target is outside attack range': 'range', 'That grid cell is outside movement range': 'movement',
+    'Player deployment is not active': 'deploymentInactive', 'That grid cell is outside the deployment zone': 'deploymentZone',
     'A bomb is required to open this room': 'bomb', 'A Devil deal needs a spare red-heart container': 'containers',
     'Not enough red-heart HP to survive the sacrifice': 'sacrifice',
   };
@@ -235,6 +236,8 @@ export function logText(t: TFunction, run: RunState, message: string, key?: stri
   if (match) return logText(t, run, message, 'nextRound', { round: Number(match[1]), vitality: Number(match[2]) });
 
   const fixedKeys: Record<string, string> = {
+    'Book of Belial granted +1 room damage.': 'belial', 'Book of Shadows granted 12 shield.': 'shadows',
+    'The Nail granted a black heart and +1 room armor.': 'nail',
     'Book of Belial granted +2 room damage.': 'belial', 'Book of Shadows granted 20 shield.': 'shadows',
     'The Nail granted a black heart and +2 room armor.': 'nail', 'Time folds. Every enemy loses its next action.': 'hourglass',
     'The active item fizzled.': 'fizzled', 'A Dead Weight curse was added to your deck.': 'deadWeight',

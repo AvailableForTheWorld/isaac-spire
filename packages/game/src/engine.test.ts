@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CARDS, DEFAULT_UNLOCKS } from './catalog.js';
+import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy } from './catalog.js';
 import {
-  canPlayCard, chooseOption, createRun, discardCard, endTurn, enterRoom, finishDiscard,
-  getAvailableNodes, getReachablePlayerCells, movePlayer, playCard, selectEnemy, skipChoice,
+  canPlayCard, canPlayFusedAttack, chooseOption, confirmPlayerDeployment, createRun, discardCard, endTurn, enterRoom, finishDiscard,
+  getAttackFusionMaterialIds, getAttackFusionPreview, getAvailableNodes, getEnemyMovementSpeed, getEnemyOccupiedCells, getPlayerDeploymentCells, getPlayerMovementSpeed, getReachablePlayerCells, hydrateRunState,
+  isPlayerInEnemyVision, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice,
 } from './engine.js';
-import { addPocketHeart, equipItem } from './player.js';
+import { addPocketHeart, createCard, equipItem } from './player.js';
 
 function settleChoice(run: ReturnType<typeof createRun>) {
   let next = run;
@@ -57,6 +58,13 @@ describe('run generation', () => {
     expect(left.player.activeItemId).toBe('d6');
   });
 
+  it('assigns two, four, sixteen, and twenty-five cell footprints by enemy scale', () => {
+    expect(getEnemy('charger').footprintWidth * getEnemy('charger').footprintHeight).toBe(2);
+    expect(getEnemy('spider').footprintWidth * getEnemy('spider').footprintHeight).toBe(4);
+    expect(bossForFloor(0).footprintWidth * bossForFloor(0).footprintHeight).toBe(16);
+    expect(bossForFloor(5).footprintWidth * bossForFloor(5).footprintHeight).toBe(25);
+  });
+
   it('gives every lane a shop, treasure, secret, and super-secret room', () => {
     const run = createRun('ROUTES-42');
     for (let lane = 0; lane < 3; lane += 1) {
@@ -78,14 +86,117 @@ describe('run generation', () => {
     expect(() => enterRoom(run, secret.id)).toThrow(/bomb/i);
     expect(anchor.connections.every((id) => getAvailableNodes(run).includes(id))).toBe(true);
   });
+
+  it('makes high-quality rewards rarer and more expensive to play', () => {
+    let qualityTwoOffers = 0;
+    let qualityFourOffers = 0;
+    for (let index = 0; index < 60; index += 1) {
+      let run = createRun(`QUALITY-${index}`);
+      const anchor = run.floorMap.nodes.find((node) => node.lane === 0 && node.depth === 1)!;
+      const treasure = run.floorMap.nodes.find((node) => node.lane === 0 && node.depth === 2)!;
+      run.floorMap.currentNodeId = anchor.id;
+      run = enterRoom(run, treasure.id);
+      for (const option of run.choice!.options) {
+        const quality = option.itemId ? ITEMS[option.itemId]?.quality : undefined;
+        if (quality === 2) qualityTwoOffers += 1;
+        if (quality === 4) qualityFourOffers += 1;
+      }
+    }
+
+    expect(qualityTwoOffers).toBeGreaterThan(qualityFourOffers * 2);
+    expect(CARDS['skill-d6']!.cost).toBe(3);
+    expect(CARDS['item:magic-mushroom']!.cost).toBe(3);
+    expect(CARDS['item:breakfast']!.cost).toBe(1);
+  });
+
+  it('can leave a shop after purchasing an option', () => {
+    let run = createRun('SHOP-LEAVE-AFTER-BUYING');
+    const anchor = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 1)!;
+    const shop = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 2)!;
+    run.floorMap.currentNodeId = anchor.id;
+    run.player.coins = 100;
+    run = enterRoom(run, shop.id);
+    const purchase = run.choice!.options.find((option) => option.action !== 'leave')!;
+    run = chooseOption(run, purchase.id);
+    expect(run.phase).toBe('choice');
+    expect(run.choice!.options.find((option) => option.id === purchase.id)?.sold).toBe(true);
+
+    const leave = run.choice!.options.find((option) => option.action === 'leave')!;
+    run = chooseOption(run, leave.id);
+    expect(run.phase).toBe('map');
+    expect(run.choice).toBeUndefined();
+  });
 });
 
 describe('combat', () => {
+  it('hydrates movement and grid defaults in runs saved by older versions', () => {
+    let run = createRun('LEGACY-COMBAT');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    delete (run.player.stats as Partial<typeof run.player.stats>).movementSpeed;
+    delete (run.player.stats as Partial<typeof run.player.stats>).attackRange;
+    delete run.combat!.deploymentPending;
+    delete (run.combat!.enemies[0] as { movementSpeed?: number }).movementSpeed;
+    delete (run.combat!.enemies[0] as { visionRange?: number }).visionRange;
+    delete (run.combat!.enemies[0] as { footprintWidth?: number }).footprintWidth;
+    delete (run.combat!.enemies[0] as { footprintHeight?: number }).footprintHeight;
+    delete (run.combat!.enemies[0] as { alerted?: boolean }).alerted;
+
+    const hydrated = hydrateRunState(run);
+    expect(getPlayerMovementSpeed(hydrated)).toBe(3);
+    expect(hydrated.player.stats.attackRange).toBe(5);
+    expect(hydrated.combat!.deploymentPending).toBe(false);
+    expect(getEnemyMovementSpeed(hydrated.combat!.enemies[0]!)).toBe(3);
+    expect(hydrated.combat!.enemies[0]!.visionRange).toBeGreaterThan(1);
+    expect(hydrated.combat!.enemies[0]!.footprintWidth).toBeGreaterThanOrEqual(1);
+    expect(hydrated.combat!.enemies[0]!.alerted).toBe(false);
+  });
+
+  it('migrates legacy tear-named combat data to attack semantics', () => {
+    let run = createRun('LEGACY-ATTACK-NAMES');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    run.player.deck.find((card) => card.definitionId === 'basic-attack')!.definitionId = 'isaacs-tears';
+    run.player.deck.push({ instanceId: 'legacy-wide-attack', definitionId: 'wide-tears', upgraded: false });
+    (run.player.stats as unknown as { attackMode: string }).attackMode = 'tears';
+    const legacyCombat = run.combat! as unknown as { attackMeter?: number; tearMeter?: number };
+    delete legacyCombat.attackMeter;
+    legacyCombat.tearMeter = 0.75;
+
+    const hydrated = hydrateRunState(run);
+
+    expect(hydrated.player.stats.attackMode).toBe('basic');
+    expect(hydrated.combat!.attackMeter).toBe(0.75);
+    expect(hydrated.player.deck.some((card) => card.definitionId === 'basic-attack')).toBe(true);
+    expect(hydrated.player.deck.some((card) => card.definitionId === 'sweeping-attack')).toBe(true);
+    expect('tearMeter' in hydrated.combat!).toBe(false);
+  });
+
+  it('lets Isaac deploy freely in the left half before combat begins', () => {
+    let run = createRun('FREE-DEPLOYMENT');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    expect(run.combat!.deploymentPending).toBe(true);
+    const cells = getPlayerDeploymentCells(run);
+    expect(cells).toHaveLength(81);
+    expect(Math.max(...cells.map((cell) => cell.x))).toBe(8);
+
+    const vitality = run.combat!.vitality;
+    run = placePlayerForDeployment(run, 8, 4);
+    expect(run.combat!.playerPosition).toEqual({ x: 8, y: 4 });
+    expect(run.combat!.vitality).toBe(vitality);
+    expect(run.combat!.deploymentPending).toBe(true);
+    expect(() => placePlayerForDeployment(run, 9, 4)).toThrow('outside the deployment zone');
+
+    run = confirmPlayerDeployment(run);
+    expect(run.combat!.deploymentPending).toBe(false);
+    expect(run.combat!.log[0]?.messageKey).toBe('deploymentConfirmed');
+    expect(getPlayerDeploymentCells(run)).toHaveLength(0);
+  });
+
   it('moves distant enemies toward Isaac on the opening enemy turn', () => {
     let run = createRun('ENEMIES-ATTACK');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     run.player.stats.dodgeChance = 0;
     run.combat!.hand = run.combat!.hand.slice(0, 5);
+    run.combat!.enemies.forEach((enemy) => { enemy.alerted = true; });
     const positionsBefore = new Map(run.combat!.enemies.map((enemy) => [
       enemy.instanceId,
       Math.abs(enemy.position.x - run.combat!.playerPosition.x)
@@ -102,6 +213,72 @@ describe('combat', () => {
       return distance < positionsBefore.get(enemy.instanceId)!;
     })).toBe(true);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyMoved')).toBe(true);
+  });
+
+  it('uses every occupied footprint cell for collision and straight-line targeting', () => {
+    let run = createRun('MULTI-CELL-ENEMY');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const target = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    target.position = { x: 5, y: 3 };
+    target.footprintWidth = 2;
+    target.footprintHeight = 2;
+    const occupied = getEnemyOccupiedCells(target);
+    expect(occupied).toEqual(expect.arrayContaining([
+      { x: 5, y: 3 }, { x: 6, y: 3 }, { x: 5, y: 4 }, { x: 6, y: 4 },
+    ]));
+    const reachable = getReachablePlayerCells(run);
+    expect(reachable).not.toContainEqual({ x: 5, y: 4 });
+
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
+    expect(canPlayCard(run, attack.instanceId, target.instanceId)).toEqual({ ok: true });
+  });
+
+  it('wanders randomly instead of attacking while Isaac is outside sight and it has not been hit', () => {
+    let run = createRun('ENEMY-WANDER');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const enemy = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    enemy.position = { x: 13, y: 0 };
+    enemy.visionRange = 1;
+    enemy.alerted = false;
+    enemy.intent = { kind: 'attack', value: 99, label: 'Attack', actions: [{ kind: 'attack', value: 99 }] };
+    run.combat!.hand = run.combat!.hand.slice(0, 5);
+    expect(isPlayerInEnemyVision(run, enemy.instanceId)).toBe(false);
+    const redHpBefore = run.player.redHp;
+    const shieldBefore = run.combat!.playerShield;
+
+    run = finishDiscard(endTurn(run));
+    expect(run.player.redHp).toBe(redHpBefore);
+    expect(run.combat!.playerShield).toBe(shieldBefore);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyWandered' || entry.messageKey === 'enemyWanderIdle')).toBe(true);
+  });
+
+  it('lets jumping enemies cross diagonally and deal contact damage', () => {
+    let run = createRun('DIAGONAL-JUMPER');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const enemy = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    run.combat!.playerPosition = { x: 2, y: 4 };
+    run.combat!.playerShield = 0;
+    run.player.stats.dodgeChance = 0;
+    enemy.position = { x: 6, y: 0 };
+    enemy.footprintWidth = 2;
+    enemy.footprintHeight = 2;
+    enemy.movementPattern = 'diagonal-jump';
+    enemy.movementSpeed = 3;
+    enemy.attackRange = 1;
+    enemy.visionRange = 10;
+    enemy.alerted = true;
+    enemy.intent = { kind: 'attack', value: 12, label: 'Attack', actions: [{ kind: 'attack', value: 12 }] };
+    run.combat!.hand = run.combat!.hand.slice(0, 5);
+    const redHpBefore = run.player.redHp;
+
+    run = finishDiscard(endTurn(run));
+    expect(run.combat!.animationEvents.some((event) => event.kind === 'move' && event.sourceId === enemy.instanceId && event.movementStyle === 'jump')).toBe(true);
+    expect(run.player.redHp).toBeLessThan(redHpBefore);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyAttack')).toBe(true);
   });
 
   it('spends one vitality to move up to Isaac movement speed on the 17 by 9 grid', () => {
@@ -127,7 +304,7 @@ describe('combat', () => {
     const target = run.combat!.enemies[0]!;
     target.position = { x: 11, y: 4 };
     run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
-    const attack = run.player.deck.find((card) => card.definitionId === 'isaacs-tears')!;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
     expect(() => playCard(run, attack.instanceId, target.instanceId)).toThrow(/outside attack range/i);
 
@@ -136,6 +313,58 @@ describe('combat', () => {
     const hpBefore = target.hp;
     run = playCard(run, attack.instanceId, target.instanceId);
     expect(run.combat!.enemies[0]!.hp).toBeLessThan(hpBefore);
+  });
+
+  it('calculates Double Shot and Sweeping Attack from attack damage', () => {
+    let run = createRun('ATTACK-DAMAGE-RATIOS');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    run.player.stats.baseDamage = 20;
+    run.player.stats.critChance = 0;
+    const first = run.combat!.enemies[0]!;
+    const second = run.combat!.enemies[1]!;
+    first.position = { x: 4, y: 4 };
+    second.position = { x: 5, y: 4 };
+    [first, second].forEach((enemy) => {
+      enemy.maxHp = 100;
+      enemy.hp = 100;
+      enemy.armor = 0;
+      enemy.shield = 0;
+      enemy.footprintWidth = 1;
+      enemy.footprintHeight = 1;
+    });
+    run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
+    const doubleShot = createCard(run, 'double-shot');
+    const sweepingAttack = createCard(run, 'sweeping-attack');
+    run.player.deck.push(doubleShot, sweepingAttack);
+    run.combat!.hand = [doubleShot.instanceId, sweepingAttack.instanceId];
+
+    run = playCard(run, doubleShot.instanceId, first.instanceId);
+    expect(run.combat!.enemies[0]!.hp).toBe(72);
+    expect(run.combat!.enemies[1]!.hp).toBe(100);
+
+    run = playCard(run, sweepingAttack.instanceId);
+    expect(run.combat!.enemies[0]!.hp).toBe(59);
+    expect(run.combat!.enemies[1]!.hp).toBe(87);
+  });
+
+  it('keeps the final defeat event available before the room reward choice', () => {
+    let run = createRun('FINAL-DEFEAT-TRANSITION');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const target = run.combat!.enemies[0]!;
+    target.position = { x: 4, y: 4 };
+    target.hp = 1;
+    target.armor = 0;
+    target.shield = 0;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
+    const previousSequence = run.combat!.animationSequence;
+
+    run = playCard(run, attack.instanceId, target.instanceId);
+
+    expect(run.phase).toBe('choice');
+    expect(run.combat!.animationEvents.filter((event) => event.sequence > previousSequence).map((event) => event.kind))
+      .toEqual(['card-play', 'player-attack', 'defeat']);
   });
 
   it('never changes targets automatically when another enemy enters the firing line', () => {
@@ -148,21 +377,21 @@ describe('combat', () => {
     alignedTarget.position = { x: 6, y: 4 };
     run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
     run.combat!.selectedEnemyId = previousTarget.instanceId;
-    const tearBomb = run.player.deck.find((card) => card.definitionId === 'isaacs-tears')!;
-    run.combat!.hand = [tearBomb.instanceId];
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
 
     run = movePlayer(run, 1, 4);
 
     expect(run.combat!.selectedEnemyId).toBe(previousTarget.instanceId);
-    expect(canPlayCard(run, tearBomb.instanceId)).toEqual({ ok: true });
-    expect(() => playCard(run, tearBomb.instanceId)).toThrow(/choose an enemy target/i);
-    expect(canPlayCard(run, tearBomb.instanceId, run.combat!.selectedEnemyId)).toEqual({
+    expect(canPlayCard(run, attack.instanceId)).toEqual({ ok: true });
+    expect(() => playCard(run, attack.instanceId)).toThrow(/choose an enemy target/i);
+    expect(canPlayCard(run, attack.instanceId, run.combat!.selectedEnemyId)).toEqual({
       ok: false, reason: 'Target is outside attack range',
     });
     run = selectEnemy(run, alignedTarget.instanceId);
-    expect(canPlayCard(run, tearBomb.instanceId, run.combat!.selectedEnemyId)).toEqual({ ok: true });
+    expect(canPlayCard(run, attack.instanceId, run.combat!.selectedEnemyId)).toEqual({ ok: true });
     const hpBefore = alignedTarget.hp;
-    run = playCard(run, tearBomb.instanceId, run.combat!.selectedEnemyId);
+    run = playCard(run, attack.instanceId, run.combat!.selectedEnemyId);
     expect(run.combat!.enemies[1]!.hp).toBeLessThan(hpBefore);
   });
 
@@ -175,18 +404,102 @@ describe('combat', () => {
     second.position = { x: 5, y: 4 };
     run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
     run.combat!.selectedEnemyId = undefined;
-    const tearBomb = run.player.deck.find((card) => card.definitionId === 'isaacs-tears')!;
-    run.combat!.hand = [tearBomb.instanceId];
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
     const firstHp = first.hp;
     const secondHp = second.hp;
 
-    expect(canPlayCard(run, tearBomb.instanceId)).toEqual({ ok: true });
-    expect(() => playCard(run, tearBomb.instanceId)).toThrow(/choose an enemy target/i);
-    run = playCard(run, tearBomb.instanceId, second.instanceId);
+    expect(canPlayCard(run, attack.instanceId)).toEqual({ ok: true });
+    expect(() => playCard(run, attack.instanceId)).toThrow(/choose an enemy target/i);
+    run = playCard(run, attack.instanceId, second.instanceId);
 
     expect(run.combat!.enemies[0]!.hp).toBe(firstHp);
     expect(run.combat!.enemies[1]!.hp).toBeLessThan(secondHp);
     expect(run.combat!.selectedEnemyId).toBe(second.instanceId);
+  });
+
+  it('fuses an item card into one attack while only charging the attack vitality', () => {
+    let run = createRun('FUSION-KNOCKBACK');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    equipItem(run, 'terra');
+    const combat = run.combat!;
+    const target = combat.enemies[0]!;
+    target.position = { x: 4, y: 4 };
+    target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
+    combat.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.player.stats.critChance = 0;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const terra = run.player.deck.find((card) => card.definitionId === 'item:terra')!;
+    combat.hand = [attack.instanceId, terra.instanceId];
+    combat.drawPile = combat.drawPile.filter((id) => !combat.hand.includes(id));
+    combat.discardPile = [];
+    combat.vitality = 5;
+
+    expect(getAttackFusionPreview(run, attack.instanceId, [terra.instanceId])).toMatchObject({
+      totalCost: 1, flatDamage: 3, projectileScale: 1.35, knockback: 2,
+    });
+    run = playFusedAttack(run, attack.instanceId, [terra.instanceId], target.instanceId);
+
+    expect(run.combat!.vitality).toBe(4);
+    expect(run.combat!.enemies[0]!.hp).toBe(91);
+    expect(run.combat!.enemies[0]!.position).toEqual({ x: 6, y: 4 });
+    expect(run.combat!).toMatchObject({ playerDamageBuff: 0, playerArmorBuff: 0, usedPassiveItems: [] });
+    expect(run.combat!.hand).toEqual([]);
+    expect(run.combat!.discardPile).toEqual(expect.arrayContaining([attack.instanceId, terra.instanceId]));
+  });
+
+  it('only reports a fusion opportunity when a compatible item card is actually in hand', () => {
+    let run = createRun('FUSION-OPPORTUNITY');
+    equipItem(run, 'terra');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const terra = run.player.deck.find((card) => card.definitionId === 'item:terra')!;
+    run.combat!.hand = [attack.instanceId];
+    expect(getAttackFusionMaterialIds(run, attack.instanceId)).toEqual([]);
+
+    run.combat!.hand.push(terra.instanceId);
+    expect(getAttackFusionMaterialIds(run, attack.instanceId)).toEqual([terra.instanceId]);
+  });
+
+  it('stacks fusion multipliers geometrically and applies poison and slow over enemy turns', () => {
+    let run = createRun('FUSION-STATUS');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    equipItem(run, 'pentagram');
+    equipItem(run, 'squeezy');
+    const combat = run.combat!;
+    const target = combat.enemies[0]!;
+    target.position = { x: 4, y: 4 };
+    target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
+    target.intent = { kind: 'idle', value: 0, label: 'Idle', actions: [{ kind: 'idle', value: 0 }] };
+    combat.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.player.stats.critChance = 0;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const pentagram = run.player.deck.find((card) => card.definitionId === 'item:pentagram')!;
+    const squeezy = run.player.deck.find((card) => card.definitionId === 'item:squeezy')!;
+    const fusedItems = [pentagram.instanceId, squeezy.instanceId];
+    combat.hand = [attack.instanceId, ...fusedItems];
+    combat.drawPile = combat.drawPile.filter((id) => !combat.hand.includes(id));
+    combat.discardPile = [];
+    const preview = getAttackFusionPreview(run, attack.instanceId, fusedItems)!;
+    expect(preview.totalCost).toBe(1);
+    expect(preview.damageMultiplier).toBeCloseTo(1.32);
+    expect(preview).toMatchObject({ poisonTurns: 2, poisonDamage: 3, slowTurns: 2 });
+    combat.vitality = 0;
+    expect(canPlayFusedAttack(run, attack.instanceId, fusedItems, target.instanceId)).toMatchObject({ ok: false });
+    combat.vitality = 1;
+
+    run = playFusedAttack(run, attack.instanceId, fusedItems, target.instanceId);
+    expect(run.combat!.vitality).toBe(0);
+    expect(run.combat!.enemies[0]!.hp).toBe(92);
+    expect(run.combat!.enemies[0]).toMatchObject({ poisonTurns: 2, poisonDamage: 3, slowedTurns: 2 });
+    expect(getEnemyMovementSpeed(run.combat!.enemies[0]!)).toBe(Math.max(1, Math.ceil(target.movementSpeed / 2)));
+    expect(run.combat!).toMatchObject({ playerDamageMultiplier: 1, playerFireRateBuff: 0, usedPassiveItems: [] });
+
+    run = endTurn(run);
+    run = finishDiscard(run);
+    expect(run.combat!.enemies[0]!.hp).toBe(89);
+    expect(run.combat!.enemies[0]).toMatchObject({ poisonTurns: 1, slowedTurns: 1 });
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyPoisoned')).toBe(true);
   });
 
   it('only allows straight-line attacks until Spoon Bender is played', () => {
@@ -196,7 +509,7 @@ describe('combat', () => {
     const target = run.combat!.enemies[0]!;
     target.position = { x: 3, y: 2 };
     run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
-    const attack = run.player.deck.find((card) => card.definitionId === 'isaacs-tears')!;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     const spoonBender = run.player.deck.find((card) => card.definitionId === 'item:spoon-bender')!;
     run.combat!.hand = [attack.instanceId, spoonBender.instanceId];
 
@@ -239,6 +552,7 @@ describe('combat', () => {
     enemy.hp -= 12;
     enemy.damageTakenThisRound = 12;
     enemy.reactionCooldown = 0;
+    enemy.alerted = true;
     run.combat!.enemies.forEach((entry) => {
       entry.intent = entry.instanceId === enemy.instanceId
         ? { kind: 'attack', value: 1, label: 'Attack 1', actions: [{ kind: 'attack', value: 1 }] }
@@ -287,6 +601,83 @@ describe('combat', () => {
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyAttack')).toBe(false);
   });
 
+  it('resolves both telegraphed boss instructions in order', () => {
+    let run = createRun('BOSS-DOUBLE-ACTION');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const boss = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    Object.assign(boss, {
+      boss: true, behavior: 'boss', position: { x: 1, y: 4 }, attackRange: 5,
+      movementPattern: 'cardinal', alerted: true,
+      intent: {
+        kind: 'attack', value: 8, label: 'Attack 8 + Attack 6',
+        actions: [{ kind: 'attack', value: 8 }, { kind: 'attack', value: 6 }],
+      },
+    });
+    run.player.stats.armor = 0;
+    run.player.stats.dodgeChance = 0;
+    run.combat!.playerShield = 0;
+    run.combat!.hand = [];
+    const hpBefore = run.player.redHp;
+
+    run = finishDiscard(endTurn(run));
+
+    expect(run.player.redHp).toBe(hpBefore - 14);
+    expect(run.combat!.log.filter((entry) => entry.messageKey === 'enemyAttack')).toHaveLength(2);
+    expect(run.combat!.animationEvents.filter((event) => event.kind === 'enemy-attack')).toHaveLength(2);
+    expect(run.combat!.enemies[0]!.intent.actions).toHaveLength(2);
+  });
+
+  it('uses a boss charge as a doubled first attack on the following turn', () => {
+    let run = createRun('BOSS-CHARGE-NEXT-ATTACK');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const boss = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    Object.assign(boss, {
+      boss: true, behavior: 'boss', attack: 10, position: { x: 1, y: 4 }, attackRange: 5,
+      movementPattern: 'cardinal', alerted: true, behaviorStep: 0,
+      intent: {
+        kind: 'attack', value: 10, label: 'Attack 10 + Preparing…',
+        actions: [{ kind: 'attack', value: 10 }, { kind: 'prepare', value: 0 }],
+      },
+    });
+    run.player.stats.armor = 0;
+    run.player.stats.dodgeChance = 0;
+    run.combat!.playerShield = 0;
+    run.combat!.hand = [];
+
+    run = finishDiscard(endTurn(run));
+
+    const chargedBoss = run.combat!.enemies[0]!;
+    expect(chargedBoss.prepared).toBe(true);
+    expect(chargedBoss.intent.actions?.[0]).toEqual({ kind: 'attack', value: 20 });
+    expect(chargedBoss.intent.actions).toHaveLength(2);
+  });
+
+  it('lets a boss summon a minion without granting it an immediate action', () => {
+    let run = createRun('BOSS-SUMMON');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const boss = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    Object.assign(boss, {
+      boss: true, behavior: 'boss', position: { x: 1, y: 4 }, attackRange: 5,
+      movementPattern: 'cardinal', alerted: true,
+      intent: {
+        kind: 'summon', value: 1, label: 'Summon 1 + Guard 4',
+        actions: [{ kind: 'summon', value: 1 }, { kind: 'shield', value: 4 }],
+      },
+    });
+    run.combat!.hand = [];
+
+    run = finishDiscard(endTurn(run));
+
+    expect(run.combat!.enemies.filter((enemy) => enemy.hp > 0 && !enemy.boss)).toHaveLength(1);
+    expect(run.combat!.enemies[0]!.shield).toBe(4);
+    expect(run.combat!.animationEvents.some((event) => event.kind === 'summon')).toBe(true);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'bossSummon')).toBe(true);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyAttack')).toBe(false);
+  });
+
   it('moves into a straight firing line and attacks in the same enemy turn', () => {
     let run = createRun('MOVE-THEN-ATTACK');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
@@ -295,6 +686,7 @@ describe('combat', () => {
     enemy.position = { x: 7, y: 4 };
     enemy.movementSpeed = 2;
     enemy.attackRange = 5;
+    enemy.alerted = true;
     enemy.intent = { kind: 'attack', value: 12, label: 'Attack 12', actions: [{ kind: 'attack', value: 12 }] };
     run.player.stats.dodgeChance = 0;
     run.combat!.playerShield = 0;
@@ -311,7 +703,7 @@ describe('combat', () => {
   });
 
   it('turns fire rate into predictable echo hits', () => {
-    let run = createRun('FAST-TEARS');
+    let run = createRun('FAST-ATTACKS');
     run = enterRoom(run, getAvailableNodes(run).find((id) => id.includes('l1'))!);
     run.player.stats.fireRate = 1.5;
     run.player.stats.critChance = 0;
@@ -319,13 +711,14 @@ describe('combat', () => {
     target.position = { x: 4, y: 4 };
     run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
     target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
-    const attacks = run.player.deck.filter((card) => card.definitionId === 'isaacs-tears').slice(0, 2);
+    const attacks = run.player.deck.filter((card) => card.definitionId === 'basic-attack').slice(0, 2);
     run.combat!.hand = attacks.map((card) => card.instanceId);
     run.combat!.drawPile = run.combat!.drawPile.filter((id) => !run.combat!.hand.includes(id));
     run.combat!.selectedEnemyId = target.instanceId;
     run = playCard(run, attacks[0]!.instanceId, target.instanceId);
     run = playCard(run, attacks[1]!.instanceId, target.instanceId);
     expect(run.combat!.enemies[0]!.hp).toBe(82);
+    expect(new Set(run.combat!.log.map((entry) => entry.id)).size).toBe(run.combat!.log.length);
   });
 
   it('always enters a discard stage and requires retaining no more than five before enemies act', () => {
@@ -424,6 +817,27 @@ describe('combat', () => {
     run = endTurn(run);
     run = finishDiscard(run);
     expect(run.combat!.hand).toContain(itemCard.instanceId);
+  });
+
+  it('keeps non-combat passive rewards out of the combat deck while their run effects remain active', () => {
+    const run = createRun('NON-COMBAT-ITEMS');
+    equipItem(run, 'goat-head');
+    equipItem(run, 'compass');
+    equipItem(run, 'blue-map');
+    equipItem(run, 'steam-sale');
+
+    expect(run.player.items).toEqual(expect.arrayContaining(['goat-head', 'compass', 'blue-map', 'steam-sale']));
+    expect(run.player.deck.some((card) => ['item:goat-head', 'item:compass', 'item:blue-map', 'item:steam-sale'].includes(card.definitionId))).toBe(false);
+    expect(CARDS['item:goat-head']).toBeUndefined();
+    expect(run.player.stats.shopDiscount).toBe(0.5);
+  });
+
+  it('removes retired non-combat item cards when hydrating an older save', () => {
+    const run = createRun('OLD-NON-COMBAT-CARD');
+    const retired = { instanceId: 'legacy-goat-head-card', definitionId: 'item:goat-head', upgraded: false };
+    run.player.deck.push(retired);
+    const hydrated = hydrateRunState(run);
+    expect(hydrated.player.deck).not.toContainEqual(retired);
   });
 
   it('permanently loses an active item when its skill card is discarded', () => {
