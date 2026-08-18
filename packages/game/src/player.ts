@@ -1,4 +1,4 @@
-import { CARDS, ITEMS } from './catalog.js';
+import { CARDS, ITEMS, passiveCardId } from './catalog.js';
 import type { CardInstance, PlayerState, RunState } from './types.js';
 import { randomInt } from './random.js';
 
@@ -18,7 +18,7 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
       baseDamage: 6, damageMultiplier: 1, armor: 3, baseShield: 10,
       heartSize: 30, maxVitality: 5, drawCount: 7, maxRetain: 5,
       fireRate: 1, luck: 0, critChance: 0.05, dodgeChance: 0,
-      shopDiscount: 0, attackMode: 'tears',
+      shopDiscount: 0, movementSpeed: 3, attackRange: 5, attackMode: 'tears',
     },
     coins: 5, bombs: 1, keys: 1, items: ['d6'], activeItemId: 'd6', deck: [],
   };
@@ -77,20 +77,10 @@ export function equipItem(run: RunState, itemId: string): void {
     if (item.skillCardId) run.player.deck.push(createCard(run, item.skillCardId));
   }
   if (!run.player.items.includes(item.id)) run.player.items.push(item.id);
-
-  for (const effect of item.effects ?? []) {
-    if (effect.stat) {
-      const current = run.player.stats[effect.stat];
-      run.player.stats[effect.stat] = effect.multiplier !== undefined
-        ? current * effect.multiplier
-        : current + (effect.amount ?? 0);
+  if (item.kind === 'passive') {
+    const definitionId = passiveCardId(item.id);
+    if (!run.player.deck.some((card) => card.definitionId === definitionId)) {
+      run.player.deck.push(createCard(run, definitionId));
     }
-    if (effect.attackMode) run.player.stats.attackMode = effect.attackMode;
-    if (effect.redContainers) {
-      run.player.redContainers += effect.redContainers;
-      run.player.redHp = maxRedHp(run.player);
-    }
-    if (effect.soulHearts) addPocketHeart(run, 'soul', effect.soulHearts);
-    if (effect.blackHearts) addPocketHeart(run, 'black', effect.blackHearts);
   }
 }

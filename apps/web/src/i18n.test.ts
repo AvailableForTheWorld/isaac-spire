@@ -6,7 +6,8 @@ import { cardName, logText } from './localize';
 describe('game localization', () => {
   it('uses Simplified Chinese when no saved browser preference exists', () => {
     expect(i18n.resolvedLanguage).toBe('zh-CN');
-    expect(cardName(i18n.t, 'isaacs-tears')).toBe('以撒的眼泪');
+    expect(cardName(i18n.t, 'isaacs-tears')).toBe('泪弹');
+    expect(cardName(i18n.t, 'item:goat-head')).toBe('山羊头');
   });
 
   it('localizes combat logs from runs saved before semantic log keys', () => {

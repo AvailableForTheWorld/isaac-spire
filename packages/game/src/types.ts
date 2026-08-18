@@ -19,7 +19,7 @@ export type RunPhase =
   | 'victory'
   | 'defeat';
 
-export type CardType = 'attack' | 'skill' | 'recovery' | 'shield' | 'hex' | 'tarot' | 'curse';
+export type CardType = 'attack' | 'skill' | 'item' | 'recovery' | 'shield' | 'hex' | 'tarot' | 'curse';
 export type AttackMode = 'tears' | 'knife' | 'brimstone' | 'tech-x';
 export type HeartKind = 'soul' | 'black';
 export type IntentKind = 'attack' | 'shield' | 'curse' | 'heal' | 'prepare' | 'idle';
@@ -30,6 +30,7 @@ export type CombatAnimationKind =
   | 'discard-phase'
   | 'enemy-phase'
   | 'round-start'
+  | 'move'
   | 'player-attack'
   | 'enemy-attack'
   | 'shield'
@@ -56,7 +57,14 @@ export interface CharacterStats {
   critChance: number;
   dodgeChance: number;
   shopDiscount: number;
+  movementSpeed: number;
+  attackRange: number;
   attackMode: AttackMode;
+}
+
+export interface GridPosition {
+  x: number;
+  y: number;
 }
 
 export interface PocketHeart {
@@ -90,6 +98,7 @@ export interface CardDefinition {
   hits?: number;
   target: 'enemy' | 'all-enemies' | 'self' | 'none';
   exhaust?: boolean;
+  itemId?: string;
   icon: string;
 }
 
@@ -111,6 +120,7 @@ export interface ItemEffect {
   revealAll?: boolean;
   guaranteeDeal?: boolean;
   damageCap?: number;
+  curvedShots?: boolean;
 }
 
 export interface ItemDefinition {
@@ -159,6 +169,8 @@ export interface EnemyDefinition {
   maxHp: number;
   attack: number;
   armor: number;
+  movementSpeed: number;
+  attackRange: number;
   elite?: boolean;
   boss?: boolean;
   icon: string;
@@ -188,6 +200,7 @@ export interface EnemyState extends EnemyDefinition {
   damageTakenThisRound: number;
   reactionCooldown: number;
   turnsSinceAttack: number;
+  position: GridPosition;
   intent: EnemyIntent;
 }
 
@@ -201,6 +214,10 @@ export interface CombatAnimationEvent {
   rawValue?: number;
   armorValue?: number;
   cardId?: string;
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
   attackMode?: AttackMode;
 }
 
@@ -219,6 +236,15 @@ export interface CombatState {
   playerShield: number;
   playerArmorBuff: number;
   playerDamageBuff: number;
+  playerDamageMultiplier: number;
+  playerFireRateBuff: number;
+  playerCritChanceBuff: number;
+  playerRangeBuff: number;
+  playerMovementBuff: number;
+  attackModeOverride?: AttackMode;
+  damageCap?: number;
+  usedPassiveItems: string[];
+  playerPosition: GridPosition;
   tearMeter: number;
   hand: string[];
   drawPile: string[];

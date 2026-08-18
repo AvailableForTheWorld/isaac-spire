@@ -11,8 +11,8 @@ export const FLOORS: FloorDefinition[] = [
 
 export const CARDS: Record<string, CardDefinition> = {
   'isaacs-tears': {
-    id: 'isaacs-tears', name: "Isaac's Tears", type: 'attack', cost: 1, value: 6,
-    description: 'Deal 100% tear damage. Fire rate can echo this hit.', target: 'enemy', icon: '●',
+    id: 'isaacs-tears', name: 'Tear Bomb', type: 'attack', cost: 1, value: 6,
+    description: 'Launch a tear bomb for 100% damage. Fire rate can echo this hit.', target: 'enemy', icon: '●',
   },
   'double-shot': {
     id: 'double-shot', name: 'Double Shot', type: 'attack', cost: 1, value: 4, hits: 2,
@@ -52,7 +52,7 @@ export const CARDS: Record<string, CardDefinition> = {
   },
   'skill-d6': {
     id: 'skill-d6', name: 'The D6', type: 'skill', cost: 2,
-    description: 'Reroll every non-skill card in hand. Recharges in 3 rounds.', target: 'none', icon: '⚅',
+    description: 'Reroll every other card in hand into a different card. Recharges in 3 rounds.', target: 'none', icon: '⚅',
   },
   'skill-yum-heart': {
     id: 'skill-yum-heart', name: 'Yum Heart', type: 'skill', cost: 1,
@@ -83,7 +83,7 @@ export const CARDS: Record<string, CardDefinition> = {
 export const ITEMS: Record<string, ItemDefinition> = {
   d6: {
     id: 'd6', name: 'The D6', kind: 'active', pool: ['treasure'], quality: 4, icon: '⚅', chargeRounds: 3,
-    skillCardId: 'skill-d6', description: 'Rerolls the rest of your hand. Isaac starts with it.',
+    skillCardId: 'skill-d6', description: 'Transforms every other card in hand into a different card. Isaac starts with it.',
   },
   'yum-heart': {
     id: 'yum-heart', name: 'Yum Heart', kind: 'active', pool: ['treasure', 'shop'], quality: 2, icon: '♥', chargeRounds: 4,
@@ -112,6 +112,10 @@ export const ITEMS: Record<string, ItemDefinition> = {
   'sad-onion': {
     id: 'sad-onion', name: 'The Sad Onion', kind: 'passive', pool: ['treasure'], quality: 2, icon: '◌',
     description: '+0.25 fire rate. Every four attacks produces a free echo shot.', effects: [{ stat: 'fireRate', amount: 0.25 }],
+  },
+  'spoon-bender': {
+    id: 'spoon-bender', name: 'Spoon Bender', kind: 'passive', pool: ['treasure'], quality: 3, icon: '⌁',
+    description: 'Homing tears can bend toward enemies outside a straight firing line.', effects: [{ curvedShots: true }],
   },
   'crickets-head': {
     id: 'crickets-head', name: "Cricket's Head", kind: 'passive', pool: ['treasure', 'elite'], quality: 4, icon: '♟',
@@ -195,6 +199,40 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
 };
 
+const PASSIVE_CARD_TEXT: Record<string, string> = {
+  'sad-onion': 'Gain +0.25 fire rate for this combat.',
+  'spoon-bender': 'Tears can target enemies diagonally for this combat.',
+  'crickets-head': 'Multiply damage by 1.5 for this combat.',
+  'magic-mushroom': 'Gain ×1.25 damage, +1 armor, +0.15 fire rate, and recover 15 HP this combat.',
+  breakfast: 'Recover one full red heart.',
+  squeezy: 'Gain +0.2 fire rate and 20 shield this combat.',
+  'holy-mantle': 'Gain 15 shield.',
+  'steam-sale': 'Gain 2 coins.',
+  compass: 'Reveal every normal room on this floor.',
+  'blue-map': 'Reveal the Secret and Super Secret rooms on this floor.',
+  pentagram: 'Multiply damage by 1.2 for this combat.',
+  'goat-head': 'Guarantee the Devil or Angel door after this floor boss.',
+  wafer: 'Cap incoming hits at 15 damage for this combat.',
+  'sacred-heart': 'Gain ×1.6 damage and +15% critical chance for this combat.',
+  brimstone: 'Change attacks to Brimstone for this combat.',
+  'moms-knife': "Change attacks to Mom's Knife for this combat.",
+  'tech-x': 'Change attacks to Tech X for this combat.',
+  terra: 'Gain +3 damage and +1 armor for this combat.',
+  luna: 'Draw one card and reveal both secret rooms.',
+};
+
+export function passiveCardId(itemId: string): string {
+  return `item:${itemId}`;
+}
+
+for (const item of Object.values(ITEMS).filter((entry) => entry.kind === 'passive')) {
+  const id = passiveCardId(item.id);
+  CARDS[id] = {
+    id, name: item.name, type: 'item', cost: 1, target: 'self', itemId: item.id, icon: item.icon,
+    description: `${PASSIVE_CARD_TEXT[item.id] ?? item.description} Reusable after the discard pile is reshuffled.`,
+  };
+}
+
 export const DEFAULT_UNLOCKS = Object.values(ITEMS)
   .filter((item) => !item.unlock)
   .map((item) => item.id);
@@ -209,23 +247,23 @@ export const DEFAULT_PROFILE: ProfileState = {
 };
 
 const ENEMIES: Record<string, EnemyDefinition> = {
-  fly: { id: 'fly', name: 'Attack Fly', maxHp: 18, attack: 9, armor: 0, icon: '✣' },
-  pooter: { id: 'pooter', name: 'Pooter', maxHp: 24, attack: 12, armor: 0, icon: '◉' },
-  spider: { id: 'spider', name: 'Big Spider', maxHp: 30, attack: 14, armor: 1, icon: '✳' },
-  horf: { id: 'horf', name: 'Horf', maxHp: 34, attack: 16, armor: 1, icon: '●' },
-  charger: { id: 'charger', name: 'Charger', maxHp: 38, attack: 18, armor: 1, icon: '➤' },
-  globin: { id: 'globin', name: 'Globin', maxHp: 44, attack: 17, armor: 2, icon: '♟' },
-  knight: { id: 'knight', name: 'Knight', maxHp: 52, attack: 21, armor: 4, icon: '♞' },
-  vis: { id: 'vis', name: 'Vis', maxHp: 46, attack: 23, armor: 2, icon: '☢' },
-  'leaper': { id: 'leaper', name: 'Leaper', maxHp: 56, attack: 22, armor: 3, icon: '♣' },
-  'fat-bat': { id: 'fat-bat', name: 'Fat Bat', maxHp: 88, attack: 23, armor: 3, elite: true, icon: '◆' },
-  'champion-knight': { id: 'champion-knight', name: 'Champion Knight', maxHp: 110, attack: 27, armor: 5, elite: true, icon: '♛' },
-  monstro: { id: 'monstro', name: 'Monstro', maxHp: 120, attack: 22, armor: 2, boss: true, icon: '◉' },
-  duke: { id: 'duke', name: 'Duke of Flies', maxHp: 155, attack: 25, armor: 2, boss: true, icon: '♚' },
-  gurdy: { id: 'gurdy', name: 'Gurdy', maxHp: 190, attack: 28, armor: 3, boss: true, icon: '☉' },
-  fatty: { id: 'fatty', name: 'Mega Fatty', maxHp: 225, attack: 31, armor: 4, boss: true, icon: '⬤' },
-  cage: { id: 'cage', name: 'The Cage', maxHp: 270, attack: 35, armor: 5, boss: true, icon: '▣' },
-  mom: { id: 'mom', name: "Mom's Leg", maxHp: 360, attack: 40, armor: 6, boss: true, icon: '♠' },
+  fly: { id: 'fly', name: 'Attack Fly', maxHp: 18, attack: 9, armor: 0, movementSpeed: 3, attackRange: 1, icon: '✣' },
+  pooter: { id: 'pooter', name: 'Pooter', maxHp: 24, attack: 12, armor: 0, movementSpeed: 2, attackRange: 5, icon: '◉' },
+  spider: { id: 'spider', name: 'Big Spider', maxHp: 30, attack: 14, armor: 1, movementSpeed: 3, attackRange: 1, icon: '✳' },
+  horf: { id: 'horf', name: 'Horf', maxHp: 34, attack: 16, armor: 1, movementSpeed: 2, attackRange: 5, icon: '●' },
+  charger: { id: 'charger', name: 'Charger', maxHp: 38, attack: 18, armor: 1, movementSpeed: 4, attackRange: 1, icon: '➤' },
+  globin: { id: 'globin', name: 'Globin', maxHp: 44, attack: 17, armor: 2, movementSpeed: 2, attackRange: 2, icon: '♟' },
+  knight: { id: 'knight', name: 'Knight', maxHp: 52, attack: 21, armor: 4, movementSpeed: 2, attackRange: 1, icon: '♞' },
+  vis: { id: 'vis', name: 'Vis', maxHp: 46, attack: 23, armor: 2, movementSpeed: 1, attackRange: 6, icon: '☢' },
+  'leaper': { id: 'leaper', name: 'Leaper', maxHp: 56, attack: 22, armor: 3, movementSpeed: 4, attackRange: 1, icon: '♣' },
+  'fat-bat': { id: 'fat-bat', name: 'Fat Bat', maxHp: 88, attack: 23, armor: 3, movementSpeed: 3, attackRange: 2, elite: true, icon: '◆' },
+  'champion-knight': { id: 'champion-knight', name: 'Champion Knight', maxHp: 110, attack: 27, armor: 5, movementSpeed: 3, attackRange: 1, elite: true, icon: '♛' },
+  monstro: { id: 'monstro', name: 'Monstro', maxHp: 120, attack: 22, armor: 2, movementSpeed: 2, attackRange: 3, boss: true, icon: '◉' },
+  duke: { id: 'duke', name: 'Duke of Flies', maxHp: 155, attack: 25, armor: 2, movementSpeed: 2, attackRange: 4, boss: true, icon: '♚' },
+  gurdy: { id: 'gurdy', name: 'Gurdy', maxHp: 190, attack: 28, armor: 3, movementSpeed: 1, attackRange: 6, boss: true, icon: '☉' },
+  fatty: { id: 'fatty', name: 'Mega Fatty', maxHp: 225, attack: 31, armor: 4, movementSpeed: 2, attackRange: 2, boss: true, icon: '⬤' },
+  cage: { id: 'cage', name: 'The Cage', maxHp: 270, attack: 35, armor: 5, movementSpeed: 3, attackRange: 3, boss: true, icon: '▣' },
+  mom: { id: 'mom', name: "Mom's Leg", maxHp: 360, attack: 40, armor: 6, movementSpeed: 2, attackRange: 5, boss: true, icon: '♠' },
 };
 
 const FLOOR_POOLS = [

@@ -2,15 +2,116 @@ import {
   CARDS, DEFAULT_UNLOCKS, FLOORS, ITEMS, bossForFloor, eliteForFloor, enemyPoolForFloor,
 } from './catalog.js';
 import { availableNodeIds, createFloorMap, getMapNode, revealFromCurrent } from './map.js';
-import { addPocketHeart, createCard, createIsaac, equipItem, getItemEffectTotal, healRed, maxRedHp } from './player.js';
+import { addPocketHeart, createCard, createIsaac, equipItem, healRed, maxRedHp } from './player.js';
 import { hashSeed, nextRandom, pickOne, randomInt, shuffle, weightedPick } from './random.js';
 import type {
   CardDefinition, CardInstance, ChoiceState, CombatAnimationEvent, CombatLogEntry, CombatState,
   EnemyAction, EnemyBehavior, EnemyDefinition, EnemyIntent, EnemyState, IntentKind,
-  ItemDefinition, RewardOption, RoomKind, RunState,
+  GridPosition, ItemDefinition, RewardOption, RoomKind, RunState,
 } from './types.js';
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+export const COMBAT_GRID_WIDTH = 17;
+export const COMBAT_GRID_HEIGHT = 9;
+export const ISAAC_DOOR_POSITION: GridPosition = { x: 0, y: 4 };
+
+function gridDistance(left: GridPosition, right: GridPosition): number {
+  return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
+}
+
+function isStraightLineInRange(origin: GridPosition, target: GridPosition, range: number): boolean {
+  const xDistance = Math.abs(origin.x - target.x);
+  const yDistance = Math.abs(origin.y - target.y);
+  return (xDistance === 0 || yDistance === 0) && xDistance + yDistance <= range;
+}
+
+function insideGrid(position: GridPosition): boolean {
+  return position.x >= 0 && position.x < COMBAT_GRID_WIDTH && position.y >= 0 && position.y < COMBAT_GRID_HEIGHT;
+}
+
+function positionKey(position: GridPosition): string {
+  return `${position.x}:${position.y}`;
+}
+
+function fallbackEnemyPosition(index: number, boss = false): GridPosition {
+  return boss ? { x: 15, y: 4 } : { x: 15 - (index % 2), y: Math.min(8, 2 + index * 3) };
+}
+
+function ensureCombatGrid(run: RunState): void {
+  const combat = run.combat;
+  if (!combat) return;
+  combat.playerPosition ??= { ...ISAAC_DOOR_POSITION };
+  combat.playerDamageMultiplier ??= 1;
+  combat.playerFireRateBuff ??= 0;
+  combat.playerCritChanceBuff ??= 0;
+  combat.playerRangeBuff ??= 0;
+  combat.playerMovementBuff ??= 0;
+  combat.usedPassiveItems ??= [];
+  combat.enemies.forEach((enemy, index) => {
+    enemy.movementSpeed ??= enemy.boss ? 2 : 3;
+    enemy.attackRange ??= enemy.id === 'pooter' || enemy.id === 'horf' || enemy.id === 'vis' ? 5 : 1;
+    enemy.position ??= fallbackEnemyPosition(index, enemy.boss);
+  });
+}
+
+function reachablePositions(start: GridPosition, maxSteps: number, blocked: Set<string>): GridPosition[] {
+  const queue: Array<{ position: GridPosition; steps: number }> = [{ position: start, steps: 0 }];
+  const visited = new Set<string>([positionKey(start)]);
+  const reachable: GridPosition[] = [];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (current.steps > 0) reachable.push(current.position);
+    if (current.steps >= maxSteps) continue;
+    const neighbors = [
+      { x: current.position.x + 1, y: current.position.y }, { x: current.position.x - 1, y: current.position.y },
+      { x: current.position.x, y: current.position.y + 1 }, { x: current.position.x, y: current.position.y - 1 },
+    ];
+    for (const position of neighbors) {
+      const key = positionKey(position);
+      if (!insideGrid(position) || blocked.has(key) || visited.has(key)) continue;
+      visited.add(key);
+      queue.push({ position, steps: current.steps + 1 });
+    }
+  }
+  return reachable;
+}
+
+export function getPlayerAttackRange(run: RunState): number {
+  return run.player.stats.attackRange + (run.combat?.playerRangeBuff ?? 0);
+}
+
+export function getPlayerMovementSpeed(run: RunState): number {
+  return run.player.stats.movementSpeed + (run.combat?.playerMovementBuff ?? 0);
+}
+
+export function playerHasCurvedShots(run: RunState): boolean {
+  return (run.combat?.usedPassiveItems ?? []).some((id) =>
+    ITEMS[id]?.effects?.some((effect) => effect.curvedShots === true),
+  );
+}
+
+export function isPositionInPlayerAttackRange(run: RunState, position: GridPosition): boolean {
+  const origin = run.combat?.playerPosition ?? ISAAC_DOOR_POSITION;
+  const range = getPlayerAttackRange(run);
+  return playerHasCurvedShots(run)
+    ? gridDistance(origin, position) <= range
+    : isStraightLineInRange(origin, position, range);
+}
+
+export function getReachablePlayerCells(run: RunState): GridPosition[] {
+  if (run.phase !== 'combat' || !run.combat || run.combat.vitality < 1) return [];
+  const playerPosition = run.combat.playerPosition ?? ISAAC_DOOR_POSITION;
+  const blocked = new Set(run.combat.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => positionKey(enemy.position ?? ISAAC_DOOR_POSITION)));
+  return reachablePositions(playerPosition, getPlayerMovementSpeed(run), blocked);
+}
+
+export function isEnemyInPlayerRange(run: RunState, enemyId: string): boolean {
+  const combat = run.combat;
+  if (!combat) return false;
+  const enemy = combat.enemies.find((entry) => entry.instanceId === enemyId && entry.hp > 0);
+  return Boolean(enemy && isPositionInPlayerAttackRange(run, enemy.position ?? ISAAC_DOOR_POSITION));
+}
 
 function now(): string {
   return new Date().toISOString();
@@ -26,7 +127,7 @@ function touch(run: RunState): RunState {
 }
 
 function itemHasEffect(run: RunState, key: 'revealSecrets' | 'revealAll' | 'guaranteeDeal'): boolean {
-  return run.player.items.some((id) => ITEMS[id]?.effects?.some((effect) => effect[key] === true));
+  return (run.combat?.usedPassiveItems ?? []).some((id) => ITEMS[id]?.effects?.some((effect) => effect[key] === true));
 }
 
 function pushLog(
@@ -316,28 +417,30 @@ function behaviorPattern(run: RunState, enemy: EnemyState): EnemyAction[][] {
     case 'hunter':
       return [
         [action('prepare')],
-        [action('attack', attackValue(enemy)), action('shield', shieldValue(run, 0.65))],
+        [action('attack', attackValue(enemy))],
         [action('attack', attackValue(enemy, 1.2))],
       ];
     case 'hexer':
       return [
         [action('curse')],
         [action('attack', attackValue(enemy))],
-        [action('heal', healValue(run)), action('attack', attackValue(enemy, 0.7))],
+        [action('heal', healValue(run))],
         [action('prepare')],
       ];
     case 'tank':
       return [
-        [action('shield', shieldValue(run, 1.35)), action('attack', attackValue(enemy, 0.7))],
+        [action('shield', shieldValue(run, 1.35))],
         [action('attack', attackValue(enemy))],
         [action('prepare')],
-        [action('heal', healValue(run)), action('shield', shieldValue(run, 0.75)), action('attack', attackValue(enemy, 0.8))],
+        [action('heal', healValue(run))],
       ];
     case 'boss':
       return [
         [action('prepare')],
-        [action('attack', attackValue(enemy, 1.1)), action('curse')],
-        [action('shield', shieldValue(run, 1.5)), action('heal', healValue(run, 1.25)), action('attack', attackValue(enemy, 0.85))],
+        [action('attack', attackValue(enemy, 1.1))],
+        [action('curse')],
+        [action('shield', shieldValue(run, 1.5))],
+        [action('heal', healValue(run, 1.25))],
         [action('attack', attackValue(enemy, 1.25))],
       ];
     case 'swarm':
@@ -345,7 +448,7 @@ function behaviorPattern(run: RunState, enemy: EnemyState): EnemyAction[][] {
       return [
         [action('attack', attackValue(enemy))],
         [action('prepare')],
-        [action('attack', attackValue(enemy, 0.8)), action('shield', shieldValue(run, 0.5))],
+        [action('shield', shieldValue(run, 0.5))],
         [action('attack', attackValue(enemy, 1.15))],
       ];
   }
@@ -354,16 +457,16 @@ function behaviorPattern(run: RunState, enemy: EnemyState): EnemyAction[][] {
 function reactionIntent(run: RunState, enemy: EnemyState): EnemyIntent {
   switch (enemy.behavior) {
     case 'hunter':
-      return makeIntent([action('attack', attackValue(enemy, 0.85)), action('prepare')]);
+      return makeIntent([action('prepare')]);
     case 'swarm':
-      return makeIntent([action('shield', shieldValue(run, 0.65)), action('attack', attackValue(enemy, 0.8))]);
+      return makeIntent([action('shield', shieldValue(run, 0.65))]);
     case 'hexer':
-      return makeIntent([action('heal', healValue(run, 1.2)), action('curse'), action('attack', attackValue(enemy, 0.75))]);
+      return makeIntent([action('heal', healValue(run, 1.2))]);
     case 'boss':
-      return makeIntent([action('heal', healValue(run, 1.35)), action('shield', shieldValue(run, 1.2)), action('attack', attackValue(enemy, 0.9))]);
+      return makeIntent([action('heal', healValue(run, 1.35))]);
     case 'tank':
     default:
-      return makeIntent([action('shield', shieldValue(run, 1.25)), action('heal', healValue(run)), action('attack', attackValue(enemy, 0.8))]);
+      return makeIntent([action('shield', shieldValue(run, 1.25))]);
   }
 }
 
@@ -374,13 +477,8 @@ function ensureEnemyBehavior(enemy: EnemyState): void {
   enemy.reactionCooldown ??= 0;
   enemy.turnsSinceAttack ??= 0;
   enemy.staggeredTurns ??= 0;
-  enemy.intent.actions ??= [action(enemy.intent.kind, enemy.intent.value)];
-  const hasAttack = enemy.intent.actions.some((entry) => entry.kind === 'attack');
-  const isDefensiveTurn = enemy.intent.actions.some((entry) => entry.kind === 'shield' || entry.kind === 'heal');
-  const isTelegraphTurn = enemy.intent.actions.some((entry) => ['prepare', 'curse', 'idle'].includes(entry.kind));
-  if (!hasAttack && isDefensiveTurn && !isTelegraphTurn) {
-    enemy.intent = makeIntent([...enemy.intent.actions, action('attack', attackValue(enemy, 0.8))]);
-  }
+  const nextAction = enemy.intent.actions?.[0] ?? action(enemy.intent.kind, enemy.intent.value);
+  enemy.intent = makeIntent([nextAction]);
 }
 
 function rollIntent(run: RunState, enemy: EnemyState): EnemyIntent {
@@ -419,6 +517,7 @@ function makeEnemy(run: RunState, definition: EnemyDefinition, index: number): E
     damageTakenThisRound: 0,
     reactionCooldown: 0,
     turnsSinceAttack: 0,
+    position: fallbackEnemyPosition(index, definition.boss),
     intent: { kind: 'idle', value: 0, label: 'Watching' },
   };
   enemy.intent = rollIntent(run, enemy);
@@ -458,6 +557,13 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
     playerShield: run.player.stats.baseShield,
     playerArmorBuff: 0,
     playerDamageBuff: 0,
+    playerDamageMultiplier: 1,
+    playerFireRateBuff: 0,
+    playerCritChanceBuff: 0,
+    playerRangeBuff: 0,
+    playerMovementBuff: 0,
+    usedPassiveItems: [],
+    playerPosition: { ...ISAAC_DOOR_POSITION },
     tearMeter: 0,
     hand: [...skills],
     drawPile: shuffle(run, others),
@@ -475,7 +581,6 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
     const attacker = combat.enemies.at(-1);
     if (attacker) attacker.intent = makeIntent([action('attack', attackValue(attacker))]);
   }
-  combat.selectedEnemyId = combat.enemies[0]?.instanceId;
   drawToHand(run, combat);
   pushLog(combat, `Round 1 — ${combat.enemies.map((enemy) => enemy.name).join(', ')} entered the room.`, 'special', 'enter', {
     enemies: combat.enemies.map((enemy) => enemy.id).join('|'),
@@ -485,10 +590,9 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
   run.phase = 'combat';
 }
 
-function currentTarget(combat: CombatState, requestedId?: string): EnemyState | undefined {
-  return combat.enemies.find((enemy) => enemy.instanceId === requestedId && enemy.hp > 0)
-    ?? combat.enemies.find((enemy) => enemy.instanceId === combat.selectedEnemyId && enemy.hp > 0)
-    ?? combat.enemies.find((enemy) => enemy.hp > 0);
+function selectedTarget(combat: CombatState, requestedId?: string): EnemyState | undefined {
+  const enemyId = requestedId ?? combat.selectedEnemyId;
+  return enemyId ? combat.enemies.find((enemy) => enemy.instanceId === enemyId && enemy.hp > 0) : undefined;
 }
 
 function hurtEnemy(enemy: EnemyState, rawDamage: number, armorPierce = 0): number {
@@ -507,26 +611,29 @@ function attackDamage(run: RunState, combat: CombatState, card: CardDefinition, 
   const upgraded = instance.upgraded ? 2 : 0;
   const nominal = card.value ?? 6;
   const factor = nominal / 6;
-  return Math.max(1, (run.player.stats.baseDamage + combat.playerDamageBuff + upgraded) * run.player.stats.damageMultiplier * factor);
+  return Math.max(1, (run.player.stats.baseDamage + combat.playerDamageBuff + upgraded)
+    * run.player.stats.damageMultiplier * combat.playerDamageMultiplier * factor);
 }
 
 function playAttack(run: RunState, combat: CombatState, card: CardDefinition, instance: CardInstance, targetId?: string): void {
+  ensureCombatGrid(run);
   let targets = card.target === 'all-enemies'
-    ? combat.enemies.filter((enemy) => enemy.hp > 0)
-    : [currentTarget(combat, targetId)].filter((enemy): enemy is EnemyState => Boolean(enemy));
+    ? combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId))
+    : [selectedTarget(combat, targetId)].filter((enemy): enemy is EnemyState => Boolean(enemy));
   let multiplier = 1;
   let armorPierce = 0;
-  if (run.player.stats.attackMode === 'knife') { multiplier = 1.6; armorPierce = 3; }
-  if (run.player.stats.attackMode === 'brimstone') {
-    targets = combat.enemies.filter((enemy) => enemy.hp > 0);
+  const attackMode = combat.attackModeOverride ?? run.player.stats.attackMode;
+  if (attackMode === 'knife') { multiplier = 1.6; armorPierce = 3; }
+  if (attackMode === 'brimstone') {
+    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
     multiplier = 0.85;
   }
-  if (run.player.stats.attackMode === 'tech-x') {
-    targets = combat.enemies.filter((enemy) => enemy.hp > 0);
+  if (attackMode === 'tech-x') {
+    targets = combat.enemies.filter((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
     targets.forEach((enemy) => { enemy.shield = Math.max(0, enemy.shield - 3); });
   }
 
-  combat.tearMeter += Math.max(0, run.player.stats.fireRate - 1);
+  combat.tearMeter += Math.max(0, run.player.stats.fireRate + combat.playerFireRateBuff - 1);
   const echoHits = Math.floor(combat.tearMeter + 0.00001);
   combat.tearMeter -= echoHits;
   const hits = (card.hits ?? 1) + echoHits;
@@ -536,20 +643,20 @@ function playAttack(run: RunState, combat: CombatState, card: CardDefinition, in
     const wasAlive = target.hp > 0;
     let targetTotal = 0;
     for (let hit = 0; hit < hits; hit += 1) {
-      const critical = nextRandom(run) < run.player.stats.critChance;
+      const critical = nextRandom(run) < run.player.stats.critChance + combat.playerCritChanceBuff;
       const dealt = hurtEnemy(target, base * (critical ? 2 : 1), armorPierce);
       total += dealt;
       targetTotal += dealt;
     }
     pushAnimation(combat, {
       kind: 'player-attack', sourceId: 'isaac', targetId: target.instanceId,
-      value: targetTotal, secondaryValue: hits, attackMode: run.player.stats.attackMode,
+      value: targetTotal, secondaryValue: hits, attackMode,
     });
     if (wasAlive && target.hp <= 0) pushAnimation(combat, { kind: 'defeat', sourceId: target.instanceId, targetId: target.instanceId });
   }
-  const mode = run.player.stats.attackMode === 'tears' ? '' : ` ${run.player.stats.attackMode}`;
+  const mode = attackMode === 'tears' ? '' : ` ${attackMode}`;
   pushLog(combat, `${card.name} dealt ${total}${mode} damage${echoHits ? ` with ${echoHits} echo hit` : ''}.`, 'good', 'attack', {
-    cardId: card.id, damage: total, mode: run.player.stats.attackMode === 'tears' ? '' : run.player.stats.attackMode, echoCount: echoHits,
+    cardId: card.id, damage: total, mode: attackMode === 'tears' ? '' : attackMode, echoCount: echoHits,
   });
 }
 
@@ -561,10 +668,20 @@ function skillChargeRounds(run: RunState, instance: CardInstance): number {
 function playSkill(run: RunState, combat: CombatState, instance: CardInstance): void {
   switch (instance.definitionId) {
     case 'skill-d6': {
-      const rerolled = combat.hand.filter((id) => id !== instance.instanceId && CARDS[getCard(run, id)?.definitionId ?? '']?.type !== 'skill');
-      combat.hand = combat.hand.filter((id) => !rerolled.includes(id));
-      combat.discardPile.push(...rerolled);
-      drawToHand(run, combat);
+      const rerolled = combat.hand
+        .filter((id) => id !== instance.instanceId)
+        .map((id) => getCard(run, id))
+        .filter((card): card is CardInstance => Boolean(card));
+      const pool = Object.values(CARDS).filter((card) =>
+        !['skill', 'curse'].includes(card.type)
+        && (card.type !== 'item' || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
+      );
+      for (const rerolledCard of rerolled) {
+        const candidates = pool.filter((card) => card.id !== rerolledCard.definitionId);
+        if (!candidates.length) continue;
+        rerolledCard.definitionId = pickOne(run, candidates).id;
+        rerolledCard.upgraded = false;
+      }
       pushLog(combat, `The D6 rerolled ${rerolled.length} cards.`, 'special', 'reroll', { count: rerolled.length });
       break;
     }
@@ -615,11 +732,42 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
   combat.cooldowns[instance.instanceId] = skillChargeRounds(run, instance);
 }
 
+function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefinition): void {
+  const item = card.itemId ? ITEMS[card.itemId] : undefined;
+  if (!item || item.kind !== 'passive') return;
+  if (!combat.usedPassiveItems.includes(item.id)) combat.usedPassiveItems.push(item.id);
+  let shieldGained = 0;
+  let healed = 0;
+  for (const effect of item.effects ?? []) {
+    if (effect.stat === 'baseDamage') combat.playerDamageBuff += effect.amount ?? 0;
+    if (effect.stat === 'armor') combat.playerArmorBuff += effect.amount ?? 0;
+    if (effect.stat === 'fireRate') combat.playerFireRateBuff += effect.amount ?? 0;
+    if (effect.stat === 'damageMultiplier') combat.playerDamageMultiplier *= effect.multiplier ?? 1;
+    if (effect.stat === 'critChance') combat.playerCritChanceBuff += effect.amount ?? 0;
+    if (effect.stat === 'attackRange') combat.playerRangeBuff += effect.amount ?? 0;
+    if (effect.stat === 'movementSpeed') combat.playerMovementBuff += effect.amount ?? 0;
+    if (effect.stat === 'drawCount') drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round(effect.amount ?? 1)));
+    if (effect.stat === 'baseShield') shieldGained += effect.amount ?? 0;
+    if (effect.stat === 'shopDiscount') run.player.coins += 2;
+    if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
+    if (effect.redContainers) healed += healRed(run.player, item.id === 'magic-mushroom' ? 15 : run.player.stats.heartSize);
+    if (effect.soulHearts) shieldGained += effect.soulHearts * 10;
+    if (effect.damageCap !== undefined) combat.damageCap = Math.min(combat.damageCap ?? Number.POSITIVE_INFINITY, effect.damageCap);
+  }
+  if (shieldGained > 0) {
+    combat.playerShield += shieldGained;
+    pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: shieldGained });
+  }
+  if (healed > 0) pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
+  if (item.effects?.some((effect) => effect.revealAll || effect.revealSecrets)) revealMap(run);
+  pushLog(combat, `${item.name} activated from the deck.`, 'special', 'passiveUsed', { itemId: item.id });
+}
+
 function allEnemiesDefeated(combat: CombatState): boolean {
   return combat.enemies.every((enemy) => enemy.hp <= 0);
 }
 
-export function canPlayCard(run: RunState, instanceId: string): { ok: boolean; reason?: string } {
+export function canPlayCard(run: RunState, instanceId: string, targetId?: string): { ok: boolean; reason?: string } {
   if (run.phase !== 'combat' || !run.combat) return { ok: false, reason: 'Not in combat' };
   if (!run.combat.hand.includes(instanceId)) return { ok: false, reason: 'Card is not in hand' };
   const instance = getCard(run, instanceId);
@@ -628,6 +776,19 @@ export function canPlayCard(run: RunState, instanceId: string): { ok: boolean; r
   if (card.type === 'curse') return { ok: false, reason: 'Curse cards are unplayable' };
   if (run.combat.vitality < card.cost) return { ok: false, reason: 'Not enough vitality' };
   if (card.type === 'skill' && (run.combat.cooldowns[instanceId] ?? 0) > 0) return { ok: false, reason: 'Active item is recharging' };
+  if (card.type === 'attack' || card.type === 'hex') {
+    if (card.target === 'all-enemies') {
+      const hasTargetInRange = run.combat.enemies.some((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
+      if (!hasTargetInRange) return { ok: false, reason: 'Target is outside attack range' };
+    } else if (targetId === undefined) {
+      const hasTargetInRange = run.combat.enemies.some((enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId));
+      if (!hasTargetInRange) return { ok: false, reason: 'Target is outside attack range' };
+    } else {
+      const target = selectedTarget(run.combat, targetId);
+      if (!target) return { ok: false, reason: 'Choose an enemy target' };
+      if (!isEnemyInPlayerRange(run, target.instanceId)) return { ok: false, reason: 'Target is outside attack range' };
+    }
+  }
   return { ok: true };
 }
 
@@ -639,13 +800,39 @@ export function selectEnemy(state: RunState, enemyId: string): RunState {
   return touch(run);
 }
 
+export function movePlayer(state: RunState, x: number, y: number): RunState {
+  const run = clone(state);
+  if (run.phase !== 'combat' || !run.combat) throw new Error('Not in combat');
+  ensureCombatGrid(run);
+  const destination = { x, y };
+  if (!getReachablePlayerCells(run).some((position) => position.x === x && position.y === y)) {
+    throw new Error('That grid cell is outside movement range');
+  }
+  const from = { ...run.combat.playerPosition };
+  run.combat.playerPosition = destination;
+  run.combat.vitality -= 1;
+  pushAnimation(run.combat, {
+    kind: 'move', sourceId: 'isaac', targetId: 'isaac', fromX: from.x, fromY: from.y, toX: x, toY: y,
+  });
+  pushLog(run.combat, `Isaac moved from (${from.x}, ${from.y}) to (${x}, ${y}).`, 'normal', 'playerMoved', {
+    fromX: from.x, fromY: from.y, x, y,
+  });
+  return touch(run);
+}
+
 export function playCard(state: RunState, instanceId: string, targetId?: string): RunState {
-  const playable = canPlayCard(state, instanceId);
+  const playable = canPlayCard(state, instanceId, targetId);
   if (!playable.ok) throw new Error(playable.reason);
+  const pendingInstance = getCard(state, instanceId);
+  const pendingCard = pendingInstance ? CARDS[pendingInstance.definitionId] : undefined;
+  if (pendingCard?.target === 'enemy' && ['attack', 'hex'].includes(pendingCard.type) && targetId === undefined) {
+    throw new Error('Choose an enemy target');
+  }
   const run = clone(state);
   const combat = run.combat!;
   const instance = getCard(run, instanceId)!;
   const card = CARDS[instance.definitionId]!;
+  if (targetId) combat.selectedEnemyId = targetId;
   combat.vitality -= card.cost;
   pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: card.id, value: card.cost });
 
@@ -663,7 +850,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     pushLog(combat, `${card.name} recovered ${healed} HP.`, 'good', 'heal', { sourceCardId: card.id, amount: healed });
   }
   if (card.type === 'hex') {
-    const target = currentTarget(combat, targetId);
+    const target = selectedTarget(combat, targetId);
     if (target) {
       target.cursedTurns += (card.value ?? 1) + (instance.upgraded ? 1 : 0);
       pushAnimation(combat, { kind: 'curse', sourceId: 'isaac', targetId: target.instanceId, value: target.cursedTurns });
@@ -687,6 +874,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     }
   }
   if (card.type === 'skill') playSkill(run, combat, instance);
+  if (card.type === 'item') playPassiveItemCard(run, combat, card);
 
   if (card.type !== 'skill') {
     combat.hand = combat.hand.filter((id) => id !== instanceId);
@@ -714,10 +902,25 @@ export function discardCard(state: RunState, instanceId: string): RunState {
   const run = clone(state);
   if (run.phase !== 'discard' || !run.combat) throw new Error('Not choosing discards');
   const instance = getCard(run, instanceId);
-  if (!instance || CARDS[instance.definitionId]?.type === 'skill') throw new Error('Active item cards remain equipped');
+  if (!instance) throw new Error('Unknown card');
+  const definition = CARDS[instance.definitionId];
   if (!run.combat.hand.includes(instanceId)) throw new Error('Card is not in hand');
   run.combat.hand = run.combat.hand.filter((id) => id !== instanceId);
-  run.combat.discardPile.push(instanceId);
+  if (definition?.type === 'skill') {
+    const item = Object.values(ITEMS).find((entry) => entry.skillCardId === instance.definitionId);
+    run.combat.exhausted.push(instanceId);
+    run.player.deck = run.player.deck.filter((card) => card.instanceId !== instanceId);
+    if (item) {
+      run.player.items = run.player.items.filter((id) => id !== item.id);
+      if (run.player.activeItemId === item.id) run.player.activeItemId = undefined;
+    }
+    delete run.combat.cooldowns[instanceId];
+    pushLog(run.combat, `${item?.name ?? definition.name} was discarded and is gone.`, 'danger', 'activeDiscarded', {
+      itemId: item?.id ?? '', cardId: definition.id,
+    });
+  } else {
+    run.combat.discardPile.push(instanceId);
+  }
   pushAnimation(run.combat, { kind: 'card-discard', sourceId: 'isaac', cardId: instance.definitionId });
   return touch(run);
 }
@@ -755,7 +958,7 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
     pushLog(combat, 'Isaac slipped past the attack.', 'good', 'dodge');
     return 0;
   }
-  const cap = getItemEffectTotal(run, 'damageCap');
+  const cap = combat.damageCap;
   const capped = cap === undefined ? raw : Math.min(raw, cap);
   const rounded = Math.round(capped);
   const totalArmor = run.player.stats.armor + combat.playerArmorBuff;
@@ -803,12 +1006,49 @@ function cursedActions(enemy: EnemyState, actions: EnemyAction[]): EnemyAction[]
   return [action('attack', Math.max(1, Math.round(raw * 0.6)))];
 }
 
+function moveEnemyTowardPlayer(combat: CombatState, enemy: EnemyState): boolean {
+  const playerPosition = combat.playerPosition;
+  if (isStraightLineInRange(enemy.position, playerPosition, enemy.attackRange)) return false;
+  const blocked = new Set(combat.enemies
+    .filter((entry) => entry.hp > 0 && entry.instanceId !== enemy.instanceId)
+    .map((entry) => positionKey(entry.position)));
+  blocked.add(positionKey(playerPosition));
+  const destination = reachablePositions(enemy.position, enemy.movementSpeed, blocked)
+    .sort((left, right) => {
+      const leftCanAttack = isStraightLineInRange(left, playerPosition, enemy.attackRange) ? 0 : 1;
+      const rightCanAttack = isStraightLineInRange(right, playerPosition, enemy.attackRange) ? 0 : 1;
+      if (leftCanAttack !== rightCanAttack) return leftCanAttack - rightCanAttack;
+      const leftAlignment = Math.min(Math.abs(left.x - playerPosition.x), Math.abs(left.y - playerPosition.y));
+      const rightAlignment = Math.min(Math.abs(right.x - playerPosition.x), Math.abs(right.y - playerPosition.y));
+      return leftAlignment - rightAlignment || gridDistance(left, playerPosition) - gridDistance(right, playerPosition);
+    })[0];
+  if (!destination || gridDistance(destination, playerPosition) >= gridDistance(enemy.position, playerPosition)) return false;
+  const from = { ...enemy.position };
+  enemy.position = destination;
+  pushAnimation(combat, {
+    kind: 'move', sourceId: enemy.instanceId, targetId: enemy.instanceId,
+    fromX: from.x, fromY: from.y, toX: destination.x, toY: destination.y,
+  });
+  pushLog(combat, `${enemy.name} moved to (${destination.x}, ${destination.y}).`, 'normal', 'enemyMoved', {
+    enemyId: enemy.id, enemy: enemy.name, x: destination.x, y: destination.y,
+  });
+  return true;
+}
+
 function resolveEnemyAction(run: RunState, combat: CombatState, enemy: EnemyState, enemyAction: EnemyAction): void {
   switch (enemyAction.kind) {
-    case 'attack':
-      hurtPlayer(run, combat, enemyAction.value, enemy);
-      enemy.prepared = false;
+    case 'attack': {
+      if (isStraightLineInRange(enemy.position, combat.playerPosition, enemy.attackRange)) {
+        hurtPlayer(run, combat, enemyAction.value, enemy);
+        enemy.prepared = false;
+      } else {
+        pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+        pushLog(combat, `${enemy.name} is still outside attack range.`, 'normal', 'enemyOutOfRange', {
+          enemyId: enemy.id, enemy: enemy.name,
+        });
+      }
       break;
+    }
     case 'shield':
       enemy.shield += enemyAction.value;
       pushAnimation(combat, { kind: 'shield', sourceId: enemy.instanceId, targetId: enemy.instanceId, value: enemyAction.value });
@@ -843,6 +1083,7 @@ function resolveEnemyAction(run: RunState, combat: CombatState, enemy: EnemyStat
 
 function resolveEnemyTurn(run: RunState): void {
   const combat = run.combat!;
+  ensureCombatGrid(run);
   run.phase = 'combat';
   for (const enemy of combat.enemies.filter((entry) => entry.hp > 0)) {
     if (enemy.hp <= 0) continue;
@@ -853,22 +1094,18 @@ function resolveEnemyTurn(run: RunState): void {
       pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
       pushLog(combat, `${enemy.name} is staggered and loses its action.`, 'good', 'enemyStaggered', { enemyId: enemy.id, enemy: enemy.name });
     } else {
-      const intendedActions = enemy.intent.actions ?? [action(enemy.intent.kind, enemy.intent.value)];
+      moveEnemyTowardPlayer(combat, enemy);
+      const intendedAction = enemy.intent.actions?.[0] ?? action(enemy.intent.kind, enemy.intent.value);
       const weakened = enemy.cursedTurns > 0;
-      const actions = weakened ? cursedActions(enemy, intendedActions) : intendedActions;
+      const enemyAction = weakened ? cursedActions(enemy, [intendedAction])[0]! : intendedAction;
       if (weakened) {
         enemy.cursedTurns -= 1;
         pushLog(combat, `${enemy.name}'s curse suppresses its special action and weakens its attack.`, 'good', 'enemyWeakened', {
-          enemyId: enemy.id, enemy: enemy.name, damage: actions[0]?.value ?? 0,
+          enemyId: enemy.id, enemy: enemy.name, damage: enemyAction.value,
         });
       }
-      for (const enemyAction of actions) {
-        resolveEnemyAction(run, combat, enemy, enemyAction);
-        if (run.player.redHp <= 0) break;
-      }
-      enemy.turnsSinceAttack = actions.some((enemyAction) => enemyAction.kind === 'attack')
-        ? 0
-        : enemy.turnsSinceAttack + 1;
+      resolveEnemyAction(run, combat, enemy, enemyAction);
+      enemy.turnsSinceAttack = enemyAction.kind === 'attack' ? 0 : enemy.turnsSinceAttack + 1;
     }
     if (run.player.redHp <= 0) break;
   }
@@ -891,7 +1128,9 @@ function resolveEnemyTurn(run: RunState): void {
   }
   combat.enemies.filter((enemy) => enemy.hp > 0).forEach((enemy) => { enemy.intent = rollIntent(run, enemy); });
   drawToHand(run, combat);
-  combat.selectedEnemyId = currentTarget(combat)?.instanceId;
+  if (!combat.enemies.some((enemy) => enemy.hp > 0 && enemy.instanceId === combat.selectedEnemyId)) {
+    combat.selectedEnemyId = undefined;
+  }
   pushAnimation(combat, { kind: 'round-start', sourceId: 'isaac', value: combat.round });
   pushLog(combat, `Round ${combat.round} — vitality restored to ${combat.vitality}.`, 'special', 'nextRound', { round: combat.round, vitality: combat.vitality });
 }

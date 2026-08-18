@@ -167,6 +167,8 @@ export function errorText(t: TFunction, message: string): string {
     'Not in combat': 'notInCombat', 'Card is not in hand': 'cardNotInHand', 'Unknown card': 'unknownCard',
     'Curse cards are unplayable': 'curseUnplayable', 'Not enough vitality': 'vitality',
     'Active item is recharging': 'recharging', 'Not enough coins': 'coins',
+    'Choose an enemy target': 'chooseTarget',
+    'Target is outside attack range': 'range', 'That grid cell is outside movement range': 'movement',
     'A bomb is required to open this room': 'bomb', 'A Devil deal needs a spare red-heart container': 'containers',
     'Not enough red-heart HP to survive the sacrifice': 'sacrifice',
   };
@@ -179,6 +181,7 @@ export function logText(t: TFunction, run: RunState, message: string, key?: stri
     const localizedParams = { ...params };
     if (typeof localizedParams.cardId === 'string') localizedParams.card = cardName(t, localizedParams.cardId);
     if (typeof localizedParams.sourceCardId === 'string') localizedParams.source = cardName(t, localizedParams.sourceCardId);
+    if (typeof localizedParams.itemId === 'string') localizedParams.item = itemName(t, localizedParams.itemId);
     if (typeof localizedParams.enemyId === 'string') localizedParams.enemy = t(`enemies.${localizedParams.enemyId}.name`, { defaultValue: localizedParams.enemy });
     if (typeof localizedParams.targetId === 'string') localizedParams.target = t(`enemies.${localizedParams.targetId}.name`, { defaultValue: localizedParams.target });
     if (typeof localizedParams.enemies === 'string') {

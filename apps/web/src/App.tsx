@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CARDS, DEFAULT_PROFILE, FLOORS, ITEMS, abandonRun, canPlayCard, chooseOption, createRun,
-  discardCard, endTurn, enterRoom, finishDiscard, getAvailableNodes, getCardDefinition,
-  playCard, selectEnemy, skipChoice,
+  discardCard, endTurn, enterRoom, finishDiscard, getAvailableNodes,
+  getPlayerAttackRange, getPlayerMovementSpeed, isEnemyInPlayerRange, movePlayer, playCard, selectEnemy, skipChoice,
   type CardInstance, type MapNode, type PersistedRun, type ProfileState, type RewardOption,
   type RoomKind, type RunState,
 } from '@isaac-spire/game';
@@ -191,12 +191,13 @@ function RouteMap({ run, onEnter }: { run: RunState; onEnter: (id: string) => vo
   );
 }
 
-function CardView({ run, instance, mode, index, animating, locked, onPlay, onDiscard }: {
+function CardView({ run, instance, mode, index, animating, targeting, locked, onPlay, onDiscard }: {
   run: RunState;
   instance: CardInstance;
   mode: 'play' | 'discard';
   index: number;
   animating: boolean;
+  targeting: boolean;
   locked: boolean;
   onPlay: () => void;
   onDiscard: () => void;
@@ -207,10 +208,10 @@ function CardView({ run, instance, mode, index, animating, locked, onPlay, onDis
   const playable = canPlayCard(run, instance.instanceId);
   const cooldown = run.combat?.cooldowns[instance.instanceId] ?? 0;
   const isSkill = definition.type === 'skill';
-  const disabled = locked || (mode === 'play' ? !playable.ok : isSkill);
+  const disabled = locked || (mode === 'play' ? !playable.ok : false);
   return (
     <button
-      className={`game-card ${definition.type} ${instance.upgraded ? 'upgraded' : ''} ${animating ? (mode === 'discard' ? 'discarding-out' : 'playing-out') : ''}`}
+      className={`game-card ${definition.type} ${instance.upgraded ? 'upgraded' : ''} ${targeting ? 'targeting' : ''} ${animating ? (mode === 'discard' ? 'discarding-out' : 'playing-out') : ''}`}
       style={{ '--card-index': index } as React.CSSProperties}
       disabled={disabled}
       onClick={mode === 'play' ? onPlay : onDiscard}
@@ -222,8 +223,30 @@ function CardView({ run, instance, mode, index, animating, locked, onPlay, onDis
       <strong>{cardName(t, definition.id)}{instance.upgraded ? '+' : ''}</strong>
       <p>{cardDescription(t, definition.id)}</p>
       {isSkill && <small>{cooldown > 0 ? t('combat.recharging', { rounds: cooldown }) : t('combat.activeRetained')}</small>}
+      {isSkill && mode === 'discard' && <small className="active-loss">{t('combat.activeDiscardWarning')}</small>}
       {definition.exhaust && <small>{t('combat.oneOff')}</small>}
     </button>
+  );
+}
+
+function PileViewer({ run, pile, onClose }: { run: RunState; pile: 'draw' | 'discard'; onClose: () => void }) {
+  const { t } = useTranslation();
+  const ids = run.combat?.[pile === 'draw' ? 'drawPile' : 'discardPile'] ?? [];
+  const cards = ids.map((id) => run.player.deck.find((card) => card.instanceId === id)).filter((card): card is CardInstance => Boolean(card));
+  return (
+    <div className="pile-backdrop" role="presentation" onClick={onClose}>
+      <section className="pile-viewer" role="dialog" aria-modal="true" aria-label={t(pile === 'draw' ? 'combat.drawPileTitle' : 'combat.discardPileTitle', { count: cards.length })} onClick={(event) => event.stopPropagation()}>
+        <header><div><span>{t('combat.pileInspect')}</span><h2>{t(pile === 'draw' ? 'combat.drawPileTitle' : 'combat.discardPileTitle', { count: cards.length })}</h2></div><button onClick={onClose} aria-label={t('combat.closePile')}>×</button></header>
+        <p>{t(pile === 'draw' ? 'combat.drawPileHint' : 'combat.discardPileHint')}</p>
+        <div className="pile-card-grid">
+          {cards.map((instance, index) => {
+            const definition = CARDS[instance.definitionId];
+            return definition ? <article className={`pile-card ${definition.type}`} key={instance.instanceId}><span>{index + 1}</span><b>{definition.icon}</b><strong>{cardName(t, definition.id)}</strong><small>{cardTypeName(t, definition.type)} · {definition.cost}</small><p>{cardDescription(t, definition.id)}</p></article> : null;
+          })}
+          {!cards.length && <div className="empty-pile">{t('combat.emptyPile')}</div>}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -249,26 +272,35 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
   const { t } = useTranslation();
   const [animatingCardId, setAnimatingCardId] = useState<string>();
   const [animationLocked, setAnimationLocked] = useState(false);
+  const [viewingPile, setViewingPile] = useState<'draw' | 'discard'>();
+  const [targetingCardId, setTargetingCardId] = useState<string>();
   const combat = run.combat!;
   const lastAnimationSequence = useRef(combat.animationSequence);
   const discardMode = run.phase === 'discard';
   const handCards = combat.hand.map((id) => run.player.deck.find((card) => card.instanceId === id)).filter((card): card is CardInstance => Boolean(card));
   const selected = combat.enemies.find((enemy) => enemy.instanceId === combat.selectedEnemyId);
-  const discardable = handCards.filter((card) => CARDS[card.definitionId]?.type !== 'skill');
+  const targetingCard = targetingCardId ? run.player.deck.find((card) => card.instanceId === targetingCardId) : undefined;
+  const targetingDefinition = targetingCard ? CARDS[targetingCard.definitionId] : undefined;
+  const discardable = handCards;
   useEffect(() => {
     const events = combat.animationEvents.filter((event) => event.sequence > lastAnimationSequence.current);
     lastAnimationSequence.current = combat.animationSequence;
     if (!events.length) return;
+    const blockingEvents = events.filter((event) => event.kind !== 'move' || event.sourceId !== 'isaac');
+    if (!blockingEvents.length) return;
     const durations: Record<string, number> = {
       'card-play': 460, 'card-discard': 440, 'discard-phase': 850, 'enemy-phase': 850, 'round-start': 850,
-      'player-attack': 650, 'enemy-attack': 1150, shield: 520, heal: 520, curse: 560, prepare: 600, idle: 420,
+      move: 520, 'player-attack': 650, 'enemy-attack': 1150, shield: 520, heal: 520, curse: 560, prepare: 600, idle: 420,
       defeat: 420, 'black-heart': 560,
     };
-    const duration = events.reduce((sum, event) => sum + (durations[event.kind] ?? 450), 0);
+    const duration = blockingEvents.reduce((sum, event) => sum + (durations[event.kind] ?? 450), 0);
     setAnimationLocked(true);
     const timer = window.setTimeout(() => setAnimationLocked(false), duration);
     return () => window.clearTimeout(timer);
   }, [combat.animationSequence]);
+  useEffect(() => {
+    if (targetingCardId && (discardMode || !combat.hand.includes(targetingCardId))) setTargetingCardId(undefined);
+  }, [combat.hand, discardMode, targetingCardId]);
   const animateCardAction = (instanceId: string, action: (state: RunState) => RunState) => {
     if (animatingCardId || animationLocked) return;
     setAnimatingCardId(instanceId);
@@ -279,10 +311,7 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
   };
   const discardAll = () => commit((state) => {
     let next = state;
-    const ids = next.combat?.hand.filter((id) => {
-      const def = getCardDefinition(next, id);
-      return def?.type !== 'skill';
-    }) ?? [];
+    const ids = [...(next.combat?.hand ?? [])];
     for (const id of ids) next = discardCard(next, id);
     return next;
   });
@@ -292,6 +321,7 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
         <div className="combat-player-hud">
           <span className="hud-name">{t('stats.character')}</span>
           <HeartMeter run={run} shield={combat.playerShield} armor={run.player.stats.armor + combat.playerArmorBuff} />
+          <div className="tactical-stats"><span>◎ {t('combat.range', { value: getPlayerAttackRange(run) })}</span><span>↝ {t('combat.moveSpeed', { value: getPlayerMovementSpeed(run) })}</span><span>⌖ ({combat.playerPosition?.x ?? 0},{combat.playerPosition?.y ?? 4})</span></div>
         </div>
         <div className="combat-heading">
           <p className="eyebrow">{t('combat.room', { room: roomName(t, combat.roomKind) })}</p>
@@ -303,9 +333,9 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
         </div>
       </div>
       <Suspense fallback={<div className="phaser-stage stage-loading">{t('combat.preparing')}</div>}>
-        <PhaserStage run={run} />
+        <PhaserStage run={run} movementDisabled={animationLocked || discardMode} onMove={(x, y) => commit((state) => movePlayer(state, x, y))} />
       </Suspense>
-      <div className="enemy-strip">
+      <div className={`enemy-strip ${targetingCardId ? 'targeting' : ''}`}>
         {combat.enemies.map((enemy) => {
           const intendedAttack = enemy.intent.actions?.find((entry) => entry.kind === 'attack')?.value ?? enemy.attack;
           const shownIntent = (enemy.staggeredTurns ?? 0) > 0
@@ -313,15 +343,26 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
             : enemy.cursedTurns > 0
               ? { kind: 'attack' as const, value: Math.max(1, Math.round(intendedAttack * 0.6)), label: '' }
               : enemy.intent;
+          const inRange = isEnemyInPlayerRange(run, enemy.instanceId);
+          const targetable = Boolean(targetingCardId && canPlayCard(run, targetingCardId, enemy.instanceId).ok);
           return <button
             key={enemy.instanceId}
-            disabled={enemy.hp <= 0 || animationLocked}
-            className={`enemy-panel ${selected?.instanceId === enemy.instanceId ? 'selected' : ''} ${enemy.hp <= 0 ? 'dead' : ''}`}
-            onClick={() => commit((state) => selectEnemy(state, enemy.instanceId))}
+            disabled={enemy.hp <= 0 || animationLocked || Boolean(targetingCardId && !targetable)}
+            className={`enemy-panel ${selected?.instanceId === enemy.instanceId ? 'selected' : ''} ${targetable ? 'targetable' : ''} ${enemy.hp <= 0 ? 'dead' : ''} ${inRange ? 'in-range' : 'out-of-range'}`}
+            onClick={() => {
+              if (targetingCardId) {
+                const cardId = targetingCardId;
+                setTargetingCardId(undefined);
+                animateCardAction(cardId, (state) => playCard(state, cardId, enemy.instanceId));
+              } else {
+                commit((state) => selectEnemy(state, enemy.instanceId));
+              }
+            }}
           >
-            <span className={`intent ${shownIntent.kind}`}>{shownIntent.kind === 'attack' ? '⚔' : shownIntent.kind === 'shield' ? '⬡' : shownIntent.kind === 'curse' ? '☠' : shownIntent.kind === 'heal' ? '♥' : shownIntent.kind === 'prepare' ? '!' : '…'} {intentLabel(t, shownIntent)}</span>
+            <span className={`intent ${shownIntent.kind}`}>↝ {t('combat.enemyMoveAction', { value: enemy.movementSpeed })} + {shownIntent.kind === 'attack' ? '⚔' : shownIntent.kind === 'shield' ? '⬡' : shownIntent.kind === 'curse' ? '☠' : shownIntent.kind === 'heal' ? '♥' : shownIntent.kind === 'prepare' ? '!' : '…'} {intentLabel(t, shownIntent)}</span>
             <strong>{enemyName(t, enemy)}</strong>
             <span>{enemy.hp}/{enemy.maxHp} {t('combat.hp')} · {enemy.armor} {t('combat.armor')} {enemy.shield ? `· ${enemy.shield} ${t('combat.shield')}` : ''}</span>
+            <span className="enemy-grid-stats">⌖ ({enemy.position?.x ?? 15},{enemy.position?.y ?? 4}) · ◎ {enemy.attackRange ?? 1} · ↝ {enemy.movementSpeed ?? 3} · {inRange ? t('combat.inRange') : t('combat.outOfRange')}</span>
             {enemy.cursedTurns > 0 && <em>{t('combat.weakened', { turns: enemy.cursedTurns })}</em>}
             {(enemy.staggeredTurns ?? 0) > 0 && <em>{t('combat.staggered')}</em>}
           </button>;
@@ -331,9 +372,13 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
         <div className="hand-heading">
           <div>
             <span className="eyebrow">{t('combat.hand', { count: handCards.length, max: run.player.stats.drawCount })}</span>
-            <strong>{discardMode ? t('combat.discardPrompt', { count: run.player.stats.maxRetain }) : selected ? t('combat.target', { enemy: enemyName(t, selected) }) : t('combat.chooseTarget')}</strong>
+            <strong>{discardMode
+              ? t('combat.discardPrompt', { count: run.player.stats.maxRetain })
+              : targetingDefinition
+                ? t('combat.chooseCardTarget', { card: cardName(t, targetingDefinition.id) })
+                : t('combat.chooseCard')}</strong>
           </div>
-          <div className="pile-counts"><span>{t('combat.draw', { count: combat.drawPile.length })}</span><span>{t('combat.discard', { count: combat.discardPile.length })}</span><span>{t('combat.deck', { count: run.player.deck.length })}</span></div>
+          <div className="pile-counts"><button onClick={() => setViewingPile('draw')}>{t('combat.draw', { count: combat.drawPile.length })}</button><button onClick={() => setViewingPile('discard')}>{t('combat.discard', { count: combat.discardPile.length })}</button><span>{t('combat.deck', { count: run.player.deck.length })}</span></div>
         </div>
         <div className="card-hand">
           {handCards.map((instance, index) => (
@@ -344,8 +389,17 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
               mode={discardMode ? 'discard' : 'play'}
               index={index}
               animating={animatingCardId === instance.instanceId}
+              targeting={targetingCardId === instance.instanceId}
               locked={Boolean(animatingCardId) || animationLocked}
-              onPlay={() => animateCardAction(instance.instanceId, (state) => playCard(state, instance.instanceId, state.combat?.selectedEnemyId))}
+              onPlay={() => {
+                const definition = CARDS[instance.definitionId];
+                if (definition?.target === 'enemy' && ['attack', 'hex'].includes(definition.type)) {
+                  setTargetingCardId((current) => current === instance.instanceId ? undefined : instance.instanceId);
+                  return;
+                }
+                setTargetingCardId(undefined);
+                animateCardAction(instance.instanceId, (state) => playCard(state, instance.instanceId));
+              }}
               onDiscard={() => animateCardAction(instance.instanceId, (state) => discardCard(state, instance.instanceId))}
             />
           ))}
@@ -366,6 +420,7 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
         {combat.log.slice(0, 4).map((entry) => <p className={entry.tone} key={entry.id}>{logText(t, run, entry.message, entry.messageKey, entry.params)}</p>)}
       </aside>
       <CombatItemRail run={run} />
+      {viewingPile && <PileViewer run={run} pile={viewingPile} onClose={() => setViewingPile(undefined)} />}
     </main>
   );
 }
@@ -380,7 +435,7 @@ function ChoiceCard({ option, run, dealType, onChoose }: { option: RewardOption;
       <b>{option.icon}</b>
       <strong>{optionLabel(t, option, choice)}</strong>
       <p>{optionDescription(t, option, choice)}</p>
-      {option.type === 'item' && option.itemId && <small>{t(`itemKinds.${ITEMS[option.itemId]?.kind}`)} · {t('choice.quality', { quality: ITEMS[option.itemId]?.quality })}</small>}
+      {option.type === 'item' && option.itemId && <small>{t(`itemKinds.${ITEMS[option.itemId]?.kind}`)} · {t('choice.quality', { quality: ITEMS[option.itemId]?.quality })}{ITEMS[option.itemId]?.kind === 'passive' ? ` · ${t('choice.addsItemCard')}` : ''}</small>}
       {option.type === 'card' && option.cardId && <small>{t('choice.cardLabel', { type: cardTypeName(t, CARDS[option.cardId]!.type) })}</small>}
       {option.sold && <em>{t('choice.sold')}</em>}
       {unaffordable && !option.sold && <em>{dealType === 'devil' && run.player.redContainers <= 1 ? t('choice.needContainers') : t('choice.notEnoughCoins')}</em>}
