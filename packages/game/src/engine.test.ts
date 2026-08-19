@@ -36,6 +36,7 @@ import {
 import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
 import {
+  AchievementMetric,
   AttackMode,
   CardType,
   ChoiceAction,
@@ -247,6 +248,7 @@ describe('run generation', () => {
     run.player.bombs = 1;
     run = useMapBomb(run);
     expect(run.player.bombs).toBe(0);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.BombsUsed]).toBe(1);
     expect(run.mapBombResult).toMatchObject({
       currentNodeId: anchor.id,
       found: true,
@@ -259,6 +261,7 @@ describe('run generation', () => {
     expect(getAvailableNodes(run)).toContain(secret.id);
     run = enterRoom(run, secret.id);
     expect(run.player.bombs).toBe(0);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.SecretRoomsEntered]).toBe(1);
   });
 
   it('keeps floor-one shops free and spends one key on locked shops and treasure rooms later', () => {
@@ -315,14 +318,31 @@ describe('run generation', () => {
     run.player.coins = 100;
     run = enterRoom(run, shop.id);
     const purchase = run.choice!.options.find((option) => option.action !== ChoiceAction.Leave)!;
+    const purchasePrice = purchase.price!;
     run = chooseOption(run, purchase.id);
     expect(run.phase).toBe(RunPhase.Choice);
     expect(run.choice!.options.find((option) => option.id === purchase.id)?.sold).toBe(true);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.CoinsSpent]).toBe(purchasePrice);
 
     const leave = run.choice!.options.find((option) => option.action === ChoiceAction.Leave)!;
     run = chooseOption(run, leave.id);
     expect(run.phase).toBe(RunPhase.Map);
     expect(run.choice).toBeUndefined();
+  });
+
+  it('records health offered through the real sacrifice-room command', () => {
+    let run = createRun('SACRIFICE-ACHIEVEMENT-EVENT');
+    const room = run.floorMap.nodes.find((node) => node.kind === RoomKind.Sacrifice)!;
+    const anchor = run.floorMap.nodes.find((node) => node.connections.includes(room.id))!;
+    run.floorMap.currentNodeId = anchor.id;
+    run.player.redHp = 60;
+
+    run = enterRoom(run, room.id);
+    const sacrifice = run.choice!.options.find((option) => option.action === ChoiceAction.Sacrifice)!;
+    run = chooseOption(run, sacrifice.id);
+
+    expect(run.player.redHp).toBe(45);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.SacrificeHp]).toBe(15);
   });
 
   it.each([
@@ -398,6 +418,7 @@ describe('combat', () => {
     run = useCombatBomb(run, 5, 3);
 
     expect(run.player.bombs).toBe(1);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.BombsUsed]).toBe(1);
     expect(run.combat!.vitality).toBe(run.player.stats.maxVitality);
     expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(800);
     expect(run.combat!.animationEvents.slice(-2)).toMatchObject([

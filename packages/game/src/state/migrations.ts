@@ -1,5 +1,6 @@
 import { ITEMS, itemUsesCombatCard, passiveCardId } from '../catalog.js';
-import type { CombatState, RunState } from '../types.js';
+import { createAchievementProgress, createRunAchievementState } from '../achievements/tracker.js';
+import type { CombatState, ProfileState, RunState } from '../types.js';
 import { AttackMode, ItemKind } from '../types.js';
 
 const LEGACY_CARD_IDS: Readonly<Record<string, string>> = {
@@ -17,6 +18,11 @@ function currentCardId(id: string): string {
  */
 export function migrateRunSnapshot(state: RunState): RunState {
   const run = structuredClone(state);
+  run.achievementState = {
+    ...createRunAchievementState(run.achievementState),
+    runCounters: { ...(run.achievementState?.runCounters ?? {}) },
+  };
+  run.achievementNotices ??= [];
   run.floorBombSearches ??= [];
   run.player.pocketItems ??= [];
   run.player.pocketItemSlots ??= 3;
@@ -93,4 +99,16 @@ export function migrateRunSnapshot(state: RunState): RunState {
     });
   }
   return run;
+}
+
+export function migrateProfileState(state: ProfileState): ProfileState {
+  const profile = structuredClone(state);
+  profile.wins ??= 0;
+  profile.losses ??= 0;
+  profile.bestScore ??= 0;
+  profile.unlockedItemIds ??= [];
+  profile.discoveredItemIds ??= [];
+  profile.eventFlags ??= [];
+  profile.achievementProgress = createAchievementProgress(profile.achievementProgress);
+  return profile;
 }

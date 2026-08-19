@@ -4,6 +4,8 @@ import {
   DEFAULT_PROFILE,
   RunPhase,
   RunStatus,
+  mergeAchievementProgress,
+  migrateProfileState,
   type PersistedRun,
   type ProfileState,
   type RunState,
@@ -39,7 +41,7 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
 
   async profile(): Promise<ProfileState> {
     await this.writeQueue;
-    return this.repository.getProfile();
+    return migrateProfileState(await this.repository.getProfile());
   }
 
   async listRuns(limit = 20): Promise<RunSummary[]> {
@@ -65,7 +67,10 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
     await this.enqueue(async () => {
       const timestamp = new Date().toISOString();
       const previous = await this.repository.findRun(snapshot.id);
-      const profile = { ...structuredClone(DEFAULT_PROFILE), ...(await this.repository.getProfile()) };
+      const profile = migrateProfileState({
+        ...structuredClone(DEFAULT_PROFILE),
+        ...(await this.repository.getProfile()),
+      });
       result = {
         id: snapshot.id,
         status:
@@ -124,6 +129,10 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
   ): void {
     profile.unlockedItemIds = [...new Set([...profile.unlockedItemIds, ...snapshot.unlocks])];
     profile.discoveredItemIds = [...new Set([...profile.discoveredItemIds, ...snapshot.player.items])];
+    profile.achievementProgress = mergeAchievementProgress(
+      profile.achievementProgress,
+      snapshot.achievementState,
+    );
     if (status === RunStatus.Won && previousStatus !== RunStatus.Won) profile.wins += 1;
     if (status === RunStatus.Lost && previousStatus !== RunStatus.Lost) profile.losses += 1;
     profile.bestScore = Math.max(profile.bestScore, snapshot.score);

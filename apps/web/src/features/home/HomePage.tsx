@@ -2,10 +2,19 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ITEMS, RunPhase, type ProfileState, type RunState } from '@isaac-spire/game';
 import { LanguageToggle } from '../../components/game/LanguageToggle';
+import { AchievementPanel } from '../achievements/AchievementPanel';
 
 function shortSeed(): string {
   const words = ['CELLAR', 'ATTACK', 'LAMB', 'MOTHER', 'DICE', 'SPIDER', 'ANGEL', 'STATIC'];
   return `${words[Math.floor(Math.random() * words.length)]}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+function latestResumableRun(...runs: Array<RunState | null>): RunState | undefined {
+  return runs
+    .filter((run): run is RunState =>
+      Boolean(run && ![RunPhase.Victory, RunPhase.Defeat].includes(run.phase)),
+    )
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
 export function HomePage({
@@ -23,10 +32,8 @@ export function HomePage({
 }) {
   const { t } = useTranslation();
   const [seed, setSeed] = useState(shortSeed());
-  const resumable =
-    localRun && ![RunPhase.Victory, RunPhase.Defeat].includes(localRun.phase)
-      ? localRun
-      : (remoteRun ?? undefined);
+  const [showAchievements, setShowAchievements] = useState(false);
+  const resumable = latestResumableRun(localRun, remoteRun);
   return (
     <main className="home-page">
       <div className="home-grain" />
@@ -68,6 +75,9 @@ export function HomePage({
               {t('home.continue', { floor: resumable.floorIndex + 1 })} <span>→</span>
             </button>
           )}
+          <button className="secondary-button large" onClick={() => setShowAchievements(true)}>
+            {t('home.achievements')} <span>♜</span>
+          </button>
         </div>
         <div className="home-meta">
           <span>
@@ -129,6 +139,7 @@ export function HomePage({
         </div>
       </section>
       <footer>{t('home.disclaimer')}</footer>
+      {showAchievements && <AchievementPanel profile={profile} onClose={() => setShowAchievements(false)} />}
     </main>
   );
 }

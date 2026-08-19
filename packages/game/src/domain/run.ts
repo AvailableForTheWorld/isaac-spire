@@ -1,4 +1,5 @@
 import type { CombatState } from './combat.js';
+import type { AchievementNotice, AchievementProgressState, RunAchievementState } from './achievement.js';
 import type {
   ChoiceAction,
   ChoiceKind,
@@ -89,6 +90,8 @@ export interface RunState {
   floorRedDamage: number;
   floorSecretVisits: Array<RoomKind.Secret | RoomKind.SuperSecret>;
   victory: boolean;
+  achievementState: RunAchievementState;
+  achievementNotices: AchievementNotice[];
 }
 
 export interface ProfileState {
@@ -98,6 +101,7 @@ export interface ProfileState {
   unlockedItemIds: string[];
   discoveredItemIds: string[];
   eventFlags: string[];
+  achievementProgress: AchievementProgressState;
 }
 
 export interface PersistedRun {

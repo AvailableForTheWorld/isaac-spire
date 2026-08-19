@@ -34,7 +34,7 @@ fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
 
 Open `http://localhost:5173`. The API listens on `http://localhost:3001/api`.
 
-Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and production builds. See [architecture](docs/architecture.md), [reward balance and card pools](docs/reward-balance.md), [storage](docs/storage.md), [development](docs/development.md), and the [change log](CHANGELOG.md).
+Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and production builds. See [architecture](docs/architecture.md), [achievements and Steam-ready unlock progression](docs/achievement-system.md), [reward balance and card pools](docs/reward-balance.md), [storage](docs/storage.md), [development](docs/development.md), and the [change log](CHANGELOG.md).
 
 ## First-run rules
 

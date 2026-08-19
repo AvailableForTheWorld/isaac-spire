@@ -1,9 +1,9 @@
 import { useTranslation } from 'react-i18next';
-import { ITEMS, RunPhase, type RunState } from '@isaac-spire/game';
+import { ACHIEVEMENTS, ITEMS, RunPhase, type RunState } from '@isaac-spire/game';
 import { unlockText } from '../../localize';
 
 export function ResultView({ run, onHome }: { run: RunState; onHome: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const won = run.phase === RunPhase.Victory;
   return (
     <main className={`result-page ${won ? 'won' : 'lost'}`}>
@@ -29,6 +29,20 @@ export function ResultView({ run, onHome }: { run: RunState; onHome: () => void 
           {t('result.floors')}
         </span>
       </div>
+      {run.achievementNotices.length > 0 && (
+        <div className="unlock-list achievement-result-list">
+          <strong>{t('achievements.newThisRun')}</strong>
+          {run.achievementNotices.map((notice) => {
+            const achievement = ACHIEVEMENTS[notice.achievementId];
+            return (
+              <span key={notice.achievementId}>
+                {achievement.icon}{' '}
+                {i18n.resolvedLanguage?.startsWith('zh') ? achievement.nameZh : achievement.name}
+              </span>
+            );
+          })}
+        </div>
+      )}
       {run.unlockNotices.length > 0 && (
         <div className="unlock-list">
           <strong>{t('result.unlocks')}</strong>

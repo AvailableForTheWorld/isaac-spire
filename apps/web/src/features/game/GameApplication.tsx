@@ -1,6 +1,17 @@
 import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RunPhase, acknowledgeRoomReward, abandonRun, enterRoom, useMapBomb } from '@isaac-spire/game';
+import {
+  ACHIEVEMENTS,
+  ITEMS,
+  RunPhase,
+  acknowledgeAchievementNotice,
+  acknowledgeRoomReward,
+  abandonRun,
+  enterRoom,
+  useMapBomb,
+  type AchievementDefinition,
+  type AchievementNotice,
+} from '@isaac-spire/game';
 import { GameHeader } from '../../components/game/GameHeader';
 import { unlockText } from '../../localize';
 import { HomePage } from '../home/HomePage';
@@ -19,6 +30,43 @@ const ChoiceView = lazy(() =>
 const ResultView = lazy(() =>
   import('../result/ResultView').then((module) => ({ default: module.ResultView })),
 );
+
+function AchievementUnlockNotice({
+  achievement,
+  notice,
+  onConfirm,
+}: {
+  achievement: AchievementDefinition;
+  notice: AchievementNotice;
+  onConfirm: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const chinese = i18n.resolvedLanguage?.startsWith('zh') ?? false;
+  return (
+    <aside className="achievement-toast" role="status" aria-live="assertive">
+      <span className="achievement-toast-icon">{achievement.icon}</span>
+      <div className="achievement-toast-copy">
+        <small>{t('achievements.unlocked')}</small>
+        <strong>{chinese ? achievement.nameZh : achievement.name}</strong>
+        <p>{chinese ? achievement.descriptionZh : achievement.description}</p>
+        {notice.rewardItemIds.length > 0 && (
+          <div className="achievement-toast-rewards">
+            <em>{t('achievements.newItems')}</em>
+            {notice.rewardItemIds.map((itemId) => {
+              const item = ITEMS[itemId];
+              return (
+                <b key={itemId}>
+                  {item?.icon ?? '□'} {chinese ? item?.nameZh : item?.name}
+                </b>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <button onClick={onConfirm}>{t('achievements.acknowledge')}</button>
+    </aside>
+  );
+}
 
 export function GameApplication() {
   const { t } = useTranslation();
@@ -40,6 +88,10 @@ export function GameApplication() {
   const showingRoomReward = Boolean(
     run.phase === RunPhase.Choice && run.combat && run.choice?.requiresRewardConfirmation,
   );
+  const pendingAchievement = run.achievementNotices.find((notice) => !notice.acknowledgedAt);
+  const pendingAchievementDefinition = pendingAchievement
+    ? ACHIEVEMENTS[pendingAchievement.achievementId]
+    : undefined;
   const onAbandon = () => {
     if (window.confirm(t('header.abandonConfirm'))) session.commit(abandonRun);
   };
@@ -53,6 +105,16 @@ export function GameApplication() {
           {session.notice}
           <span>×</span>
         </button>
+      )}
+      {pendingAchievementDefinition && pendingAchievement && !showingRoomReward && (
+        <AchievementUnlockNotice
+          key={pendingAchievementDefinition.id}
+          achievement={pendingAchievementDefinition}
+          notice={pendingAchievement}
+          onConfirm={() =>
+            session.commit((state) => acknowledgeAchievementNotice(state, pendingAchievement.achievementId))
+          }
+        />
       )}
       {!showingRoomReward && run.unlockNotices.length > 0 && run.phase !== RunPhase.Victory && (
         <div className="unlock-toast">

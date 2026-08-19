@@ -5,6 +5,7 @@ import type {
   ItemDefinition,
   ProfileState,
 } from './types.js';
+import { ACHIEVEMENT_REWARD_ITEM_IDS } from './achievements/catalog.js';
 import { CUSTOM_ITEM_DEFINITIONS } from './content/custom-items.js';
 import { FULL_ISAAC_ITEMS } from './content/isaac-items.generated.js';
 import {
@@ -925,7 +926,7 @@ for (const item of Object.values(ITEMS).filter(
 }
 
 export const DEFAULT_UNLOCKS = Object.values(ITEMS)
-  .filter((item) => !item.unlock)
+  .filter((item) => !item.unlock && !ACHIEVEMENT_REWARD_ITEM_IDS.has(item.id))
   .map((item) => item.id);
 
 export const DEFAULT_PROFILE: ProfileState = {
@@ -935,6 +936,12 @@ export const DEFAULT_PROFILE: ProfileState = {
   unlockedItemIds: DEFAULT_UNLOCKS,
   discoveredItemIds: ['d6'],
   eventFlags: [],
+  achievementProgress: {
+    completedIds: [],
+    completedAt: {},
+    lifetimeCounters: {},
+    platformSyncedIds: {},
+  },
 };
 
 export const ENEMIES: Record<string, EnemyDefinition> = {

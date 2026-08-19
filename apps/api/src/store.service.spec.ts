@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createRun, DEFAULT_PROFILE, RunPhase, RunStatus, type PersistedRun } from '@isaac-spire/game';
+import {
+  AchievementEventType,
+  AchievementMetric,
+  DEFAULT_PROFILE,
+  RunPhase,
+  RunStatus,
+  createRun,
+  recordAchievementEvent,
+  type PersistedRun,
+} from '@isaac-spire/game';
 import { StoreService } from './store.service.js';
 
 let temporaryDirectory: string | undefined;
@@ -34,6 +43,8 @@ describe('StoreService', () => {
     run.victory = true;
     run.score = 1234;
     run.unlocks.push('moms-knife');
+    recordAchievementEvent(run, { type: AchievementEventType.CardPlayed });
+    recordAchievementEvent(run, { type: AchievementEventType.CardPlayed });
     await service.saveRun(run);
     await service.saveRun(run);
     const saved = await service.getRun(run.id);
@@ -44,6 +55,7 @@ describe('StoreService', () => {
     expect(profile.wins).toBe(1);
     expect(profile.bestScore).toBe(1234);
     expect(profile.unlockedItemIds).toContain('moms-knife');
+    expect(profile.achievementProgress.lifetimeCounters[AchievementMetric.CardsPlayed]).toBe(2);
     expect(stats.compressedSnapshotBytes).toBeLessThan(stats.uncompressedSnapshotBytes);
   });
 

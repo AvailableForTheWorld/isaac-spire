@@ -250,6 +250,141 @@ export enum UnlockEvent {
   ElitePerfect = 'elite-perfect',
 }
 
+export enum AchievementId {
+  BasementAwakening = 'basement-awakening',
+  MomLeg = 'mom-leg',
+  MomLegVeteran = 'mom-leg-veteran',
+  MomHeart = 'mom-heart',
+  ItLives = 'it-lives',
+  Isaac = 'isaac',
+  Satan = 'satan',
+  BlueBaby = 'blue-baby',
+  BossHunter = 'boss-hunter',
+  BossSlayer = 'boss-slayer',
+  EliteHunter = 'elite-hunter',
+  ElitePerfect = 'elite-perfect',
+  FlawlessFloor = 'flawless-floor',
+  SacrificeNovice = 'sacrifice-novice',
+  SacrificeDevotee = 'sacrifice-devotee',
+  SacrificeMartyr = 'sacrifice-martyr',
+  ShopRegular = 'shop-regular',
+  ShopPatron = 'shop-patron',
+  ShopTycoon = 'shop-tycoon',
+  DeepPockets = 'deep-pockets',
+  SecretSeeker = 'secret-seeker',
+  SecretMaster = 'secret-master',
+  Demolition = 'demolition',
+  CardStudent = 'card-student',
+  CardMaster = 'card-master',
+  MonsterHunter = 'monster-hunter',
+  MonsterSlayer = 'monster-slayer',
+  AngelFaith = 'angel-faith',
+  DevilPact = 'devil-pact',
+  Minimalist = 'minimalist',
+  CommonSense = 'common-sense',
+  SpeedClimber = 'speed-climber',
+  WhoNeedsItems = 'who-needs-items',
+  Impervious = 'impervious',
+  Adrenaline = 'adrenaline',
+  ComboMaster = 'combo-master',
+}
+
+export enum AchievementCategory {
+  Progression = 'progression',
+  Combat = 'combat',
+  Economy = 'economy',
+  Exploration = 'exploration',
+  Sacrifice = 'sacrifice',
+  Deckbuilding = 'deckbuilding',
+  Challenge = 'challenge',
+}
+
+export enum AchievementTier {
+  Bronze = 'bronze',
+  Silver = 'silver',
+  Gold = 'gold',
+  Platinum = 'platinum',
+}
+
+export enum AchievementMetric {
+  BossesDefeated = 'bosses-defeated',
+  MomLegKills = 'mom-leg-kills',
+  MomHeartKills = 'mom-heart-kills',
+  ItLivesKills = 'it-lives-kills',
+  IsaacKills = 'isaac-kills',
+  SatanKills = 'satan-kills',
+  BlueBabyKills = 'blue-baby-kills',
+  EnemiesKilled = 'enemies-killed',
+  ElitesKilled = 'elites-killed',
+  PerfectElites = 'perfect-elites',
+  RoomsCleared = 'rooms-cleared',
+  FloorsCleared = 'floors-cleared',
+  FlawlessFloors = 'flawless-floors',
+  SacrificeHp = 'sacrifice-hp',
+  CoinsSpent = 'coins-spent',
+  MaxCoinsHeld = 'max-coins-held',
+  SecretRoomsEntered = 'secret-rooms-entered',
+  BombsUsed = 'bombs-used',
+  CardsPlayed = 'cards-played',
+  AngelFavorGained = 'angel-favor-gained',
+  DevilDealsTaken = 'devil-deals-taken',
+  RunsWon = 'runs-won',
+  FinalDeckSize = 'final-deck-size',
+  FinalItemCount = 'final-item-count',
+  FinalHighestCardQuality = 'final-highest-card-quality',
+  RunDurationSeconds = 'run-duration-seconds',
+  MaxShield = 'max-shield',
+  MaxVitality = 'max-vitality',
+  CardsPlayedThisTurn = 'cards-played-this-turn',
+  MaxCardsPlayedInTurn = 'max-cards-played-in-turn',
+}
+
+export enum AchievementScope {
+  Lifetime = 'lifetime',
+  Run = 'run',
+}
+
+export enum AchievementComparison {
+  AtLeast = 'at-least',
+  AtMost = 'at-most',
+  Equal = 'equal',
+}
+
+export enum AchievementEventType {
+  EnemyKilled = 'enemy-killed',
+  ElitePerfect = 'elite-perfect',
+  BossDefeated = 'boss-defeated',
+  RoomCleared = 'room-cleared',
+  FloorCleared = 'floor-cleared',
+  CoinsSpent = 'coins-spent',
+  HealthSacrificed = 'health-sacrificed',
+  SecretRoomEntered = 'secret-room-entered',
+  BombUsed = 'bomb-used',
+  CardPlayed = 'card-played',
+  RoundStarted = 'round-started',
+  AngelFavorGained = 'angel-favor-gained',
+  DevilDealTaken = 'devil-deal-taken',
+  RunWon = 'run-won',
+}
+
+export enum AchievementPlatform {
+  Steam = 'steam',
+}
+
+export enum AchievementBossId {
+  Monstro = 'monstro',
+  Duke = 'duke',
+  Gurdy = 'gurdy',
+  MegaFatty = 'fatty',
+  Cage = 'cage',
+  MomLeg = 'mom',
+  MomHeart = 'mom-heart',
+  ItLives = 'it-lives',
+  Isaac = 'isaac',
+  Satan = 'satan',
+  BlueBaby = 'blue-baby',
+}
+
 export enum RewardQuality {
   Poor = 0,
   Common = 1,

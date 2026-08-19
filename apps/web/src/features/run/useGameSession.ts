@@ -64,12 +64,12 @@ export function useGameSession() {
 
   const start = useCallback(
     (seed: string) => {
-      const next = createRun(seed, profile.unlockedItemIds);
+      const next = createRun(seed, profile);
       setRun(next);
       setNotice('');
       void saveRun(next, true);
     },
-    [profile.unlockedItemIds],
+    [profile],
   );
 
   const resume = useCallback((snapshot: RunState) => {

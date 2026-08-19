@@ -6,6 +6,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Added
 
+- A 36-entry bilingual achievement compendium covering boss progression through ???, combat mastery, sacrifice, shop spending, exploration, deckbuilding, and Slay-the-Spire-style run challenges.
+- Typed lifetime/run achievement metrics and domain events, indexed condition evaluation, item-unlock rewards, bounded in-run notices, legacy save migration, and idempotent profile merging.
+- A Steam-ready platform port with stable achievement keys, pending-sync diffing, and acknowledged-sync tracking for future Steamworks integration and offline retries.
+- A React achievement gallery with category filters, hidden achievements, progress bars, reward previews, in-run unlock toasts, and result-screen summaries.
+- Achievement architecture, balance, persistence, extension, and Steam integration documentation plus event-wiring and progression tests.
 - An enum-backed item-action lifecycle with activation, combat, round, card, movement, damage, kill, fatal-damage, and room-clear triggers plus stateful method dispatch.
 - Hand-authored action definitions for 116 behavior-dependent Isaac collectibles, including rerolls, card copying/replay, revival, recharge, conversions, restart effects, resource costs, and conditional reactions.
 - Runtime invariants and behavioral tests for action precedence, collectible-ID uniqueness, Car Battery repetition, fake-damage listeners, retaliation, and fatal-damage revival.
@@ -34,6 +39,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- Achievement completion is now shown inside the blocking room-reward reveal and then queued as a persistent, explicitly acknowledged notice; saved unacknowledged achievements reappear after resuming instead of expiring behind another overlay.
+- Resume selection now compares local and server snapshot timestamps instead of always preferring any stale local snapshot.
 - Authored and curated collectible definitions now override generated records by both project ID and original `isaacId`; generated aliases can no longer create a second runtime item, and existing R Key/Damocles-style project definitions remain authoritative.
 - Action-driven active items bypass the historical item-specific switch and execute only through the action dispatcher, preventing duplicate effects while keeping legacy curated actives intact.
 - Generated mapping/economy passives now become reusable deck cards; every passive also has an inspectable `item:<id>` card definition, while deliberately permanent utility upgrades still apply on pickup and remain outside combat piles.

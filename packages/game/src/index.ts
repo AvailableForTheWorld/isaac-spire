@@ -11,3 +11,5 @@ export * from './content/registry.js';
 export * from './content/catalog.js';
 export * from './state/migrations.js';
 export * from './rewards/room-rewards.js';
+export * from './achievements/catalog.js';
+export * from './achievements/tracker.js';

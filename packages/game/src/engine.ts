@@ -44,6 +44,14 @@ import { pushCombatAnimation as pushAnimation, pushCombatLog as pushLog } from '
 import { rewardQualityWeight } from './rewards/room-rewards.js';
 import { migrateRunSnapshot } from './state/migrations.js';
 import {
+  createRunAchievementState,
+  evaluateAchievementSnapshot,
+  evaluateAllAchievements,
+  recordAchievementEvent,
+} from './achievements/tracker.js';
+import {
+  AchievementEventType,
+  AchievementBossId,
   AttackMode,
   CardEffectOpcode,
   CardTarget,
@@ -102,6 +110,8 @@ import type {
   GridPosition,
   ItemDefinition,
   RewardOption,
+  AchievementId,
+  ProfileState,
   RunState,
 } from './types.js';
 
@@ -292,6 +302,7 @@ function makeId(prefix: string, run: Pick<RunState, 'rngState'>): string {
 }
 
 function touch(run: RunState): RunState {
+  evaluateAchievementSnapshot(run);
   run.updatedAt = now();
   return run;
 }
@@ -305,9 +316,16 @@ function itemHasEffect(run: RunState, key: 'revealSecrets' | 'revealAll' | 'guar
   });
 }
 
-export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLOCKS): RunState {
+export function createRun(
+  seed = `${Date.now()}`,
+  progression: readonly string[] | ProfileState = DEFAULT_UNLOCKS,
+): RunState {
   const cleanSeed = seed.trim() || `${Date.now()}`;
   const createdAt = now();
+  const profile = Array.isArray(progression) ? undefined : (progression as ProfileState);
+  const unlockedItemIds = Array.isArray(progression)
+    ? progression
+    : (profile?.unlockedItemIds ?? DEFAULT_UNLOCKS);
   const run = {
     id: `run-${hashSeed(cleanSeed).toString(36)}-${Date.now().toString(36)}`,
     seed: cleanSeed,
@@ -331,8 +349,11 @@ export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLO
     floorRedDamage: 0,
     floorSecretVisits: [],
     victory: false,
+    achievementState: createRunAchievementState(profile?.achievementProgress),
+    achievementNotices: [],
   } satisfies RunState;
   run.player = createIsaac(run);
+  evaluateAllAchievements(run);
   makeFloorStartChoice(run);
   return run;
 }
@@ -433,6 +454,7 @@ export function useMapBomb(state: RunState): RunState {
   const current = getMapNode(run.floorMap, run.floorMap.currentNodeId);
   if (run.floorBombSearches.includes(current.id)) throw new Error('This room has already been searched');
   run.player.bombs -= 1;
+  recordAchievementEvent(run, { type: AchievementEventType.BombUsed });
   run.floorBombSearches.push(current.id);
   const hiddenRoom = run.floorMap.nodes.find(
     (node) => node.optional && node.anchorId === current.id && !node.visited && !node.doorOpened,
@@ -741,24 +763,6 @@ function applyResource(
   }
 }
 
-function unlock(run: RunState, itemId: string): void {
-  if (run.unlocks.includes(itemId)) return;
-  const item = ITEMS[itemId];
-  if (!item) return;
-  run.unlocks.push(itemId);
-  run.unlockNotices.push({
-    itemId,
-    label: `${item.name} unlocked — ${item.unlock?.label ?? 'new discovery'}`,
-  });
-}
-
-function checkProgressUnlocks(run: RunState): void {
-  if (run.player.coins >= 15) unlock(run, 'steam-sale');
-  if (run.floorSecretVisits.includes(RoomKind.Secret) && run.floorSecretVisits.includes(RoomKind.SuperSecret))
-    unlock(run, 'blue-map');
-  if (run.angelFavor >= 2) unlock(run, 'sacred-heart');
-}
-
 function roomChoice(
   run: RunState,
   kind: ChoiceState['kind'],
@@ -874,7 +878,7 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
       break;
     case RoomKind.Secret:
       run.floorSecretVisits.push(RoomKind.Secret);
-      checkProgressUnlocks(run);
+      recordAchievementEvent(run, { type: AchievementEventType.SecretRoomEntered });
       roomChoice(
         run,
         ChoiceKind.Loot,
@@ -904,7 +908,7 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
       break;
     case RoomKind.SuperSecret:
       run.floorSecretVisits.push(RoomKind.SuperSecret);
-      checkProgressUnlocks(run);
+      recordAchievementEvent(run, { type: AchievementEventType.SecretRoomEntered });
       roomChoice(
         run,
         ChoiceKind.Loot,
@@ -1226,6 +1230,7 @@ function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite |
   );
   run.choice = undefined;
   run.phase = RunPhase.Combat;
+  recordAchievementEvent(run, { type: AchievementEventType.RoundStarted });
   runItemActions(run, ItemActionTrigger.CombatStart);
   run.roomCheckpoint = {
     rngState: run.rngState,
@@ -2029,6 +2034,10 @@ function notifyNewEnemyDeaths(run: RunState): void {
       continue;
     }
     combat.observedDefeatIds.push(next.instanceId);
+    recordAchievementEvent(run, {
+      type: AchievementEventType.EnemyKilled,
+      elite: Boolean(next.elite),
+    });
     runItemActions(run, ItemActionTrigger.EnemyKilled, { targetId: next.instanceId, amount: 1 });
   }
 }
@@ -2381,6 +2390,10 @@ export function playFusedAttack(
     });
   }
   playAttack(run, combat, attack, attackInstance, targetId, preview, itemInstanceIds.length);
+  recordAchievementEvent(run, { type: AchievementEventType.CardPlayed });
+  for (const _itemInstanceId of itemInstanceIds) {
+    recordAchievementEvent(run, { type: AchievementEventType.CardPlayed });
+  }
   runItemActions(run, ItemActionTrigger.CardPlayed, {
     sourceInstanceId: attackInstanceId,
     targetId,
@@ -2505,6 +2518,7 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
   const center = { x, y };
   if (!isCombatCellAvailable(run.combat, center)) throw new Error('That grid cell cannot hold a bomb');
   run.player.bombs -= 1;
+  recordAchievementEvent(run, { type: AchievementEventType.BombUsed });
   run.combat.selectedEnemyId = undefined;
   const blastCells = new Set<string>();
   for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
@@ -2714,6 +2728,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   }
   if (card.type === CardType.Skill) playSkill(run, combat, instance, targetId);
   if (card.type === CardType.Item) playPassiveItemCard(run, combat, card, instanceId, targetId);
+  recordAchievementEvent(run, { type: AchievementEventType.CardPlayed });
 
   if (run.combat === combat) {
     runItemActions(run, ItemActionTrigger.CardPlayed, {
@@ -3525,6 +3540,7 @@ function resolveEnemyTurn(run: RunState): void {
 
   combat.round += 1;
   combat.vitality = run.player.stats.maxVitality;
+  recordAchievementEvent(run, { type: AchievementEventType.RoundStarted });
   for (const key of Object.keys(combat.cooldowns)) {
     combat.cooldowns[key] = Math.max(0, (combat.cooldowns[key] ?? 0) - 1);
   }
@@ -3707,6 +3723,7 @@ function makeBossGate(run: RunState): void {
 
 function finishCombat(run: RunState): void {
   const combat = run.combat!;
+  const defeatedBossId = combat.enemies.find((enemy) => enemy.boss)?.id;
   runItemActions(run, ItemActionTrigger.RoomCleared);
   const loot = rollLoot(run);
   run.lastReward = [loot];
@@ -3717,9 +3734,6 @@ function finishCombat(run: RunState): void {
       : combat.roomKind === RoomKind.Elite
         ? 220
         : 90;
-  if (combat.roomKind === RoomKind.Elite && combat.damageTakenThisFloor === 0) unlock(run, 'tech-x');
-  checkProgressUnlocks(run);
-
   if (combat.roomKind === RoomKind.Boss) {
     setRoomRewardChoice(run, {
       kind: ChoiceKind.Item,
@@ -3768,6 +3782,18 @@ function finishCombat(run: RunState): void {
     });
   }
   if (run.choice) run.choice.requiresRewardConfirmation = true;
+  recordAchievementEvent(run, { type: AchievementEventType.RoomCleared });
+  if (combat.roomKind === RoomKind.Elite && combat.damageTakenThisFloor === 0) {
+    recordAchievementEvent(run, { type: AchievementEventType.ElitePerfect });
+  }
+  if (combat.roomKind === RoomKind.Boss && defeatedBossId) {
+    const achievementBossId = Object.values(AchievementBossId).find((bossId) => bossId === defeatedBossId);
+    if (!achievementBossId) throw new Error(`Boss ${defeatedBossId} has no achievement identity`);
+    recordAchievementEvent(run, {
+      type: AchievementEventType.BossDefeated,
+      bossId: achievementBossId,
+    });
+  }
 }
 
 function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade']>): void {
@@ -3801,7 +3827,10 @@ function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade'
 }
 
 function advanceFloor(run: RunState): void {
-  if (run.floorRedDamage === 0) unlock(run, 'holy-mantle');
+  recordAchievementEvent(run, {
+    type: AchievementEventType.FloorCleared,
+    flawless: run.floorRedDamage === 0,
+  });
   run.floorIndex += 1;
   run.floorMap = createFloorMap(run.floorIndex, run.seed);
   run.floorRedDamage = 0;
@@ -3818,15 +3847,17 @@ function advanceFloor(run: RunState): void {
 }
 
 function finishVictory(run: RunState): void {
-  if (run.floorRedDamage === 0) unlock(run, 'holy-mantle');
-  unlock(run, 'brimstone');
-  unlock(run, 'moms-knife');
+  recordAchievementEvent(run, {
+    type: AchievementEventType.FloorCleared,
+    flawless: run.floorRedDamage === 0,
+  });
   run.phase = RunPhase.Victory;
   run.choice = undefined;
   run.combat = undefined;
   run.roomCheckpoint = undefined;
   run.victory = true;
   run.score += 2000;
+  recordAchievementEvent(run, { type: AchievementEventType.RunWon });
 }
 
 function advanceAfterChoice(run: RunState, next: ChoiceState['next']): void {
@@ -3871,6 +3902,10 @@ export function chooseOption(state: RunState, optionId: string): RunState {
     if (run.player.redHp <= 15) throw new Error('Not enough red-heart HP to survive the sacrifice');
     run.player.redHp -= 15;
     run.floorRedDamage += 15;
+    recordAchievementEvent(run, {
+      type: AchievementEventType.HealthSacrificed,
+      amount: 15,
+    });
     addPocketHeart(run, HeartKind.Soul);
     const tarotPool = Object.values(CARDS).filter(
       (card) => card.type === CardType.Tarot && card.rewardPools.includes(RewardPool.Sacrifice),
@@ -3894,13 +3929,22 @@ export function chooseOption(state: RunState, optionId: string): RunState {
   if (option.action === ChoiceAction.SkipDeal) {
     if (choice.dealType === DealType.Devil) {
       run.angelFavor += 1;
-      checkProgressUnlocks(run);
+      recordAchievementEvent(run, {
+        type: AchievementEventType.AngelFavorGained,
+        amount: 1,
+      });
     }
     makeFloorUpgrade(run);
     return touch(run);
   }
 
   payPrice(run, option);
+  if (choice.kind === ChoiceKind.Shop && (option.price ?? 0) > 0) {
+    recordAchievementEvent(run, {
+      type: AchievementEventType.CoinsSpent,
+      amount: option.price!,
+    });
+  }
   if (option.type === RewardOptionType.Item && option.itemId) {
     if (choice.dealType === DealType.Devil) {
       if (run.player.redContainers <= 1) throw new Error('A Devil deal needs a spare red-heart container');
@@ -3908,6 +3952,7 @@ export function chooseOption(state: RunState, optionId: string): RunState {
       run.player.redHp = Math.min(run.player.redHp, maxRedHp(run.player));
       run.tookDevilDeal = true;
       run.angelFavor = 0;
+      recordAchievementEvent(run, { type: AchievementEventType.DevilDealTaken });
     }
     equipItem(run, option.itemId);
     run.lastReward = [ITEMS[option.itemId]!.name];
@@ -3923,8 +3968,6 @@ export function chooseOption(state: RunState, optionId: string): RunState {
     applyUpgrade(run, option.upgrade);
     run.lastReward = [option.label];
   }
-  checkProgressUnlocks(run);
-
   if (choice.kind === ChoiceKind.Shop) {
     const current = run.choice!.options.find((entry) => entry.id === optionId);
     if (current) current.sold = true;
@@ -3950,6 +3993,16 @@ export function acknowledgeRoomReward(state: RunState): RunState {
     throw new Error('There is no room reward to acknowledge');
   }
   run.choice.requiresRewardConfirmation = false;
+  return touch(run);
+}
+
+export function acknowledgeAchievementNotice(state: RunState, achievementId: AchievementId): RunState {
+  const run = clone(state);
+  const notice = run.achievementNotices.find(
+    (entry) => entry.achievementId === achievementId && !entry.acknowledgedAt,
+  );
+  if (!notice) throw new Error('There is no pending achievement notice');
+  notice.acknowledgedAt = now();
   return touch(run);
 }
 

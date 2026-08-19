@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { RunState } from '@isaac-spire/game';
+import { ACHIEVEMENTS, type RunState } from '@isaac-spire/game';
 import { rewardText } from '../../localize';
 
 function rewardIcon(reward: string): string {
@@ -14,7 +14,11 @@ function rewardIcon(reward: string): string {
 }
 
 export function RoomRewardReveal({ run, onConfirm }: { run: RunState; onConfirm: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const chinese = i18n.resolvedLanguage?.startsWith('zh') ?? false;
+  const pendingAchievements = run.achievementNotices
+    .filter((notice) => !notice.acknowledgedAt)
+    .map((notice) => ACHIEVEMENTS[notice.achievementId]);
   return (
     <div className="reward-reveal" role="dialog" aria-modal="true" aria-labelledby="room-reward-title">
       <div className="reward-rays" />
@@ -34,6 +38,19 @@ export function RoomRewardReveal({ run, onConfirm }: { run: RunState; onConfirm:
           </div>
         ))}
       </div>
+      {pendingAchievements.length > 0 && (
+        <div className="reward-achievements" role="status">
+          <span>★</span>
+          <div>
+            <small>{t('achievements.reachedWithReward')}</small>
+            {pendingAchievements.map((achievement) => (
+              <strong key={achievement.id}>
+                {achievement.icon} {chinese ? achievement.nameZh : achievement.name}
+              </strong>
+            ))}
+          </div>
+        </div>
+      )}
       <button className="primary-button reward-confirm" onClick={onConfirm} autoFocus>
         {t('rewardReveal.confirm')} <span>→</span>
       </button>

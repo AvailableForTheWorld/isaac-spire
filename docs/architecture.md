@@ -24,6 +24,7 @@ apps/api: HTTP controllers -> StoreService -> RunRepository port -> SQLite adapt
 - `domain/map.ts`: room, route node, connection, and floor-map contracts.
 - `domain/combat.ts`: enemies, intentions, grid rooms, combat state, and animation-domain events.
 - `domain/run.ts`: run aggregate, choices, progression profile, persisted records, and summaries.
+- `domain/achievement.ts`: typed achievement conditions, progress, events, notices, and platform port.
 - `content/registry.ts`: validated O(1) key lookup and bulk registration.
 - `content/catalog.ts`: composes the built-in pack and future expansion/mod packs.
 - `combat/grid.ts`: collision, footprint math, cardinal BFS, visibility, and range strategies.
@@ -31,6 +32,8 @@ apps/api: HTTP controllers -> StoreService -> RunRepository port -> SQLite adapt
 - `combat/events.ts`: bounded combat log and animation event buffers.
 - `rewards/room-rewards.ts`: exhaustive room reward budgets, quality curves, and selection metadata.
 - `state/migrations.ts`: pure, idempotent save-schema migrations.
+- `achievements/catalog.ts`: declarative bilingual achievement and item-unlock definitions.
+- `achievements/tracker.ts`: indexed event reducer, condition evaluator, idempotent profile merge, and platform synchronization diff.
 - `engine.ts`: compatibility facade and application commands. New cohesive algorithms belong in a domain module, not in this facade.
 
 ### Content expansion
@@ -57,6 +60,7 @@ Registries reject duplicate keys during startup. Runtime lookup is `Map`-backed 
 - Cardinal movement uses BFS: O(V + E) for a room graph. A cursor queue avoids repeated array shifting.
 - Occupancy and visited cells use `Set<string>` for average O(1) membership tests.
 - Content IDs use `Map` registries for average O(1) lookup.
+- Achievement conditions use a metric-to-definition reverse `Map`, so an event evaluates only affected achievements.
 - Random pools use deterministic seeded selection; visual route jitter has a separate presentation seed.
 - Combat logs and animation events are capped at 8 and 32 entries. These are presentation buffers, not permanent run history.
 - Run commands clone the aggregate, apply one transition, and return a new snapshot. This command/state-machine boundary is the future validation point for authoritative PvP input.
@@ -81,6 +85,8 @@ shared/api/       HTTP transport
 ```
 
 React owns accessible controls and state composition. Phaser consumes the current snapshot and animation events; it does not own game rules. This keeps future sprite/animation work independent from combat correctness.
+
+The home achievement compendium reads the persisted profile, while in-run toasts and the result view read bounded achievement notices. See [achievement system](achievement-system.md) for progression rules and the future Steam adapter contract.
 
 ## Backend
 
