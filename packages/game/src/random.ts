@@ -8,7 +8,7 @@ export function hashSeed(seed: string): number {
 }
 
 export function nextRandom(state: { rngState: number }): number {
-  let value = state.rngState += 0x6d2b79f5;
+  let value = (state.rngState += 0x6d2b79f5);
   value = Math.imul(value ^ (value >>> 15), value | 1);
   value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
   state.rngState = value >>> 0;

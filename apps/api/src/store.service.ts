@@ -1,82 +1,69 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { DEFAULT_PROFILE, type PersistedRun, type ProfileState, type RunState } from '@isaac-spire/game';
-
-interface StoreData {
-  runs: Record<string, PersistedRun>;
-  profile: ProfileState;
-}
-
-function freshData(): StoreData {
-  return { runs: {}, profile: structuredClone(DEFAULT_PROFILE) };
-}
+import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  DEFAULT_PROFILE,
+  type PersistedRun,
+  type ProfileState,
+  type RunState,
+  type RunSummary,
+} from '@isaac-spire/game';
+import { RunRepository, type StorageStats } from './storage/run-repository.js';
+import { loadStorageConfig } from './storage/storage-config.js';
+import { SqliteRunRepository } from './storage/sqlite-run.repository.js';
 
 @Injectable()
-export class StoreService {
-  private readonly filePath: string;
+export class StoreService implements OnModuleInit, OnModuleDestroy {
+  private readonly repository: RunRepository;
+  private readonly retentionPolicy: { maxCompletedRuns: number; maxActiveRuns: number };
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor() {
-    this.filePath = resolve(process.env.ISAAC_SPIRE_DATA_FILE ?? 'data/runtime/store.json');
+  constructor(@Optional() @Inject(RunRepository) repository?: RunRepository) {
+    const config = loadStorageConfig();
+    this.repository = repository ?? new SqliteRunRepository(config);
+    this.retentionPolicy = {
+      maxCompletedRuns: config.maxCompletedRuns,
+      maxActiveRuns: config.maxActiveRuns,
+    };
   }
 
-  private async read(): Promise<StoreData> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as StoreData;
-      return {
-        runs: parsed.runs ?? {},
-        profile: { ...freshData().profile, ...(parsed.profile ?? {}) },
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return freshData();
-      throw error;
-    }
+  async onModuleInit(): Promise<void> {
+    await this.repository.initialize();
+    await this.repository.compact(this.retentionPolicy);
   }
 
-  private async write(data: StoreData): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const temporary = `${this.filePath}.tmp`;
-    await writeFile(temporary, JSON.stringify(data, null, 2), 'utf8');
-    await rename(temporary, this.filePath);
-  }
-
-  private enqueue(operation: (data: StoreData) => void): Promise<void> {
-    this.writeQueue = this.writeQueue.then(async () => {
-      const data = await this.read();
-      operation(data);
-      await this.write(data);
-    });
-    return this.writeQueue;
+  onModuleDestroy(): void {
+    this.repository.close();
   }
 
   async profile(): Promise<ProfileState> {
     await this.writeQueue;
-    return (await this.read()).profile;
+    return this.repository.getProfile();
   }
 
-  async listRuns(): Promise<PersistedRun[]> {
+  async listRuns(limit = 20): Promise<RunSummary[]> {
     await this.writeQueue;
-    const data = await this.read();
-    return Object.values(data.runs).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return this.repository.listRuns(limit);
   }
 
   async getRun(id: string): Promise<PersistedRun> {
     await this.writeQueue;
-    const run = (await this.read()).runs[id];
+    const run = await this.repository.findRun(id);
     if (!run) throw new NotFoundException(`Run ${id} was not found`);
     return run;
   }
 
+  async latestActiveRun(): Promise<PersistedRun | undefined> {
+    await this.writeQueue;
+    return this.repository.findLatestActiveRun();
+  }
+
   async saveRun(snapshot: RunState): Promise<PersistedRun> {
-    if (!snapshot?.id || !snapshot.seed || !snapshot.player || !snapshot.floorMap) {
-      throw new TypeError('Invalid run snapshot');
-    }
-    const timestamp = new Date().toISOString();
+    this.assertSnapshot(snapshot);
     let result!: PersistedRun;
-    await this.enqueue((data) => {
-      const previous = data.runs[snapshot.id];
+    await this.enqueue(async () => {
+      const timestamp = new Date().toISOString();
+      const previous = await this.repository.findRun(snapshot.id);
+      const profile = { ...structuredClone(DEFAULT_PROFILE), ...(await this.repository.getProfile()) };
       result = {
         id: snapshot.id,
         status: snapshot.phase === 'victory' ? 'won' : snapshot.phase === 'defeat' ? 'lost' : 'active',
@@ -84,13 +71,54 @@ export class StoreService {
         createdAt: previous?.createdAt ?? snapshot.createdAt ?? timestamp,
         updatedAt: timestamp,
       };
-      data.runs[snapshot.id] = result;
-      data.profile.unlockedItemIds = [...new Set([...data.profile.unlockedItemIds, ...snapshot.unlocks])];
-      data.profile.discoveredItemIds = [...new Set([...data.profile.discoveredItemIds, ...snapshot.player.items])];
-      if (result.status === 'won' && previous?.status !== 'won') data.profile.wins += 1;
-      if (result.status === 'lost' && previous?.status !== 'lost') data.profile.losses += 1;
-      data.profile.bestScore = Math.max(data.profile.bestScore, snapshot.score);
+      this.updateProfile(profile, snapshot, result.status, previous?.status);
+      await this.repository.commit(result, profile);
     });
     return result;
+  }
+
+  async deleteRun(id: string): Promise<void> {
+    let deleted = false;
+    await this.enqueue(async () => {
+      deleted = await this.repository.deleteRun(id);
+    });
+    if (!deleted) throw new NotFoundException(`Run ${id} was not found`);
+  }
+
+  async compact(): Promise<StorageStats> {
+    let stats!: StorageStats;
+    await this.enqueue(async () => {
+      stats = await this.repository.compact(this.retentionPolicy);
+    });
+    return stats;
+  }
+
+  async storageStats(): Promise<StorageStats> {
+    await this.writeQueue;
+    return this.repository.stats();
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    this.writeQueue = this.writeQueue.then(operation, operation);
+    return this.writeQueue;
+  }
+
+  private assertSnapshot(snapshot: RunState): void {
+    if (!snapshot?.id || !snapshot.seed || !snapshot.player || !snapshot.floorMap) {
+      throw new TypeError('Invalid run snapshot');
+    }
+  }
+
+  private updateProfile(
+    profile: ProfileState,
+    snapshot: RunState,
+    status: PersistedRun['status'],
+    previousStatus?: PersistedRun['status'],
+  ): void {
+    profile.unlockedItemIds = [...new Set([...profile.unlockedItemIds, ...snapshot.unlocks])];
+    profile.discoveredItemIds = [...new Set([...profile.discoveredItemIds, ...snapshot.player.items])];
+    if (status === 'won' && previousStatus !== 'won') profile.wins += 1;
+    if (status === 'lost' && previousStatus !== 'lost') profile.losses += 1;
+    profile.bestScore = Math.max(profile.bestScore, snapshot.score);
   }
 }

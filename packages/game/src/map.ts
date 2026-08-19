@@ -87,8 +87,14 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
   const routeSeed = `${runSeed}:floor:${floorIndex}`;
   const topologyRandom: RouteRandom = { rngState: hashSeed(`${routeSeed}:topology`) };
   const entrance: MapNode = {
-    id: `f${floorIndex}-entrance`, kind: 'entrance', lane: 1, depth: 0,
-    connections: [], optional: false, visited: true, revealed: true,
+    id: `f${floorIndex}-entrance`,
+    kind: 'entrance',
+    lane: 1,
+    depth: 0,
+    connections: [],
+    optional: false,
+    visited: true,
+    revealed: true,
   };
   const nodes: MapNode[] = [entrance];
 
@@ -108,16 +114,26 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
   }
 
   const boss: MapNode = {
-    id: `f${floorIndex}-boss`, kind: 'boss', lane: 1, depth: 7,
-    connections: [], optional: false, visited: false, revealed: true,
+    id: `f${floorIndex}-boss`,
+    kind: 'boss',
+    lane: 1,
+    depth: 7,
+    connections: [],
+    optional: false,
+    visited: false,
+    revealed: true,
   };
   nodes.push(boss);
 
   entrance.connections = shuffle(topologyRandom, [0, 1, 2]).map((lane) => `f${floorIndex}-l${lane}-d1`);
 
   const patternIndexes = Array.from({ length: 5 }, () => randomPatternIndex(topologyRandom));
-  if (!patternIndexes.includes(0)) patternIndexes[randomInt(topologyRandom, 0, patternIndexes.length - 1)] = 0;
-  const nonCalmPatternCount = patternIndexes.reduce<number>((count, index) => count + (index === 0 ? 0 : 1), 0);
+  if (!patternIndexes.includes(0))
+    patternIndexes[randomInt(topologyRandom, 0, patternIndexes.length - 1)] = 0;
+  const nonCalmPatternCount = patternIndexes.reduce<number>(
+    (count, index) => count + (index === 0 ? 0 : 1),
+    0,
+  );
   if (nonCalmPatternCount === 0) {
     patternIndexes[randomInt(topologyRandom, 0, patternIndexes.length - 1)] = randomInt(topologyRandom, 1, 2);
   }
@@ -171,12 +187,28 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
     const secretAnchor = `f${floorIndex}-l${lane}-d3`;
     const superAnchor = `f${floorIndex}-l${lane}-d6`;
     nodes.push({
-      id: `f${floorIndex}-l${lane}-secret`, kind: 'secret', lane, depth: 3.35,
-      connections: [], optional: true, anchorId: secretAnchor, doorOpened: false, visited: false, revealed: false,
+      id: `f${floorIndex}-l${lane}-secret`,
+      kind: 'secret',
+      lane,
+      depth: 3.35,
+      connections: [],
+      optional: true,
+      anchorId: secretAnchor,
+      doorOpened: false,
+      visited: false,
+      revealed: false,
     });
     nodes.push({
-      id: `f${floorIndex}-l${lane}-super`, kind: 'super-secret', lane, depth: 5.65,
-      connections: [], optional: true, anchorId: superAnchor, doorOpened: false, visited: false, revealed: false,
+      id: `f${floorIndex}-l${lane}-super`,
+      kind: 'super-secret',
+      lane,
+      depth: 5.65,
+      connections: [],
+      optional: true,
+      anchorId: superAnchor,
+      doorOpened: false,
+      visited: false,
+      revealed: false,
     });
   }
 
@@ -194,7 +226,11 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
     for (const targetId of targets) {
       const sourceId = node.optional && node.anchorId ? node.anchorId : node.id;
       const actualTargetId = node.optional ? node.id : targetId;
-      connectionStyles[mapConnectionKey(sourceId, actualTargetId)] = connectionStyle(routeSeed, sourceId, actualTargetId);
+      connectionStyles[mapConnectionKey(sourceId, actualTargetId)] = connectionStyle(
+        routeSeed,
+        sourceId,
+        actualTargetId,
+      );
     }
   }
 

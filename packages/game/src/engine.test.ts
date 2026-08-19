@@ -1,9 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy, itemUsesCombatCard } from './catalog.js';
 import {
-  canPlayCard, canPlayFusedAttack, chooseOption, confirmPlayerDeployment, createRun as createRunWithFloorChoice, DEFAULT_COMBAT_ROOM_LAYOUT, discardCard, endTurn, enterRoom, finishDiscard,
-  getAttackFusionMaterialIds, getAttackFusionPreview, getAvailableNodes, getCombatRoomCells, getEnemyMovementSpeed, getEnemyOccupiedCells, getPlayerDeploymentCells, getPlayerMovementSpeed, getReachablePlayerCells, hydrateRunState,
-  isPlayerInEnemyVision, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice, useCombatBomb, useMapBomb,
+  canPlayCard,
+  canPlayFusedAttack,
+  chooseOption,
+  confirmPlayerDeployment,
+  createRun as createRunWithFloorChoice,
+  DEFAULT_COMBAT_ROOM_LAYOUT,
+  discardCard,
+  endTurn,
+  enterRoom,
+  finishDiscard,
+  getAttackFusionMaterialIds,
+  getAttackFusionPreview,
+  getAvailableNodes,
+  getCombatRoomCells,
+  getEnemyMovementSpeed,
+  getEnemyOccupiedCells,
+  getPlayerDeploymentCells,
+  getPlayerMovementSpeed,
+  getReachablePlayerCells,
+  hydrateRunState,
+  isPlayerInEnemyVision,
+  movePlayer,
+  placePlayerForDeployment,
+  playCard,
+  playFusedAttack,
+  selectEnemy,
+  skipChoice,
+  useCombatBomb,
+  useMapBomb,
 } from './engine.js';
 import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
@@ -15,7 +41,10 @@ function createRun(seed?: string, unlockedItemIds = DEFAULT_UNLOCKS) {
   return chooseOption(run, resource.id);
 }
 
-function settleChoice(run: ReturnType<typeof createRun>, onChoice?: (choiceRun: ReturnType<typeof createRun>) => void) {
+function settleChoice(
+  run: ReturnType<typeof createRun>,
+  onChoice?: (choiceRun: ReturnType<typeof createRun>) => void,
+) {
   let next = run;
   while (next.phase === 'choice') {
     onChoice?.(next);
@@ -57,11 +86,20 @@ describe('run generation', () => {
     // A legacy profile may only remember The D6; baseline, non-event items must still fill all three slots.
     const run = createRunWithFloorChoice('FLOOR-START-REWARDS', ['d6']);
     expect(run).toMatchObject({ phase: 'choice', floorIndex: 0 });
-    expect(run.choice).toMatchObject({ kind: 'loot', rewardContext: 'floor-start', canSkip: false, next: 'map' });
+    expect(run.choice).toMatchObject({
+      kind: 'loot',
+      rewardContext: 'floor-start',
+      canSkip: false,
+      next: 'map',
+    });
     expect(run.choice!.options).toHaveLength(3);
 
-    const combatOption = run.choice!.options.find((option) => option.itemId && itemUsesCombatCard(ITEMS[option.itemId]!))!;
-    const permanentOption = run.choice!.options.find((option) => option.itemId && ITEMS[option.itemId]?.pool.includes('large-room'))!;
+    const combatOption = run.choice!.options.find(
+      (option) => option.itemId && itemUsesCombatCard(ITEMS[option.itemId]!),
+    )!;
+    const permanentOption = run.choice!.options.find(
+      (option) => option.itemId && ITEMS[option.itemId]?.pool.includes('large-room'),
+    )!;
     const resourceOption = run.choice!.options.find((option) => option.type === 'resource')!;
     expect(ITEMS[combatOption.itemId!]!.kind).toBe('passive');
     expect(ITEMS[permanentOption.itemId!]!.combatCard).toBe(false);
@@ -70,7 +108,9 @@ describe('run generation', () => {
     const withCombatItem = chooseOption(run, combatOption.id);
     expect(withCombatItem.phase).toBe('map');
     expect(withCombatItem.player.items).toContain(combatOption.itemId);
-    expect(withCombatItem.player.deck.some((card) => card.definitionId === `item:${combatOption.itemId}`)).toBe(true);
+    expect(
+      withCombatItem.player.deck.some((card) => card.definitionId === `item:${combatOption.itemId}`),
+    ).toBe(true);
 
     const deckSize = run.player.deck.length;
     const withPermanentItem = chooseOption(run, permanentOption.id);
@@ -120,14 +160,22 @@ describe('run generation', () => {
 
       const transitionalNodes = mainNodes.filter((node) => node.depth >= 1 && node.depth <= 5);
       expect(transitionalNodes.some((node) => node.connections.length > 1)).toBe(true);
-      expect(Array.from({ length: 5 }, (_, depthIndex) => depthIndex + 1).some((depth) => {
-        const row = transitionalNodes.filter((node) => node.depth === depth);
-        return row.every((node) => node.connections.length === 1
-          && mainNodes.find((target) => target.id === node.connections[0])?.lane === node.lane);
-      })).toBe(true);
+      expect(
+        Array.from({ length: 5 }, (_, depthIndex) => depthIndex + 1).some((depth) => {
+          const row = transitionalNodes.filter((node) => node.depth === depth);
+          return row.every(
+            (node) =>
+              node.connections.length === 1 &&
+              mainNodes.find((target) => target.id === node.connections[0])?.lane === node.lane,
+          );
+        }),
+      ).toBe(true);
 
       for (let depth = 1; depth <= 6; depth += 1) {
-        const rowX = mainNodes.filter((node) => node.depth === depth).map((node) => node.mapPosition!.x).sort((a, b) => a - b);
+        const rowX = mainNodes
+          .filter((node) => node.depth === depth)
+          .map((node) => node.mapPosition!.x)
+          .sort((a, b) => a - b);
         expect(rowX[1]! - rowX[0]!).toBeGreaterThan(18);
         expect(rowX[2]! - rowX[1]!).toBeGreaterThan(18);
       }
@@ -173,7 +221,10 @@ describe('run generation', () => {
     run = useMapBomb(run);
     expect(run.player.bombs).toBe(0);
     expect(run.mapBombResult).toMatchObject({ currentNodeId: anchor.id, found: true, roomKind: 'secret' });
-    expect(run.floorMap.nodes.find((node) => node.id === secret.id)).toMatchObject({ revealed: true, doorOpened: true });
+    expect(run.floorMap.nodes.find((node) => node.id === secret.id)).toMatchObject({
+      revealed: true,
+      doorOpened: true,
+    });
     expect(getAvailableNodes(run)).toContain(secret.id);
     run = enterRoom(run, secret.id);
     expect(run.player.bombs).toBe(0);
@@ -182,7 +233,9 @@ describe('run generation', () => {
   it('keeps floor-one shops free and spends one key on locked shops and treasure rooms later', () => {
     let firstFloor = createRun('FIRST-FLOOR-DOOR');
     const freeShop = firstFloor.floorMap.nodes.find((node) => node.kind === 'shop')!;
-    firstFloor.floorMap.currentNodeId = firstFloor.floorMap.nodes.find((node) => node.connections.includes(freeShop.id))!.id;
+    firstFloor.floorMap.currentNodeId = firstFloor.floorMap.nodes.find((node) =>
+      node.connections.includes(freeShop.id),
+    )!.id;
     firstFloor.player.keys = 0;
     firstFloor = enterRoom(firstFloor, freeShop.id);
     expect(firstFloor.player.keys).toBe(0);
@@ -191,7 +244,9 @@ describe('run generation', () => {
     laterFloor.floorIndex = 1;
     laterFloor.floorMap = createFloorMap(1, laterFloor.seed);
     const lockedTreasure = laterFloor.floorMap.nodes.find((node) => node.kind === 'treasure')!;
-    laterFloor.floorMap.currentNodeId = laterFloor.floorMap.nodes.find((node) => node.connections.includes(lockedTreasure.id))!.id;
+    laterFloor.floorMap.currentNodeId = laterFloor.floorMap.nodes.find((node) =>
+      node.connections.includes(lockedTreasure.id),
+    )!.id;
     laterFloor.player.keys = 0;
     expect(() => enterRoom(laterFloor, lockedTreasure.id)).toThrow(/key/i);
     laterFloor.player.keys = 1;
@@ -248,7 +303,9 @@ describe('combat', () => {
     run.combat!.roomLayout = { ...DEFAULT_COMBAT_ROOM_LAYOUT };
     run.player.bombs = 2;
     const target = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     target.position = { x: 5, y: 3 };
     target.footprintWidth = 2;
     target.footprintHeight = 2;
@@ -264,7 +321,15 @@ describe('combat', () => {
     expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(800);
     expect(run.combat!.animationEvents.slice(-2)).toMatchObject([
       { kind: 'bomb-blast', toX: 5, toY: 3, value: 50 },
-      { kind: 'bomb-hit', targetId: target.instanceId, value: 200, secondaryValue: 0, rawValue: 200, armorValue: 0, hitCount: 4 },
+      {
+        kind: 'bomb-hit',
+        targetId: target.instanceId,
+        value: 200,
+        secondaryValue: 0,
+        rawValue: 200,
+        armorValue: 0,
+        hitCount: 4,
+      },
     ]);
   });
 
@@ -285,7 +350,12 @@ describe('combat', () => {
     expect(getPlayerMovementSpeed(hydrated)).toBe(3);
     expect(hydrated.player.stats.attackRange).toBe(5);
     expect(hydrated.combat!.deploymentPending).toBe(false);
-    expect(hydrated.combat!.roomLayout).toMatchObject({ shape: 'standard', width: 17, height: 9, unitCount: 1 });
+    expect(hydrated.combat!.roomLayout).toMatchObject({
+      shape: 'standard',
+      width: 17,
+      height: 9,
+      unitCount: 1,
+    });
     expect(getEnemyMovementSpeed(hydrated.combat!.enemies[0]!)).toBe(3);
     expect(hydrated.combat!.enemies[0]!.visionRange).toBeGreaterThan(1);
     expect(hydrated.combat!.enemies[0]!.footprintWidth).toBeGreaterThanOrEqual(1);
@@ -316,10 +386,12 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     expect(run.combat!.deploymentPending).toBe(true);
     const cells = getPlayerDeploymentCells(run);
-    const occupied = new Set(run.combat!.enemies
-      .filter((enemy) => enemy.hp > 0)
-      .flatMap((enemy) => getEnemyOccupiedCells(enemy))
-      .map((cell) => `${cell.x}:${cell.y}`));
+    const occupied = new Set(
+      run
+        .combat!.enemies.filter((enemy) => enemy.hp > 0)
+        .flatMap((enemy) => getEnemyOccupiedCells(enemy))
+        .map((cell) => `${cell.x}:${cell.y}`),
+    );
     expect(cells).toHaveLength(getCombatRoomCells(run.combat!).length - occupied.size);
     expect(cells.some((cell) => cell.x >= Math.floor(run.combat!.roomLayout.width / 2))).toBe(true);
 
@@ -329,7 +401,9 @@ describe('combat', () => {
     expect(run.combat!.playerPosition).toEqual(destination);
     expect(run.combat!.vitality).toBe(vitality);
     expect(run.combat!.deploymentPending).toBe(true);
-    expect(() => placePlayerForDeployment(run, run.combat!.roomLayout.width, 0)).toThrow('outside the deployment zone');
+    expect(() => placePlayerForDeployment(run, run.combat!.roomLayout.width, 0)).toThrow(
+      'outside the deployment zone',
+    );
 
     run = confirmPlayerDeployment(run);
     expect(run.combat!.deploymentPending).toBe(false);
@@ -343,8 +417,9 @@ describe('combat', () => {
     const rightSeed = createRun('VARIABLE-ROOM-DETERMINISM');
     const right = enterRoom(rightSeed, getAvailableNodes(rightSeed)[0]!);
     expect(left.combat!.roomLayout).toEqual(right.combat!.roomLayout);
-    expect(left.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position })))
-      .toEqual(right.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position })));
+    expect(left.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position }))).toEqual(
+      right.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position })),
+    );
 
     const shapes = new Set<string>();
     const anchors = new Set<string>();
@@ -434,10 +509,12 @@ describe('combat', () => {
 
     expect(rewarded?.choice).toMatchObject({ kind: 'item', rewardContext: 'large-room', canSkip: true });
     expect(rewarded!.choice!.options).toHaveLength(3);
-    expect(rewarded!.choice!.options.every((option) => {
-      const item = option.itemId ? ITEMS[option.itemId] : undefined;
-      return item?.pool.includes('large-room') && item.combatCard === false;
-    })).toBe(true);
+    expect(
+      rewarded!.choice!.options.every((option) => {
+        const item = option.itemId ? ITEMS[option.itemId] : undefined;
+        return item?.pool.includes('large-room') && item.combatCard === false;
+      }),
+    ).toBe(true);
 
     const option = rewarded!.choice!.options[0]!;
     const deckSize = rewarded!.player.deck.length;
@@ -453,22 +530,29 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     run.player.stats.dodgeChance = 0;
     run.combat!.hand = run.combat!.hand.slice(0, 5);
-    run.combat!.enemies.forEach((enemy) => { enemy.alerted = true; });
-    const positionsBefore = new Map(run.combat!.enemies.map((enemy) => [
-      enemy.instanceId,
-      Math.abs(enemy.position.x - run.combat!.playerPosition.x)
-        + Math.abs(enemy.position.y - run.combat!.playerPosition.y),
-    ]));
+    run.combat!.enemies.forEach((enemy) => {
+      enemy.alerted = true;
+    });
+    const positionsBefore = new Map(
+      run.combat!.enemies.map((enemy) => [
+        enemy.instanceId,
+        Math.abs(enemy.position.x - run.combat!.playerPosition.x) +
+          Math.abs(enemy.position.y - run.combat!.playerPosition.y),
+      ]),
+    );
 
     run = endTurn(run);
     expect(run.phase).toBe('discard');
     run = finishDiscard(run);
 
-    expect(run.combat!.enemies.some((enemy) => {
-      const distance = Math.abs(enemy.position.x - run.combat!.playerPosition.x)
-        + Math.abs(enemy.position.y - run.combat!.playerPosition.y);
-      return distance < positionsBefore.get(enemy.instanceId)!;
-    })).toBe(true);
+    expect(
+      run.combat!.enemies.some((enemy) => {
+        const distance =
+          Math.abs(enemy.position.x - run.combat!.playerPosition.x) +
+          Math.abs(enemy.position.y - run.combat!.playerPosition.y);
+        return distance < positionsBefore.get(enemy.instanceId)!;
+      }),
+    ).toBe(true);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyMoved')).toBe(true);
   });
 
@@ -476,14 +560,21 @@ describe('combat', () => {
     let run = createRun('MULTI-CELL-ENEMY');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const target = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     target.position = { x: 5, y: 3 };
     target.footprintWidth = 2;
     target.footprintHeight = 2;
     const occupied = getEnemyOccupiedCells(target);
-    expect(occupied).toEqual(expect.arrayContaining([
-      { x: 5, y: 3 }, { x: 6, y: 3 }, { x: 5, y: 4 }, { x: 6, y: 4 },
-    ]));
+    expect(occupied).toEqual(
+      expect.arrayContaining([
+        { x: 5, y: 3 },
+        { x: 6, y: 3 },
+        { x: 5, y: 4 },
+        { x: 6, y: 4 },
+      ]),
+    );
     const reachable = getReachablePlayerCells(run);
     expect(reachable).not.toContainEqual({ x: 5, y: 4 });
 
@@ -496,7 +587,9 @@ describe('combat', () => {
     let run = createRun('ENEMY-WANDER');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const enemy = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((entry) => {
+      entry.hp = 0;
+    });
     enemy.position = { x: 13, y: 0 };
     enemy.visionRange = 1;
     enemy.alerted = false;
@@ -509,14 +602,20 @@ describe('combat', () => {
     run = finishDiscard(endTurn(run));
     expect(run.player.redHp).toBe(redHpBefore);
     expect(run.combat!.playerShield).toBe(shieldBefore);
-    expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyWandered' || entry.messageKey === 'enemyWanderIdle')).toBe(true);
+    expect(
+      run.combat!.log.some(
+        (entry) => entry.messageKey === 'enemyWandered' || entry.messageKey === 'enemyWanderIdle',
+      ),
+    ).toBe(true);
   });
 
   it('lets jumping enemies cross diagonally and deal contact damage', () => {
     let run = createRun('DIAGONAL-JUMPER');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const enemy = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((entry) => {
+      entry.hp = 0;
+    });
     run.combat!.playerPosition = { x: 2, y: 4 };
     run.combat!.playerShield = 0;
     run.player.stats.dodgeChance = 0;
@@ -533,7 +632,12 @@ describe('combat', () => {
     const redHpBefore = run.player.redHp;
 
     run = finishDiscard(endTurn(run));
-    expect(run.combat!.animationEvents.some((event) => event.kind === 'move' && event.sourceId === enemy.instanceId && event.movementStyle === 'jump')).toBe(true);
+    expect(
+      run.combat!.animationEvents.some(
+        (event) =>
+          event.kind === 'move' && event.sourceId === enemy.instanceId && event.movementStyle === 'jump',
+      ),
+    ).toBe(true);
     expect(run.player.redHp).toBeLessThan(redHpBefore);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyAttack')).toBe(true);
   });
@@ -551,7 +655,12 @@ describe('combat', () => {
     expect(run.combat!.playerPosition).toEqual({ x: 2, y: 4 });
     expect(run.combat!.vitality).toBe(vitalityBefore - 1);
     expect(run.combat!.animationEvents.at(-1)).toMatchObject({
-      kind: 'move', sourceId: 'isaac', fromX: 0, fromY: 4, toX: 2, toY: 4,
+      kind: 'move',
+      sourceId: 'isaac',
+      fromX: 0,
+      fromY: 4,
+      toX: 2,
+      toY: 4,
     });
   });
 
@@ -560,7 +669,9 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const target = run.combat!.enemies[0]!;
     target.position = { x: 11, y: 4 };
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
     expect(() => playCard(run, attack.instanceId, target.instanceId)).toThrow(/outside attack range/i);
@@ -589,7 +700,9 @@ describe('combat', () => {
       enemy.footprintWidth = 1;
       enemy.footprintHeight = 1;
     });
-    run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(2).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     const doubleShot = createCard(run, 'double-shot');
     const sweepingAttack = createCard(run, 'sweeping-attack');
     run.player.deck.push(doubleShot, sweepingAttack);
@@ -612,7 +725,9 @@ describe('combat', () => {
     target.hp = 1;
     target.armor = 0;
     target.shield = 0;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
     const previousSequence = run.combat!.animationSequence;
@@ -620,8 +735,11 @@ describe('combat', () => {
     run = playCard(run, attack.instanceId, target.instanceId);
 
     expect(run.phase).toBe('choice');
-    expect(run.combat!.animationEvents.filter((event) => event.sequence > previousSequence).map((event) => event.kind))
-      .toEqual(['card-play', 'player-attack', 'defeat']);
+    expect(
+      run
+        .combat!.animationEvents.filter((event) => event.sequence > previousSequence)
+        .map((event) => event.kind),
+    ).toEqual(['card-play', 'player-attack', 'defeat']);
   });
 
   it('records the complete player attack calculation for the slower damage animation', () => {
@@ -633,7 +751,9 @@ describe('combat', () => {
     target.maxHp = 100;
     target.armor = 2;
     target.shield = 4;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     run.player.stats.critChance = 0;
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
@@ -642,8 +762,13 @@ describe('combat', () => {
 
     expect(run.combat!.enemies[0]).toMatchObject({ hp: 100, shield: 0 });
     expect(run.combat!.animationEvents.at(-1)).toMatchObject({
-      kind: 'player-attack', targetId: target.instanceId,
-      rawValue: 6, armorValue: 2, secondaryValue: 4, value: 0, hitCount: 1,
+      kind: 'player-attack',
+      targetId: target.instanceId,
+      rawValue: 6,
+      armorValue: 2,
+      secondaryValue: 4,
+      value: 0,
+      hitCount: 1,
     });
   });
 
@@ -655,7 +780,9 @@ describe('combat', () => {
     const alignedTarget = run.combat!.enemies[1]!;
     previousTarget.position = { x: 15, y: 0 };
     alignedTarget.position = { x: 6, y: 4 };
-    run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(2).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     run.combat!.selectedEnemyId = previousTarget.instanceId;
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
@@ -666,7 +793,8 @@ describe('combat', () => {
     expect(canPlayCard(run, attack.instanceId)).toEqual({ ok: true });
     expect(() => playCard(run, attack.instanceId)).toThrow(/choose an enemy target/i);
     expect(canPlayCard(run, attack.instanceId, run.combat!.selectedEnemyId)).toEqual({
-      ok: false, reason: 'Target is outside attack range',
+      ok: false,
+      reason: 'Target is outside attack range',
     });
     run = selectEnemy(run, alignedTarget.instanceId);
     expect(canPlayCard(run, attack.instanceId, run.combat!.selectedEnemyId)).toEqual({ ok: true });
@@ -682,7 +810,9 @@ describe('combat', () => {
     const second = run.combat!.enemies[1]!;
     first.position = { x: 4, y: 4 };
     second.position = { x: 5, y: 4 };
-    run.combat!.enemies.slice(2).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(2).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     run.combat!.selectedEnemyId = undefined;
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
@@ -705,8 +835,13 @@ describe('combat', () => {
     const combat = run.combat!;
     const target = combat.enemies[0]!;
     target.position = { x: 4, y: 4 };
-    target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
-    combat.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    target.maxHp = 100;
+    target.hp = 100;
+    target.armor = 0;
+    target.shield = 0;
+    combat.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     run.player.stats.critChance = 0;
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     const terra = run.player.deck.find((card) => card.definitionId === 'item:terra')!;
@@ -716,7 +851,10 @@ describe('combat', () => {
     combat.vitality = 5;
 
     expect(getAttackFusionPreview(run, attack.instanceId, [terra.instanceId])).toMatchObject({
-      totalCost: 1, flatDamage: 3, projectileScale: 1.35, knockback: 2,
+      totalCost: 1,
+      flatDamage: 3,
+      projectileScale: 1.35,
+      knockback: 2,
     });
     run = playFusedAttack(run, attack.instanceId, [terra.instanceId], target.instanceId);
 
@@ -749,9 +887,14 @@ describe('combat', () => {
     const combat = run.combat!;
     const target = combat.enemies[0]!;
     target.position = { x: 4, y: 4 };
-    target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
+    target.maxHp = 100;
+    target.hp = 100;
+    target.armor = 0;
+    target.shield = 0;
     target.intent = { kind: 'idle', value: 0, label: 'Idle', actions: [{ kind: 'idle', value: 0 }] };
-    combat.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    combat.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     run.player.stats.critChance = 0;
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     const pentagram = run.player.deck.find((card) => card.definitionId === 'item:pentagram')!;
@@ -765,15 +908,23 @@ describe('combat', () => {
     expect(preview.damageMultiplier).toBeCloseTo(1.32);
     expect(preview).toMatchObject({ poisonTurns: 2, poisonDamage: 3, slowTurns: 2 });
     combat.vitality = 0;
-    expect(canPlayFusedAttack(run, attack.instanceId, fusedItems, target.instanceId)).toMatchObject({ ok: false });
+    expect(canPlayFusedAttack(run, attack.instanceId, fusedItems, target.instanceId)).toMatchObject({
+      ok: false,
+    });
     combat.vitality = 1;
 
     run = playFusedAttack(run, attack.instanceId, fusedItems, target.instanceId);
     expect(run.combat!.vitality).toBe(0);
     expect(run.combat!.enemies[0]!.hp).toBe(92);
     expect(run.combat!.enemies[0]).toMatchObject({ poisonTurns: 2, poisonDamage: 3, slowedTurns: 2 });
-    expect(getEnemyMovementSpeed(run.combat!.enemies[0]!)).toBe(Math.max(1, Math.ceil(target.movementSpeed / 2)));
-    expect(run.combat!).toMatchObject({ playerDamageMultiplier: 1, playerFireRateBuff: 0, usedPassiveItems: [] });
+    expect(getEnemyMovementSpeed(run.combat!.enemies[0]!)).toBe(
+      Math.max(1, Math.ceil(target.movementSpeed / 2)),
+    );
+    expect(run.combat!).toMatchObject({
+      playerDamageMultiplier: 1,
+      playerFireRateBuff: 0,
+      usedPassiveItems: [],
+    });
 
     run = endTurn(run);
     run = finishDiscard(run);
@@ -788,7 +939,9 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const target = run.combat!.enemies[0]!;
     target.position = { x: 3, y: 2 };
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     const spoonBender = run.player.deck.find((card) => card.definitionId === 'item:spoon-bender')!;
     run.combat!.hand = [attack.instanceId, spoonBender.instanceId];
@@ -806,9 +959,10 @@ describe('combat', () => {
     const enemyId = run.combat!.enemies[0]!.instanceId;
     run.combat!.enemies[0]!.position = { x: 1, y: 4 };
     run.combat!.enemies.forEach((enemy, index) => {
-      enemy.intent = index === 0
-        ? { kind: 'prepare', value: 0, label: 'Preparing…', actions: [{ kind: 'prepare', value: 0 }] }
-        : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
+      enemy.intent =
+        index === 0
+          ? { kind: 'prepare', value: 0, label: 'Preparing…', actions: [{ kind: 'prepare', value: 0 }] }
+          : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
     });
     run.combat!.hand = [];
     run = endTurn(run);
@@ -834,9 +988,10 @@ describe('combat', () => {
     enemy.reactionCooldown = 0;
     enemy.alerted = true;
     run.combat!.enemies.forEach((entry) => {
-      entry.intent = entry.instanceId === enemy.instanceId
-        ? { kind: 'attack', value: 1, label: 'Attack 1', actions: [{ kind: 'attack', value: 1 }] }
-        : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
+      entry.intent =
+        entry.instanceId === enemy.instanceId
+          ? { kind: 'attack', value: 1, label: 'Attack 1', actions: [{ kind: 'attack', value: 1 }] }
+          : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
     });
     run.combat!.hand = [];
     run = endTurn(run);
@@ -862,10 +1017,17 @@ describe('combat', () => {
     const enemy = run.combat!.enemies[0]!;
     enemy.position = { x: 10, y: 4 };
     enemy.alerted = true;
-    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((entry) => {
+      entry.hp = 0;
+    });
     enemy.intent = {
-      kind: 'shield', value: 9, label: 'Guard 9 + Recover 8',
-      actions: [{ kind: 'shield', value: 9 }, { kind: 'heal', value: 8 }],
+      kind: 'shield',
+      value: 9,
+      label: 'Guard 9 + Recover 8',
+      actions: [
+        { kind: 'shield', value: 9 },
+        { kind: 'heal', value: 8 },
+      ],
     };
     run.player.stats.dodgeChance = 0;
     run.combat!.playerShield = 0;
@@ -886,13 +1048,24 @@ describe('combat', () => {
     let run = createRun('BOSS-DOUBLE-ACTION');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const boss = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     Object.assign(boss, {
-      boss: true, behavior: 'boss', position: { x: 1, y: 4 }, attackRange: 5,
-      movementPattern: 'cardinal', alerted: true,
+      boss: true,
+      behavior: 'boss',
+      position: { x: 1, y: 4 },
+      attackRange: 5,
+      movementPattern: 'cardinal',
+      alerted: true,
       intent: {
-        kind: 'attack', value: 8, label: 'Attack 8 + Attack 6',
-        actions: [{ kind: 'attack', value: 8 }, { kind: 'attack', value: 6 }],
+        kind: 'attack',
+        value: 8,
+        label: 'Attack 8 + Attack 6',
+        actions: [
+          { kind: 'attack', value: 8 },
+          { kind: 'attack', value: 6 },
+        ],
       },
     });
     run.player.stats.armor = 0;
@@ -913,13 +1086,26 @@ describe('combat', () => {
     let run = createRun('BOSS-CHARGE-NEXT-ATTACK');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const boss = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     Object.assign(boss, {
-      boss: true, behavior: 'boss', attack: 10, position: { x: 1, y: 4 }, attackRange: 5,
-      movementPattern: 'cardinal', alerted: true, behaviorStep: 0,
+      boss: true,
+      behavior: 'boss',
+      attack: 10,
+      position: { x: 1, y: 4 },
+      attackRange: 5,
+      movementPattern: 'cardinal',
+      alerted: true,
+      behaviorStep: 0,
       intent: {
-        kind: 'attack', value: 10, label: 'Attack 10 + Preparing…',
-        actions: [{ kind: 'attack', value: 10 }, { kind: 'prepare', value: 0 }],
+        kind: 'attack',
+        value: 10,
+        label: 'Attack 10 + Preparing…',
+        actions: [
+          { kind: 'attack', value: 10 },
+          { kind: 'prepare', value: 0 },
+        ],
       },
     });
     run.player.stats.armor = 0;
@@ -939,13 +1125,24 @@ describe('combat', () => {
     let run = createRun('BOSS-SUMMON');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const boss = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     Object.assign(boss, {
-      boss: true, behavior: 'boss', position: { x: 1, y: 4 }, attackRange: 5,
-      movementPattern: 'cardinal', alerted: true,
+      boss: true,
+      behavior: 'boss',
+      position: { x: 1, y: 4 },
+      attackRange: 5,
+      movementPattern: 'cardinal',
+      alerted: true,
       intent: {
-        kind: 'summon', value: 1, label: 'Summon 1 + Guard 4',
-        actions: [{ kind: 'summon', value: 1 }, { kind: 'shield', value: 4 }],
+        kind: 'summon',
+        value: 1,
+        label: 'Summon 1 + Guard 4',
+        actions: [
+          { kind: 'summon', value: 1 },
+          { kind: 'shield', value: 4 },
+        ],
       },
     });
     run.combat!.hand = [];
@@ -963,12 +1160,19 @@ describe('combat', () => {
     let run = createRun('MOVE-THEN-ATTACK');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const enemy = run.combat!.enemies[0]!;
-    run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((entry) => {
+      entry.hp = 0;
+    });
     enemy.position = { x: 7, y: 4 };
     enemy.movementSpeed = 2;
     enemy.attackRange = 5;
     enemy.alerted = true;
-    enemy.intent = { kind: 'attack', value: 12, label: 'Attack 12', actions: [{ kind: 'attack', value: 12 }] };
+    enemy.intent = {
+      kind: 'attack',
+      value: 12,
+      label: 'Attack 12',
+      actions: [{ kind: 'attack', value: 12 }],
+    };
     run.player.stats.dodgeChance = 0;
     run.combat!.playerShield = 0;
     run.combat!.hand = [];
@@ -985,13 +1189,21 @@ describe('combat', () => {
 
   it('turns fire rate into predictable echo hits', () => {
     let run = createRun('FAST-ATTACKS');
-    run = enterRoom(run, getAvailableNodes(run).find((id) => id.includes('l1'))!);
+    run = enterRoom(
+      run,
+      getAvailableNodes(run).find((id) => id.includes('l1'))!,
+    );
     run.player.stats.fireRate = 1.5;
     run.player.stats.critChance = 0;
     const target = run.combat!.enemies[0]!;
     target.position = { x: 4, y: 4 };
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
-    target.maxHp = 100; target.hp = 100; target.armor = 0; target.shield = 0;
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
+    target.maxHp = 100;
+    target.hp = 100;
+    target.armor = 0;
+    target.shield = 0;
     const attacks = run.player.deck.filter((card) => card.definitionId === 'basic-attack').slice(0, 2);
     run.combat!.hand = attacks.map((card) => card.instanceId);
     run.combat!.drawPile = run.combat!.drawPile.filter((id) => !run.combat!.hand.includes(id));
@@ -1008,7 +1220,9 @@ describe('combat', () => {
     expect(run.combat!.hand).toHaveLength(7);
     run = endTurn(run);
     expect(run.phase).toBe('discard');
-    const discardable = run.combat!.hand.filter((id) => CARDS[run.player.deck.find((card) => card.instanceId === id)!.definitionId]!.type !== 'skill');
+    const discardable = run.combat!.hand.filter(
+      (id) => CARDS[run.player.deck.find((card) => card.instanceId === id)!.definitionId]!.type !== 'skill',
+    );
     run = discardCard(run, discardable[0]!);
     run = discardCard(run, discardable[1]!);
     expect(run.combat!.hand.length).toBeLessThanOrEqual(5);
@@ -1033,10 +1247,17 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const target = run.combat!.enemies[0]!;
     target.position = { x: 1, y: 4 };
-    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
     target.intent = {
-      kind: 'attack', value: 20, label: 'Attack 20 + Guard 9',
-      actions: [{ kind: 'attack', value: 20 }, { kind: 'shield', value: 9 }],
+      kind: 'attack',
+      value: 20,
+      label: 'Attack 20 + Guard 9',
+      actions: [
+        { kind: 'attack', value: 20 },
+        { kind: 'shield', value: 9 },
+      ],
     };
     const curse = run.player.deck.find((card) => card.definitionId === 'bad-trip')!;
     run.combat!.hand = [curse.instanceId];
@@ -1064,9 +1285,10 @@ describe('combat', () => {
     run.combat!.hand = run.combat!.hand.slice(0, 5);
     run.combat!.enemies.forEach((enemy, index) => {
       enemy.position = index === 0 ? { x: 1, y: 4 } : enemy.position;
-      enemy.intent = index === 0
-        ? { kind: 'attack', value: 5, label: 'Attack 5' }
-        : { kind: 'idle', value: 0, label: 'Idle' };
+      enemy.intent =
+        index === 0
+          ? { kind: 'attack', value: 5, label: 'Attack 5' }
+          : { kind: 'idle', value: 0, label: 'Idle' };
     });
     run = endTurn(run);
     run = finishDiscard(run);
@@ -1107,8 +1329,14 @@ describe('combat', () => {
     equipItem(run, 'blue-map');
     equipItem(run, 'steam-sale');
 
-    expect(run.player.items).toEqual(expect.arrayContaining(['goat-head', 'compass', 'blue-map', 'steam-sale']));
-    expect(run.player.deck.some((card) => ['item:goat-head', 'item:compass', 'item:blue-map', 'item:steam-sale'].includes(card.definitionId))).toBe(false);
+    expect(run.player.items).toEqual(
+      expect.arrayContaining(['goat-head', 'compass', 'blue-map', 'steam-sale']),
+    );
+    expect(
+      run.player.deck.some((card) =>
+        ['item:goat-head', 'item:compass', 'item:blue-map', 'item:steam-sale'].includes(card.definitionId),
+      ),
+    ).toBe(false);
     expect(CARDS['item:goat-head']).toBeUndefined();
     expect(run.player.stats.shopDiscount).toBe(0.5);
   });
@@ -1187,7 +1415,9 @@ describe('first run', () => {
     while (run.phase !== 'victory' && guard < 200) {
       guard += 1;
       if (run.phase === 'map') {
-        const available = getAvailableNodes(run).map((id) => run.floorMap.nodes.find((node) => node.id === id)!);
+        const available = getAvailableNodes(run).map((id) =>
+          run.floorMap.nodes.find((node) => node.id === id)!,
+        );
         const center = available.find((node) => !node.optional && (node.kind === 'boss' || node.lane === 1));
         run = enterRoom(run, (center ?? available.find((node) => !node.optional))!.id);
       } else if (run.phase === 'combat') {

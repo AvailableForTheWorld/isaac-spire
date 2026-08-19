@@ -13,20 +13,42 @@ export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string
 
 export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
   const player: PlayerState = {
-    character: 'isaac', redContainers: 3, redHp: 90, pocketHearts: [],
+    character: 'isaac',
+    redContainers: 3,
+    redHp: 90,
+    pocketHearts: [],
     stats: {
-      baseDamage: 6, damageMultiplier: 1, armor: 3, baseShield: 10,
-      heartSize: 30, maxVitality: 5, drawCount: 7, maxRetain: 5,
-      fireRate: 1, luck: 0, critChance: 0.05, dodgeChance: 0,
-      shopDiscount: 0, movementSpeed: 3, attackRange: 5, attackMode: 'basic',
+      baseDamage: 6,
+      damageMultiplier: 1,
+      armor: 3,
+      baseShield: 10,
+      heartSize: 30,
+      maxVitality: 5,
+      drawCount: 7,
+      maxRetain: 5,
+      fireRate: 1,
+      luck: 0,
+      critChance: 0.05,
+      dodgeChance: 0,
+      shopDiscount: 0,
+      movementSpeed: 3,
+      attackRange: 5,
+      attackMode: 'basic',
     },
-    coins: 5, bombs: 1, keys: 1, items: ['d6'], activeItemId: 'd6', deck: [],
+    coins: 5,
+    bombs: 1,
+    keys: 1,
+    items: ['d6'],
+    activeItemId: 'd6',
+    deck: [],
   };
   const starterCards = [
     ...Array<string>(6).fill('basic-attack'),
     ...Array<string>(3).fill('wooden-cross'),
     ...Array<string>(2).fill('half-heart'),
-    'bad-trip', 'the-empress', 'skill-d6',
+    'bad-trip',
+    'the-empress',
+    'skill-d6',
   ];
   player.deck = starterCards.map((id) => createCard(run, id));
   return player;
@@ -53,12 +75,20 @@ export function addPocketHeart(run: RunState, kind: 'soul' | 'black', count = 1)
   }
 }
 
-export function hasItemEffect(run: RunState, effect: keyof NonNullable<(typeof ITEMS)[string]['effects']>[number]): boolean {
+export function hasItemEffect(
+  run: RunState,
+  effect: keyof NonNullable<(typeof ITEMS)[string]['effects']>[number],
+): boolean {
   return run.player.items.some((id) => ITEMS[id]?.effects?.some((entry) => entry[effect] !== undefined));
 }
 
 export function getItemEffectTotal(run: RunState, effect: 'damageCap'): number | undefined {
-  const values = run.player.items.flatMap((id) => ITEMS[id]?.effects?.map((entry) => entry[effect]).filter((value): value is number => value !== undefined) ?? []);
+  const values = run.player.items.flatMap(
+    (id) =>
+      ITEMS[id]?.effects
+        ?.map((entry) => entry[effect])
+        .filter((value): value is number => value !== undefined) ?? [],
+  );
   return values.length ? Math.min(...values) : undefined;
 }
 

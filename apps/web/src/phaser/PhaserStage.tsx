@@ -2,9 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Phaser from 'phaser';
 import {
-  CARDS, DEFAULT_COMBAT_ROOM_LAYOUT, getPlayerDeploymentCells, getReachablePlayerCells,
-  getEnemyOccupiedCells, isCombatCellAvailable, isPositionInPlayerAttackRange,
-  type CombatRoomLayout, type EnemyState, type RunState,
+  CARDS,
+  DEFAULT_COMBAT_ROOM_LAYOUT,
+  getPlayerDeploymentCells,
+  getReachablePlayerCells,
+  getEnemyOccupiedCells,
+  isCombatCellAvailable,
+  isPositionInPlayerAttackRange,
+  type CombatRoomLayout,
+  type EnemyState,
+  type RunState,
 } from '@isaac-spire/game';
 import { cardName, enemyName, roomName } from '../localize';
 import { BattleScene } from './BattleScene';
@@ -23,7 +30,15 @@ function roomGridStyle(layout: CombatRoomLayout) {
   };
 }
 
-export function PhaserStage({ run, movementDisabled = false, bombTargeting = false, highlightedEnemyId, onMove, onDeploy, onBomb }: {
+export function PhaserStage({
+  run,
+  movementDisabled = false,
+  bombTargeting = false,
+  highlightedEnemyId,
+  onMove,
+  onDeploy,
+  onBomb,
+}: {
   run: RunState;
   movementDisabled?: boolean;
   bombTargeting?: boolean;
@@ -81,7 +96,9 @@ export function PhaserStage({ run, movementDisabled = false, bombTargeting = fal
       hpDamage: t('combat.hpDamage'),
       noHeartDamage: t('combat.noHeartDamage'),
       targetLock: t('combat.targetLock'),
-      enemies: Object.fromEntries((run.combat?.enemies ?? []).map((enemy) => [enemy.instanceId, enemyName(t, enemy)])),
+      enemies: Object.fromEntries(
+        (run.combat?.enemies ?? []).map((enemy) => [enemy.instanceId, enemyName(t, enemy)]),
+      ),
       cards: Object.fromEntries(Object.values(CARDS).map((card) => [card.id, cardName(t, card.id)])),
     });
     game.events.emit('run-sync');
@@ -93,15 +110,25 @@ export function PhaserStage({ run, movementDisabled = false, bombTargeting = fal
   const player = combat?.playerPosition ?? { x: 0, y: 4 };
   const reachable = new Set(getReachablePlayerCells(run).map((position) => `${position.x}:${position.y}`));
   const deployable = new Set(getPlayerDeploymentCells(run).map((position) => `${position.x}:${position.y}`));
-  const occupied = new Map<string, EnemyState>((combat?.enemies ?? [])
-    .filter((enemy) => enemy.hp > 0)
-    .flatMap((enemy) => getEnemyOccupiedCells(enemy).map((cell) => [`${cell.x}:${cell.y}`, enemy] as const)));
+  const occupied = new Map<string, EnemyState>(
+    (combat?.enemies ?? [])
+      .filter((enemy) => enemy.hp > 0)
+      .flatMap((enemy) =>
+        getEnemyOccupiedCells(enemy).map((cell) => [`${cell.x}:${cell.y}`, enemy] as const),
+      ),
+  );
   return (
     <div className="tactical-stage">
       <div className="phaser-stage" ref={hostRef} aria-label={t('combat.animatedRoom')} />
-      <div className="battle-grid" style={roomGridStyle(layout)} aria-label={t('combat.battleGrid', {
-        width: layout.width, height: layout.height, shape: t(`combat.roomShapes.${layout.shape}`),
-      })}>
+      <div
+        className="battle-grid"
+        style={roomGridStyle(layout)}
+        aria-label={t('combat.battleGrid', {
+          width: layout.width,
+          height: layout.height,
+          shape: t(`combat.roomShapes.${layout.shape}`),
+        })}
+      >
         {Array.from({ length: layout.width * layout.height }, (_, index) => {
           const x = index % layout.width;
           const y = Math.floor(index / layout.width);
@@ -113,27 +140,67 @@ export function PhaserStage({ run, movementDisabled = false, bombTargeting = fal
           const canDeploy = deploymentPending && deployable.has(key) && !isPlayer;
           const canMove = !deploymentPending && reachable.has(key) && !movementDisabled;
           const bombTargetable = bombTargeting && available;
-          const bombPreview = bombTargeting && bombHover
-            && Math.abs(bombHover.x - x) <= 1 && Math.abs(bombHover.y - y) <= 1;
+          const bombPreview =
+            bombTargeting && bombHover && Math.abs(bombHover.x - x) <= 1 && Math.abs(bombHover.y - y) <= 1;
           const bombCenter = bombTargeting && bombHover?.x === x && bombHover.y === y;
-          return <button
-            key={key}
-            className={`${!available ? 'void-cell' : ''} ${canMove && !bombTargeting ? 'reachable' : ''} ${canDeploy ? 'deployable' : ''} ${inAttackRange && !deploymentPending && available && !bombTargeting ? 'attack-range' : ''} ${isPlayer ? 'player-cell' : ''} ${enemy ? 'enemy-cell' : ''} ${bombTargetable ? 'bomb-targetable' : ''} ${bombPreview ? 'bomb-preview' : ''} ${bombCenter ? 'bomb-center' : ''}`}
-            style={{ gridColumn: x + 1, gridRow: y + 1 }}
-            disabled={bombTargeting ? !available : !available || (!canMove && !canDeploy) || Boolean(enemy) || isPlayer}
-            onPointerEnter={() => { if (bombTargeting && available) setBombHover({ x, y }); }}
-            onFocus={() => { if (bombTargeting && available) setBombHover({ x, y }); }}
-            onClick={() => bombTargeting ? onBomb(x, y) : canDeploy ? onDeploy(x, y) : onMove(x, y)}
-            aria-label={bombTargeting ? t('combat.bombCell', { x, y }) : enemy ? `${enemy.name} (${x}, ${y})` : isPlayer ? `Isaac (${x}, ${y})` : t('combat.gridCell', { x, y })}
-            title={bombTargeting ? t('combat.bombCell', { x, y }) : canDeploy ? t('combat.deployHere', { x, y }) : canMove ? t('combat.moveHere', { x, y }) : `(${x}, ${y})`}
-          />;
+          return (
+            <button
+              key={key}
+              className={`${!available ? 'void-cell' : ''} ${canMove && !bombTargeting ? 'reachable' : ''} ${canDeploy ? 'deployable' : ''} ${inAttackRange && !deploymentPending && available && !bombTargeting ? 'attack-range' : ''} ${isPlayer ? 'player-cell' : ''} ${enemy ? 'enemy-cell' : ''} ${bombTargetable ? 'bomb-targetable' : ''} ${bombPreview ? 'bomb-preview' : ''} ${bombCenter ? 'bomb-center' : ''}`}
+              style={{ gridColumn: x + 1, gridRow: y + 1 }}
+              disabled={
+                bombTargeting
+                  ? !available
+                  : !available || (!canMove && !canDeploy) || Boolean(enemy) || isPlayer
+              }
+              onPointerEnter={() => {
+                if (bombTargeting && available) setBombHover({ x, y });
+              }}
+              onFocus={() => {
+                if (bombTargeting && available) setBombHover({ x, y });
+              }}
+              onClick={() => (bombTargeting ? onBomb(x, y) : canDeploy ? onDeploy(x, y) : onMove(x, y))}
+              aria-label={
+                bombTargeting
+                  ? t('combat.bombCell', { x, y })
+                  : enemy
+                    ? `${enemy.name} (${x}, ${y})`
+                    : isPlayer
+                      ? `Isaac (${x}, ${y})`
+                      : t('combat.gridCell', { x, y })
+              }
+              title={
+                bombTargeting
+                  ? t('combat.bombCell', { x, y })
+                  : canDeploy
+                    ? t('combat.deployHere', { x, y })
+                    : canMove
+                      ? t('combat.moveHere', { x, y })
+                      : `(${x}, ${y})`
+              }
+            />
+          );
         })}
       </div>
-      <div className="grid-legend">{bombTargeting
-        ? <><span className="bomb-swatch" />{t('combat.bombLegend')}</>
-        : deploymentPending
-        ? <><span className="deploy-swatch" />{t('combat.deploymentLegend')}</>
-        : <><span className="range-swatch" />{t('combat.attackRangeLegend')}<span className="move-swatch" />{t('combat.movementLegend')}</>}
+      <div className="grid-legend">
+        {bombTargeting ? (
+          <>
+            <span className="bomb-swatch" />
+            {t('combat.bombLegend')}
+          </>
+        ) : deploymentPending ? (
+          <>
+            <span className="deploy-swatch" />
+            {t('combat.deploymentLegend')}
+          </>
+        ) : (
+          <>
+            <span className="range-swatch" />
+            {t('combat.attackRangeLegend')}
+            <span className="move-swatch" />
+            {t('combat.movementLegend')}
+          </>
+        )}
       </div>
     </div>
   );

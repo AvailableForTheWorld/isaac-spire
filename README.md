@@ -6,9 +6,9 @@ This is a fan-made gameplay prototype and is not affiliated with Edmund McMillen
 
 ## Stack
 
-- `apps/web`: React 19, Vite, and Phaser 4.0.0. React renders navigation, cards, and accessible controls; Phaser renders the animated combat room.
-- `apps/api`: NestJS 11 JSON persistence for active runs and unlock progression.
-- `packages/game`: framework-independent, seeded game state machine shared by the client and server types.
+- `apps/web`: feature-oriented React 19, Vite, Sass/UnoCSS, and Phaser 4. React renders navigation, cards, and accessible controls; Phaser is an isolated animated combat renderer.
+- `apps/api`: NestJS 11 with a transactional, gzip-compressed SQLite repository for active runs and unlock progression.
+- `packages/game`: framework-independent domain modules, content registries, seeded state machine, grid/AI algorithms, and save migrations.
 - pnpm workspaces coordinate the monorepo.
 
 ## Run it
@@ -34,7 +34,7 @@ fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
 
 Open `http://localhost:5173`. The API listens on `http://localhost:3001/api`.
 
-Use `pnpm check` to run TypeScript checks, rule/API tests, and production builds.
+Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and production builds. See [architecture](docs/architecture.md), [storage](docs/storage.md), [development](docs/development.md), and the [change log](CHANGELOG.md).
 
 ## First-run rules
 
@@ -48,7 +48,7 @@ Use `pnpm check` to run TypeScript checks, rule/API tests, and production builds
 
 ## Items and progression
 
-Active items replace Isaac's current active item and its persistent skill card. Passive items can modify damage, multiplier, armor, starting shield, heart size, vitality, draw, fire rate, critical chance, shop discounts, room visibility, damage caps, and tear form (`tears`, `knife`, `brimstone`, or `tech-x`).
+Active items replace Isaac's current active item and its persistent skill card. Passive items can modify damage, multiplier, armor, starting shield, heart size, vitality, draw, fire rate, critical chance, shop discounts, room visibility, damage caps, and attack form (`basic`, `knife`, `brimstone`, or `tech-x`).
 
 Unlock events included in the first slice:
 
@@ -61,13 +61,17 @@ Unlock events included in the first slice:
 
 ## Persistence API
 
-The API writes an atomic JSON store to `apps/api/data/runtime/store.json` by default. Set `ISAAC_SPIRE_DATA_FILE` to override it.
+The API stores one compressed latest snapshot per run in `apps/api/data/runtime/isaac-spire.sqlite`. An existing JSON store is imported transactionally and replaced by a compressed recoverable backup. Set `ISAAC_SPIRE_DB_FILE`, `ISAAC_SPIRE_DATA_FILE`, `ISAAC_SPIRE_HISTORY_LIMIT`, and `ISAAC_SPIRE_ACTIVE_RUN_LIMIT` to customize it.
 
 - `GET /api/health`
 - `GET /api/profile`
 - `GET /api/runs`
+- `GET /api/runs/active/latest`
 - `GET /api/runs/:id`
 - `POST /api/runs`
 - `PUT /api/runs/:id`
+- `DELETE /api/runs/:id`
+- `GET /api/maintenance/storage`
+- `POST /api/maintenance/storage/compact`
 
 The browser also keeps the latest snapshot in local storage, so a run remains resumable when the API is temporarily unavailable.

@@ -14,7 +14,9 @@ describe('game localization', () => {
     expect(i18n.t('combat.roomClearTitle')).toBe('房间已清理');
     expect(cardName(i18n.t, 'item:goat-head')).toBe('山羊头');
     expect(i18n.t('combat.confirmActiveDiscard', { item: '六面骰' })).toContain('不再出现在本局战斗中');
-    expect(i18n.t('choice.replaceActiveConfirm', { current: '六面骰', next: '美味的心' })).toContain('确认要拾取吗');
+    expect(i18n.t('choice.replaceActiveConfirm', { current: '六面骰', next: '美味的心' })).toContain(
+      '确认要拾取吗',
+    );
     expect(i18n.t('confirmation.replaceActiveTitle')).toBe('要替换当前主动道具吗？');
     expect(i18n.t('confirmation.discardActive')).toBe('永久弃掉');
   });
@@ -29,7 +31,8 @@ describe('game localization', () => {
       },
     } as unknown as RunState;
 
-    expect(logText(i18n.t, run, 'Round 1 — Pooter, Attack Fly entered the room.'))
-      .toBe('第 1 回合 — 喷射蝇、攻击蝇 进入了房间。');
+    expect(logText(i18n.t, run, 'Round 1 — Pooter, Attack Fly entered the room.')).toBe(
+      '第 1 回合 — 喷射蝇、攻击蝇 进入了房间。',
+    );
   });
 });

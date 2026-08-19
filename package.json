@@ -2,23 +2,37 @@
   "name": "isaac-spire",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": "24.x",
     "pnpm": "11.x"
   },
   "scripts": {
+    "prepare": "husky",
     "dev": "pnpm --filter @isaac-spire/game build && pnpm --parallel --filter @isaac-spire/api --filter @isaac-spire/web dev",
     "dev:web": "pnpm --filter @isaac-spire/web dev",
     "dev:api": "pnpm --filter @isaac-spire/game build && pnpm --filter @isaac-spire/api dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^3.2.4"
   }
 }

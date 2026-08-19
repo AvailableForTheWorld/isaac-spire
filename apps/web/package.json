@@ -23,7 +23,10 @@
   "devDependencies": {
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@unocss/vite": "^66.7.5",
+    "sass": "^1.102.0",
     "typescript": "^5.9.3",
+    "unocss": "^66.7.5",
     "vitest": "^3.2.4"
   }
 }

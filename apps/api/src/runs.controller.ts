@@ -1,10 +1,21 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
-import type { PersistedRun, RunState } from '@isaac-spire/game';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Inject,
+  NotFoundException,
+  Param,
+  Post,
+  Put,
+} from '@nestjs/common';
+import type { PersistedRun, RunState, RunSummary } from '@isaac-spire/game';
 import { StoreService } from './store.service.js';
 
 @Controller()
 export class RunsController {
-  constructor(private readonly store: StoreService) {}
+  constructor(@Inject(StoreService) private readonly store: StoreService) {}
 
   @Get('profile')
   profile() {
@@ -12,8 +23,15 @@ export class RunsController {
   }
 
   @Get('runs')
-  runs(): Promise<PersistedRun[]> {
+  runs(): Promise<RunSummary[]> {
     return this.store.listRuns();
+  }
+
+  @Get('runs/active/latest')
+  async latestActiveRun(): Promise<PersistedRun> {
+    const run = await this.store.latestActiveRun();
+    if (!run) throw new NotFoundException('No active run was found');
+    return run;
   }
 
   @Get('runs/:id')
@@ -30,6 +48,22 @@ export class RunsController {
   update(@Param('id') id: string, @Body() snapshot: RunState): Promise<PersistedRun> {
     if (snapshot.id !== id) throw new BadRequestException('Path and snapshot run IDs do not match');
     return this.persist(snapshot);
+  }
+
+  @Delete('runs/:id')
+  async delete(@Param('id') id: string): Promise<{ deleted: true }> {
+    await this.store.deleteRun(id);
+    return { deleted: true };
+  }
+
+  @Get('maintenance/storage')
+  storageStats() {
+    return this.store.storageStats();
+  }
+
+  @Post('maintenance/storage/compact')
+  compactStorage() {
+    return this.store.compact();
   }
 
   private async persist(snapshot: RunState): Promise<PersistedRun> {
