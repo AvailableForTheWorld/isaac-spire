@@ -50,6 +50,13 @@ export interface UnlockNotice {
   label: string;
 }
 
+export interface RoomCheckpoint {
+  rngState: number;
+  player: PlayerState;
+  combat: CombatState;
+  floorRedDamage: number;
+}
+
 export interface RunState {
   id: string;
   seed: string;
@@ -62,6 +69,7 @@ export interface RunState {
   floorMap: FloorMap;
   player: PlayerState;
   combat?: CombatState;
+  roomCheckpoint?: RoomCheckpoint;
   choice?: ChoiceState;
   currentRoomId?: string;
   clearedRooms: number;

@@ -1,5 +1,6 @@
 import type {
   AttackMode,
+  CombatSelectionKind,
   CombatAnimationKind,
   CombatLogTone,
   CombatMovementStyle,
@@ -9,8 +10,9 @@ import type {
   IntentKind,
   RoomKind,
   RoomMissingQuadrant,
+  StatusKind,
 } from './enums.js';
-import type { GridPosition } from './player.js';
+import type { GridPosition, StatusDurations } from './player.js';
 
 export interface EnemyDefinition {
   id: string;
@@ -48,6 +50,7 @@ export interface EnemyState extends EnemyDefinition {
   staggeredTurns: number;
   poisonTurns: number;
   poisonDamage: number;
+  statuses: StatusDurations;
   slowedTurns: number;
   prepared: boolean;
   behavior: EnemyBehavior;
@@ -58,6 +61,14 @@ export interface EnemyState extends EnemyDefinition {
   alerted: boolean;
   position: GridPosition;
   intent: EnemyIntent;
+}
+
+export interface PendingCombatSelection {
+  kind: CombatSelectionKind;
+  sourceInstanceId: string;
+  candidateInstanceIds: string[];
+  min: number;
+  max: number;
 }
 
 export interface CombatAnimationEvent {
@@ -110,11 +121,29 @@ export interface CombatState {
   playerDamageMultiplier: number;
   playerFireRateBuff: number;
   playerCritChanceBuff: number;
+  playerDodgeChanceBuff: number;
   playerRangeBuff: number;
   playerMovementBuff: number;
   attackModeOverride?: AttackMode;
+  curvedShotsOverride: boolean;
   damageCap?: number;
   usedPassiveItems: string[];
+  itemActionCounters: Record<string, number>;
+  usedItemActions: string[];
+  observedDefeatIds: string[];
+  previousCardDefinitionId?: string;
+  statFloorLocked: boolean;
+  activeEffectRepeats: number;
+  playerStatuses: StatusDurations;
+  playerStatusPower: Partial<Record<StatusKind, number>>;
+  pendingSelection?: PendingCombatSelection;
+  cardDefinitionOverrides: Record<string, string>;
+  temporaryCardIds: string[];
+  blankBookActive: boolean;
+  damoclesActive: boolean;
+  damoclesFallen: boolean;
+  ragnarokActive: boolean;
+  unlimitedVitalityTurns: number;
   playerPosition: GridPosition;
   attackMeter: number;
   hand: string[];

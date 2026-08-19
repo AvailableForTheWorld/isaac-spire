@@ -4,6 +4,7 @@ import { RunPhase, acknowledgeRoomReward, abandonRun, enterRoom, useMapBomb } fr
 import { GameHeader } from '../../components/game/GameHeader';
 import { unlockText } from '../../localize';
 import { HomePage } from '../home/HomePage';
+import { PocketItemBar } from '../items/PocketItemBar';
 import { RoomRewardReveal } from '../rewards/RoomRewardReveal';
 import { useGameSession } from '../run/useGameSession';
 import { StatsRail } from '../stats/StatsRail';
@@ -46,6 +47,7 @@ export function GameApplication() {
   return (
     <div className={`game-shell antialiased phase-${showingRoomReward ? RunPhase.Combat : run.phase}`}>
       <GameHeader run={run} onAbandon={onAbandon} />
+      <PocketItemBar run={run} commit={session.commit} />
       {session.notice && (
         <button className="toast" onClick={session.dismissNotice}>
           {session.notice}

@@ -1,13 +1,15 @@
-import { type CSSProperties } from 'react';
+import { type CSSProperties, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  CARDS,
   CardType,
+  CombatSelectionKind,
   ITEMS,
   ItemKind,
+  StatusKind,
   canPlayCard,
   canPlayFusedAttack,
   getAttackFusionMaterialIds,
+  getCardDefinition,
   type CardInstance,
   type RunState,
 } from '@isaac-spire/game';
@@ -43,8 +45,10 @@ export function CardView({
   onDiscard: () => void;
 }) {
   const { t } = useTranslation();
-  const definition = CARDS[instance.definitionId];
+  const definition = getCardDefinition(run, instance.instanceId);
   if (!definition) return null;
+  const blinded =
+    mode === CombatCardMode.Play && (run.combat?.playerStatuses[StatusKind.Blind] ?? 0) > 0 && !targeting;
   const directPlayable = canPlayCard(run, instance.instanceId);
   const fusionStarter =
     definition.type === CardType.Attack
@@ -69,19 +73,21 @@ export function CardView({
       onClick={mode === CombatCardMode.Play ? onPlay : onDiscard}
       title={disabled && playable.reason ? errorText(t, playable.reason) : cardDescription(t, definition.id)}
     >
-      <span className="card-cost">{definition.cost}</span>
-      <span className="card-type">{cardTypeName(t, definition.type)}</span>
+      <span className="card-cost">{blinded ? '?' : definition.cost}</span>
+      <span className="card-type">
+        {blinded ? t('combat.blindedCard') : cardTypeName(t, definition.type)}
+      </span>
       {item && (
         <span className={`card-quality quality-${item.quality}`}>
           {t('choice.quality', { quality: item.quality })}
         </span>
       )}
-      <b className="card-icon">{definition.icon}</b>
+      <b className="card-icon">{blinded ? '？' : definition.icon}</b>
       <strong>
-        {cardName(t, definition.id)}
+        {blinded ? t('combat.blindedCard') : cardName(t, definition.id)}
         {instance.upgraded ? '+' : ''}
       </strong>
-      <p>{cardDescription(t, definition.id)}</p>
+      <p>{blinded ? t('combat.blindedCardHint') : cardDescription(t, definition.id)}</p>
       {isSkill && (
         <small>
           {cooldown > 0 ? t('combat.recharging', { rounds: cooldown }) : t('combat.activeRetained')}
@@ -156,7 +162,7 @@ export function PileViewer({
         <p>{t(pile === CombatPileKind.Draw ? 'combat.drawPileHint' : 'combat.discardPileHint')}</p>
         <div className="pile-card-grid">
           {cards.map((instance, index) => {
-            const definition = CARDS[instance.definitionId];
+            const definition = getCardDefinition(run, instance.instanceId);
             return definition ? (
               <article className={`pile-card ${definition.type}`} key={instance.instanceId}>
                 <span>{index + 1}</span>
@@ -171,6 +177,97 @@ export function PileViewer({
           })}
           {!cards.length && <div className="empty-pile">{t('combat.emptyPile')}</div>}
         </div>
+      </section>
+    </div>
+  );
+}
+
+export function CombatCardSelectionModal({
+  run,
+  onResolve,
+  onCancel,
+}: {
+  run: RunState;
+  onResolve: (selectedIds: string[]) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const pending = run.combat?.pendingSelection;
+  const [selected, setSelected] = useState<string[]>([]);
+  if (!pending) return null;
+  const title =
+    pending.kind === CombatSelectionKind.Transposition
+      ? t('combatSelection.transpositionTitle')
+      : t('combatSelection.blankTitle');
+  const hint =
+    pending.kind === CombatSelectionKind.Transposition
+      ? t('combatSelection.transpositionHint')
+      : t('combatSelection.blankHint');
+  const toggle = (instanceId: string) => {
+    setSelected((current) => {
+      if (current.includes(instanceId)) return current.filter((id) => id !== instanceId);
+      if (pending.max === 1) return [instanceId];
+      return current.length < pending.max ? [...current, instanceId] : current;
+    });
+  };
+  return (
+    <div className="pile-backdrop combat-selection-backdrop" role="presentation">
+      <section
+        className="pile-viewer combat-selection-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <header>
+          <div>
+            <span>{t('combatSelection.kicker')}</span>
+            <h2>{title}</h2>
+          </div>
+          {pending.min === 0 && (
+            <button type="button" onClick={onCancel} aria-label={t('confirmation.close')}>
+              ×
+            </button>
+          )}
+        </header>
+        <p>{hint}</p>
+        <div className="pile-card-grid selectable">
+          {pending.candidateInstanceIds.map((instanceId) => {
+            const definition = getCardDefinition(run, instanceId);
+            if (!definition) return null;
+            const active = selected.includes(instanceId);
+            return (
+              <button
+                type="button"
+                className={`pile-card ${definition.type} ${active ? 'selected' : ''}`}
+                key={instanceId}
+                onClick={() => toggle(instanceId)}
+              >
+                <b>{definition.icon}</b>
+                <strong>{cardName(t, definition.id)}</strong>
+                <small>
+                  {cardTypeName(t, definition.type)} · {definition.cost}
+                </small>
+                <p>{cardDescription(t, definition.id)}</p>
+                <i>{active ? '✓' : '+'}</i>
+              </button>
+            );
+          })}
+        </div>
+        <footer>
+          {pending.min === 0 && (
+            <button type="button" className="text-button" onClick={onCancel}>
+              {t('confirmation.cancel')}
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary-button"
+            disabled={selected.length < pending.min || selected.length > pending.max}
+            onClick={() => onResolve(selected)}
+          >
+            {t('combatSelection.confirm', { count: selected.length })}
+          </button>
+        </footer>
       </section>
     </div>
   );

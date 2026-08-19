@@ -19,6 +19,7 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "generate:items": "node scripts/generate-isaac-item-manifest.mjs && prettier --write packages/game/src/content/isaac-items.generated.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "devDependencies": {

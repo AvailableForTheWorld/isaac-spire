@@ -18,6 +18,8 @@ function currentCardId(id: string): string {
 export function migrateRunSnapshot(state: RunState): RunState {
   const run = structuredClone(state);
   run.floorBombSearches ??= [];
+  run.player.pocketItems ??= [];
+  run.player.pocketItemSlots ??= 3;
   run.player.deck.forEach((card) => {
     card.definitionId = currentCardId(card.definitionId);
   });
@@ -28,6 +30,26 @@ export function migrateRunSnapshot(state: RunState): RunState {
 
   if (run.combat) {
     const legacyCombat = run.combat as CombatState & { tearMeter?: number };
+    legacyCombat.playerStatuses ??= {};
+    legacyCombat.playerStatusPower ??= {};
+    legacyCombat.cardDefinitionOverrides ??= {};
+    legacyCombat.temporaryCardIds ??= [];
+    legacyCombat.blankBookActive ??= false;
+    legacyCombat.damoclesActive ??= false;
+    legacyCombat.damoclesFallen ??= false;
+    legacyCombat.ragnarokActive ??= false;
+    legacyCombat.unlimitedVitalityTurns ??= 0;
+    legacyCombat.usedPassiveItems ??= [];
+    legacyCombat.itemActionCounters ??= {};
+    legacyCombat.usedItemActions ??= [];
+    legacyCombat.observedDefeatIds ??= [];
+    legacyCombat.statFloorLocked ??= false;
+    legacyCombat.activeEffectRepeats ??= 0;
+    legacyCombat.curvedShotsOverride ??= false;
+    legacyCombat.playerDodgeChanceBuff ??= 0;
+    legacyCombat.enemies.forEach((enemy) => {
+      enemy.statuses ??= {};
+    });
     legacyCombat.attackMeter ??= legacyCombat.tearMeter ?? 0;
     delete legacyCombat.tearMeter;
     if ((legacyCombat.attackModeOverride as string | undefined) === 'tears')

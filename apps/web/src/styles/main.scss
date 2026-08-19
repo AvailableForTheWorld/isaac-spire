@@ -26,6 +26,248 @@
   --blue: #79b8cf;
 }
 
+/* Pocket collectibles and data-driven card selection */
+.pocket-item-bar {
+  position: fixed;
+  z-index: 48;
+  top: 5.4rem;
+  right: 1.2rem;
+  width: min(25rem, calc(100vw - 2.4rem));
+  padding: 0.55rem;
+  border: 1px solid rgba(238, 207, 139, 0.28);
+  border-radius: 0.85rem;
+  background: rgba(18, 15, 18, 0.88);
+  box-shadow: 0 0.8rem 2.4rem rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+}
+
+.pocket-item-bar > span {
+  display: block;
+  margin: 0 0 0.35rem 0.25rem;
+  color: #d9b86f;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.pocket-item-bar > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.pocket-item-bar button,
+.pocket-empty {
+  min-width: 0;
+  min-height: 3.6rem;
+  padding: 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.65rem;
+  color: #f6ead1;
+  background: rgba(255, 255, 255, 0.045);
+  text-align: left;
+}
+
+.pocket-item-bar button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.05rem 0.38rem;
+  transition: 150ms ease;
+}
+
+.pocket-item-bar button:hover:not(:disabled) {
+  border-color: #d9b86f;
+  background: rgba(217, 184, 111, 0.12);
+  transform: translateY(-2px);
+}
+
+.pocket-item-bar button > b {
+  grid-row: 1 / 3;
+  align-self: center;
+  font-size: 1.45rem;
+}
+
+.pocket-item-bar button small,
+.pocket-item-bar button i,
+.pocket-empty small {
+  overflow: hidden;
+  font-size: 0.62rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pocket-item-bar button i {
+  color: #bcae98;
+  font-style: normal;
+  letter-spacing: 0.04em;
+}
+
+.pocket-item-bar button.spent {
+  opacity: 0.46;
+}
+
+.pocket-empty {
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.28);
+  text-align: center;
+}
+
+.pocket-empty b {
+  font-size: 1.25rem;
+}
+
+.pocket-modal-backdrop {
+  position: fixed;
+  z-index: 180;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(7, 5, 8, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.pocket-deck-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(72rem, 96vw);
+  max-height: min(48rem, 92vh);
+  border: 1px solid rgba(217, 184, 111, 0.45);
+  border-radius: 1.15rem;
+  background: linear-gradient(145deg, #21191d, #100e12);
+  box-shadow: 0 2rem 7rem rgba(0, 0, 0, 0.68);
+}
+
+.pocket-deck-panel > header,
+.pocket-deck-panel > footer,
+.combat-selection-panel > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+}
+
+.pocket-deck-panel > header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pocket-deck-panel > header span,
+.combat-selection-panel > header span {
+  color: #d9b86f;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.pocket-deck-panel h2,
+.pocket-deck-panel p {
+  margin: 0.15rem 0 0;
+}
+
+.pocket-deck-panel > header > button {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+}
+
+.pocket-deck-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.65rem;
+  overflow: auto;
+  padding: 1rem 1.2rem;
+}
+
+.pocket-deck-grid > button {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr);
+  gap: 0.15rem 0.45rem;
+  min-height: 5.3rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.72rem;
+  color: #eee2ce;
+  background: rgba(255, 255, 255, 0.035);
+  text-align: left;
+}
+
+.pocket-deck-grid > button.selected,
+.pile-card.selectable.selected,
+.pile-card.selected {
+  border-color: #d9b86f;
+  background: rgba(217, 184, 111, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(217, 184, 111, 0.22);
+}
+
+.pocket-deck-grid > button > span {
+  grid-row: 1 / 3;
+  font-size: 1.6rem;
+}
+
+.pocket-deck-grid > button > small {
+  color: #b3a58f;
+}
+
+.pocket-deck-grid > button > i,
+.pile-card.selectable > i,
+.pile-card.selected > i {
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.38rem;
+  color: #e2c277;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.combat-selection-backdrop {
+  z-index: 175;
+}
+
+.combat-selection-panel {
+  width: min(66rem, 94vw);
+  max-height: 88vh;
+}
+
+.combat-selection-panel .pile-card-grid.selectable {
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+}
+
+.combat-selection-panel .pile-card {
+  position: relative;
+  cursor: pointer;
+}
+
+.combat-status-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
+.combat-status-list > span,
+.enemy-panel .adapted-status {
+  padding: 0.2rem 0.38rem;
+  border: 1px solid rgba(207, 85, 95, 0.42);
+  border-radius: 0.35rem;
+  color: #ffc1c6;
+  background: rgba(115, 24, 35, 0.26);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+}
+
+@media (max-width: 900px) {
+  .pocket-item-bar {
+    position: static;
+    width: auto;
+    margin: 0.5rem 0.8rem;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -535,7 +777,7 @@ html[lang^='zh']
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: clamp(2rem, 5vw, 5rem);
+  padding: clamp(1.5rem, 4vh, 3rem) clamp(2rem, 5vw, 5rem);
   border-right: 1px solid var(--line);
   background: linear-gradient(135deg, rgba(93, 60, 50, 0.14), transparent);
 }
@@ -666,7 +908,7 @@ html[lang^='zh']
 }
 .route-board {
   position: relative;
-  min-height: 720px;
+  min-height: calc(100vh - 4.5rem);
   overflow: hidden;
   background:
     radial-gradient(
@@ -1984,6 +2226,9 @@ html[lang^='zh']
   font-size: 0.55rem;
   font-weight: 900;
   letter-spacing: 0.06em;
+}
+.card-quality.quality-0 {
+  color: #746c68;
 }
 .card-quality.quality-3 {
   color: #be9d65;

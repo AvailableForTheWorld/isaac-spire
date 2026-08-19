@@ -5,14 +5,19 @@ import type {
   ItemDefinition,
   ProfileState,
 } from './types.js';
+import { CUSTOM_ITEM_DEFINITIONS } from './content/custom-items.js';
+import { FULL_ISAAC_ITEMS } from './content/isaac-items.generated.js';
 import {
   AttackMode,
+  CardEffectOpcode,
   CardTarget,
   CardType,
   EnemyMovementPattern,
   ItemKind,
+  ItemUseTiming,
   RewardPool,
   RewardQuality,
+  StatusKind,
   UnlockEvent,
 } from './types.js';
 
@@ -182,12 +187,144 @@ export const CARDS: Record<string, CardDefinition> = {
     quality: RewardQuality.Common,
     rewardPools: [RewardPool.Curse],
   },
+  blank: {
+    id: 'blank',
+    name: 'Blank',
+    type: CardType.Blank,
+    cost: 99,
+    description: 'No effect. Deck-editing and Blank Book effects can turn this empty slot into value.',
+    target: CardTarget.None,
+    icon: '□',
+    quality: RewardQuality.Poor,
+    rewardPools: [],
+  },
+  silence: {
+    id: 'silence',
+    name: 'Silence',
+    type: CardType.Hex,
+    cost: 2,
+    description: 'Silence an enemy for 2 turns. It cannot execute attack actions.',
+    target: CardTarget.Enemy,
+    icon: '⌁',
+    quality: RewardQuality.Uncommon,
+    rewardPools: [RewardPool.Curse, RewardPool.Devil, RewardPool.Library],
+    rewardWeight: 4,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.Silence,
+        turns: 2,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
+  poison: {
+    id: 'poison',
+    name: 'Poison',
+    type: CardType.Hex,
+    cost: 1,
+    description: 'Poison an enemy for 3 turns. It loses 4 HP before acting each turn.',
+    target: CardTarget.Enemy,
+    icon: '☣',
+    quality: RewardQuality.Uncommon,
+    rewardPools: [RewardPool.Curse, RewardPool.Devil, RewardPool.Secret],
+    rewardWeight: 6,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.Poison,
+        turns: 3,
+        amount: 4,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
+  blind: {
+    id: 'blind',
+    name: 'Blind',
+    type: CardType.Hex,
+    cost: 1,
+    description: 'Blind an enemy for 2 turns. Its next intent is replaced by random actions.',
+    target: CardTarget.Enemy,
+    icon: '◑',
+    quality: RewardQuality.Uncommon,
+    rewardPools: [RewardPool.Curse, RewardPool.Secret, RewardPool.Library],
+    rewardWeight: 5,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.Blind,
+        turns: 2,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
+  'armor-break': {
+    id: 'armor-break',
+    name: 'Armor Break',
+    type: CardType.Hex,
+    cost: 1,
+    description: 'Break an enemy’s armor for 2 turns. All incoming damage ignores armor.',
+    target: CardTarget.Enemy,
+    icon: '◇',
+    quality: RewardQuality.Uncommon,
+    rewardPools: [RewardPool.RoomClear, RewardPool.Challenge, RewardPool.Elite],
+    rewardWeight: 5,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.ArmorBreak,
+        turns: 2,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
+  weak: {
+    id: 'weak',
+    name: 'Weak',
+    type: CardType.Hex,
+    cost: 1,
+    description: 'Weaken an enemy for 2 turns. Its attacks deal 50% less damage.',
+    target: CardTarget.Enemy,
+    icon: '▽',
+    quality: RewardQuality.Uncommon,
+    rewardPools: [RewardPool.RoomClear, RewardPool.Curse, RewardPool.Angel],
+    rewardWeight: 5,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.Weak,
+        turns: 2,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
+  'item-lock': {
+    id: 'item-lock',
+    name: 'Item Lock',
+    type: CardType.Hex,
+    cost: 2,
+    description: 'Seal an enemy’s special actions for 2 turns; it may only move or make basic attacks.',
+    target: CardTarget.Enemy,
+    icon: '⊘',
+    quality: RewardQuality.Rare,
+    rewardPools: [RewardPool.Curse, RewardPool.Devil, RewardPool.Challenge],
+    rewardWeight: 3,
+    effects: [
+      {
+        opcode: CardEffectOpcode.ApplyStatus,
+        status: StatusKind.ItemLock,
+        turns: 2,
+        target: CardTarget.Enemy,
+      },
+    ],
+  },
   'skill-d6': {
     id: 'skill-d6',
     name: 'The D6',
     type: CardType.Skill,
     cost: 3,
-    description: 'Reroll every other card in hand into a different card. Recharges in 3 rounds.',
+    description: 'Reroll every other Item card in hand into a different Item card. Recharges in 3 rounds.',
     target: CardTarget.None,
     icon: '⚅',
     quality: RewardQuality.Legendary,
@@ -267,9 +404,10 @@ export const CARDS: Record<string, CardDefinition> = {
   },
 };
 
-export const ITEMS: Record<string, ItemDefinition> = {
+const CURATED_ITEMS: Record<string, ItemDefinition> = {
   d6: {
     id: 'd6',
+    isaacId: 105,
     name: 'The D6',
     kind: ItemKind.Active,
     pool: [RewardPool.Treasure, RewardPool.Dice, RewardPool.Error, RewardPool.Library],
@@ -277,10 +415,11 @@ export const ITEMS: Record<string, ItemDefinition> = {
     icon: '⚅',
     chargeRounds: 3,
     skillCardId: 'skill-d6',
-    description: 'Transforms every other card in hand into a different card. Isaac starts with it.',
+    description: 'Rerolls every other Item card in hand into a different Item card. Isaac starts with it.',
   },
   'yum-heart': {
     id: 'yum-heart',
+    isaacId: 45,
     name: 'Yum Heart',
     kind: ItemKind.Active,
     pool: [RewardPool.Treasure, RewardPool.Shop, RewardPool.Bedroom, RewardPool.Arcade],
@@ -292,6 +431,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'book-belial': {
     id: 'book-belial',
+    isaacId: 34,
     name: 'Book of Belial',
     kind: ItemKind.Active,
     pool: [RewardPool.Devil, RewardPool.Treasure, RewardPool.Library, RewardPool.Curse],
@@ -303,6 +443,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'book-shadows': {
     id: 'book-shadows',
+    isaacId: 58,
     name: 'Book of Shadows',
     kind: ItemKind.Active,
     pool: [RewardPool.Treasure, RewardPool.Angel, RewardPool.Library],
@@ -314,6 +455,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'tammys-head': {
     id: 'tammys-head',
+    isaacId: 38,
     name: "Tammy's Head",
     kind: ItemKind.Active,
     pool: [
@@ -331,6 +473,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'the-nail': {
     id: 'the-nail',
+    isaacId: 83,
     name: 'The Nail',
     kind: ItemKind.Active,
     pool: [RewardPool.Devil, RewardPool.Curse, RewardPool.Sacrifice],
@@ -342,6 +485,7 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
   'glowing-hourglass': {
     id: 'glowing-hourglass',
+    isaacId: 422,
     name: 'Glowing Hour Glass',
     kind: ItemKind.Active,
     pool: [RewardPool.Shop, RewardPool.Planetarium, RewardPool.Dice, RewardPool.Vault],
@@ -652,6 +796,49 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
 };
 
+/**
+ * The generated catalog supplies every Repentance/Repentance+ collectible.
+ * Curated and project-specific definitions override generic adaptations by
+ * stable ID and by Isaac collectible ID. The second key prevents aliases such
+ * as `the-book-of-belial` and `book-belial` from becoming two runtime items.
+ */
+const CUSTOM_ISAAC_IDS = new Set(
+  Object.values(CUSTOM_ITEM_DEFINITIONS)
+    .map((item) => item.isaacId)
+    .filter((id): id is number => id !== undefined),
+);
+const AUTHORED_ISAAC_IDS = new Set([
+  ...CUSTOM_ISAAC_IDS,
+  ...Object.values(CURATED_ITEMS)
+    .map((item) => item.isaacId)
+    .filter((id): id is number => id !== undefined),
+]);
+
+export const ITEMS: Record<string, ItemDefinition> = {
+  ...Object.fromEntries(
+    Object.entries(FULL_ISAAC_ITEMS).filter(
+      ([id, item]) =>
+        !(id in CUSTOM_ITEM_DEFINITIONS) &&
+        !(id in CURATED_ITEMS) &&
+        (item.isaacId === undefined || !AUTHORED_ISAAC_IDS.has(item.isaacId)),
+    ),
+  ),
+  ...Object.fromEntries(
+    Object.entries(CURATED_ITEMS).filter(
+      ([id, item]) =>
+        !(id in CUSTOM_ITEM_DEFINITIONS) &&
+        (item.isaacId === undefined || !CUSTOM_ISAAC_IDS.has(item.isaacId)),
+    ),
+  ),
+  ...CUSTOM_ITEM_DEFINITIONS,
+};
+
+for (const item of Object.values(ITEMS)) {
+  if (item.kind === ItemKind.Active) item.timing ??= ItemUseTiming.ActiveCharge;
+  if (item.kind === ItemKind.Passive && item.combatCard === false) item.timing ??= ItemUseTiming.Permanent;
+  if (item.kind === ItemKind.Passive && item.combatCard !== false) item.timing ??= ItemUseTiming.CombatCard;
+}
+
 const PASSIVE_CARD_TEXT: Record<string, string> = {
   'sad-onion': 'Gain +0.25 fire rate for this combat.',
   'spoon-bender': 'Attacks can target enemies diagonally for this combat.',
@@ -679,22 +866,61 @@ export function passiveCardId(itemId: string): string {
 }
 
 export function itemUsesCombatCard(item: ItemDefinition): boolean {
-  return item.kind === ItemKind.Passive && item.combatCard !== false;
+  return (
+    item.kind === ItemKind.Passive && item.combatCard !== false && item.timing !== ItemUseTiming.Permanent
+  );
 }
 
-for (const item of Object.values(ITEMS).filter(itemUsesCombatCard)) {
+function itemCardTarget(item: ItemDefinition): CardTarget {
+  const effects = [
+    ...(item.cardEffects ?? []),
+    ...(item.actions?.flatMap((action) => action.effects ?? []) ?? []),
+  ];
+  if (effects.some((effect) => effect.target === CardTarget.Enemy)) return CardTarget.Enemy;
+  if (effects.some((effect) => effect.target === CardTarget.AllEnemies)) return CardTarget.AllEnemies;
+  return CardTarget.Self;
+}
+
+for (const item of Object.values(ITEMS).filter((entry) => entry.kind === ItemKind.Passive)) {
   const id = passiveCardId(item.id);
   CARDS[id] = {
     id,
     name: item.name,
     type: CardType.Item,
-    cost: Math.max(1, item.quality - 1),
-    target: CardTarget.Self,
+    cost: item.cardCost ?? Math.max(1, item.quality - 1),
+    target: itemCardTarget(item),
     itemId: item.id,
     icon: item.icon,
     quality: item.quality,
     rewardPools: [...item.pool],
-    description: `${PASSIVE_CARD_TEXT[item.id] ?? item.description} Reusable after the discard pile is reshuffled.`,
+    description: `${PASSIVE_CARD_TEXT[item.id] ?? item.description} ${
+      itemUsesCombatCard(item)
+        ? item.timing === ItemUseTiming.CombatOnce
+          ? 'Usable once per combat.'
+          : 'Reusable after the discard pile is reshuffled.'
+        : 'Takes effect when acquired and stays in the item rail.'
+    }`,
+    effects: item.cardEffects,
+  };
+}
+
+for (const item of Object.values(ITEMS).filter(
+  (entry) => entry.kind === ItemKind.Active && Boolean(entry.skillCardId),
+)) {
+  const id = item.skillCardId!;
+  if (CARDS[id]) continue;
+  CARDS[id] = {
+    id,
+    name: item.name,
+    type: CardType.Skill,
+    cost: item.cardCost ?? Math.max(0, Math.min(3, 1 + Math.floor(item.quality / 2))),
+    target: itemCardTarget(item),
+    itemId: item.id,
+    icon: item.icon,
+    quality: item.quality,
+    rewardPools: [...item.pool],
+    description: `${item.description} Recharges in ${item.chargeRounds ?? 3} rounds.`,
+    effects: item.cardEffects,
   };
 }
 

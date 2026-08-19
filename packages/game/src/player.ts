@@ -1,6 +1,6 @@
 import { CARDS, ITEMS, itemUsesCombatCard, passiveCardId } from './catalog.js';
 import type { CardInstance, HeartKind, PlayerState, RunState } from './types.js';
-import { AttackMode, CharacterId, ItemKind } from './types.js';
+import { AttackMode, CardEffectOpcode, CharacterId, ItemKind } from './types.js';
 import { randomInt } from './random.js';
 
 export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string): CardInstance {
@@ -41,6 +41,8 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
     keys: 1,
     items: ['d6'],
     activeItemId: 'd6',
+    pocketItems: [],
+    pocketItemSlots: 3,
     deck: [],
   };
   const starterCards = [
@@ -97,6 +99,17 @@ export function equipItem(run: RunState, itemId: string): void {
   const item = ITEMS[itemId];
   if (!item) throw new Error(`Unknown item: ${itemId}`);
   const newlyEquipped = !run.player.items.includes(item.id);
+  if (item.kind === ItemKind.Consumable) {
+    if (run.player.pocketItems.length >= run.player.pocketItemSlots) {
+      throw new Error('Every pocket-item slot is occupied');
+    }
+    run.player.pocketItems.push({
+      instanceId: `p-${randomInt(run, 100000, 999999)}-${item.id}`,
+      itemId: item.id,
+      used: false,
+    });
+    return;
+  }
   if (item.kind === ItemKind.Active) {
     if (run.player.activeItemId) {
       const previous = ITEMS[run.player.activeItemId];
@@ -118,6 +131,11 @@ export function equipItem(run: RunState, itemId: string): void {
       const multiplied = effect.multiplier === undefined ? current : current * effect.multiplier;
       const updated = multiplied + (effect.amount ?? 0);
       run.player.stats[stat] = stat === 'shopDiscount' ? Math.min(0.9, updated) : updated;
+    }
+    for (const effect of item.cardEffects ?? []) {
+      if (effect.opcode === CardEffectOpcode.GainCoins) run.player.coins += Math.round(effect.amount ?? 0);
+      if (effect.opcode === CardEffectOpcode.GainBombs) run.player.bombs += Math.round(effect.amount ?? 0);
+      if (effect.opcode === CardEffectOpcode.GainKeys) run.player.keys += Math.round(effect.amount ?? 0);
     }
   }
   if (itemUsesCombatCard(item)) {

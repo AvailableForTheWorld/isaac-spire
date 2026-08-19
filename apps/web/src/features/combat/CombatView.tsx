@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  CARDS,
   CardTarget,
   CardType,
   CombatAnimationKind,
@@ -9,6 +8,7 @@ import {
   IntentKind,
   RoomKind,
   RunPhase,
+  StatusKind,
   canPlayCard,
   canPlayFusedAttack,
   confirmPlayerDeployment,
@@ -26,6 +26,8 @@ import {
   placePlayerForDeployment,
   playCard,
   playFusedAttack,
+  resolveCombatSelection,
+  cancelCombatSelection,
   useCombatBomb as deployCombatBomb,
   type CardInstance,
   type EnemyIntent,
@@ -38,7 +40,7 @@ const PhaserStage = lazy(() =>
   import('../../phaser/PhaserStage').then((module) => ({ default: module.PhaserStage })),
 );
 import { ConfirmationPanel } from '../../components/game/ConfirmationPanel';
-import { CombatItemRail, CardView, PileViewer } from './components/CombatCards';
+import { CombatCardSelectionModal, CombatItemRail, CardView, PileViewer } from './components/CombatCards';
 import { FusionAttackModal } from './components/FusionAttackModal';
 import { TargetingGuide } from './components/TargetingGuide';
 import { combatAnimationDuration } from './animationTiming';
@@ -90,12 +92,14 @@ export function CombatView({
   const targetingCard = targetingCardId
     ? run.player.deck.find((card) => card.instanceId === targetingCardId)
     : undefined;
-  const targetingDefinition = targetingCard ? CARDS[targetingCard.definitionId] : undefined;
+  const targetingDefinition = targetingCard ? getCardDefinition(run, targetingCard.instanceId) : undefined;
   const hoveredTarget = hoveredTargetId
     ? combat.enemies.find((enemy) => enemy.instanceId === hoveredTargetId)
     : undefined;
   const discardable = handCards;
-  const cardsToDiscard = Math.max(0, handCards.length - run.player.stats.maxRetain);
+  const cardsToDiscard = combat.ragnarokActive
+    ? 0
+    : Math.max(0, handCards.length - run.player.stats.maxRetain);
   const activeItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
   const activeSkillCardId = activeItem?.skillCardId;
   useEffect(() => {
@@ -208,6 +212,18 @@ export function CombatView({
               <span>
                 ⌖ ({combat.playerPosition?.x ?? 0},{combat.playerPosition?.y ?? 4})
               </span>
+            </div>
+            <div className="combat-status-list">
+              {Object.entries(combat.playerStatuses)
+                .filter(([, turns]) => (turns ?? 0) > 0)
+                .map(([status, turns]) => (
+                  <span key={status}>{t(`statuses.${status}`, { turns })}</span>
+                ))}
+              {combat.damoclesActive && !combat.damoclesFallen && <span>{t('statuses.damocles')}</span>}
+              {combat.ragnarokActive && <span>{t('statuses.ragnarok')}</span>}
+              {combat.unlimitedVitalityTurns > 0 && (
+                <span>{t('statuses.stimulant', { turns: combat.unlimitedVitalityTurns })}</span>
+              )}
             </div>
           </div>
           <div className="hud-vitality-block">
@@ -418,6 +434,14 @@ export function CombatView({
                   {(enemy.slowedTurns ?? 0) > 0 && (
                     <em className="slowed">{t('combat.slowed', { turns: enemy.slowedTurns })}</em>
                   )}
+                  {Object.entries(enemy.statuses)
+                    .filter(([, turns]) => (turns ?? 0) > 0)
+                    .filter(([status]) => status !== StatusKind.Poison)
+                    .map(([status, turns]) => (
+                      <em className="adapted-status" key={status}>
+                        {t(`statuses.${status}`, { turns })}
+                      </em>
+                    ))}
                 </button>
               );
             })}
@@ -474,9 +498,15 @@ export function CombatView({
               index={index}
               animating={animatingCardId === instance.instanceId}
               targeting={targetingCardId === instance.instanceId}
-              locked={deploymentPending || bombTargeting || Boolean(animatingCardId) || animationLocked}
+              locked={
+                deploymentPending ||
+                bombTargeting ||
+                Boolean(animatingCardId) ||
+                animationLocked ||
+                Boolean(combat.pendingSelection)
+              }
               onPlay={() => {
-                const definition = CARDS[instance.definitionId];
+                const definition = getCardDefinition(run, instance.instanceId);
                 if (definition?.type === CardType.Attack) {
                   if (targetingCardId === instance.instanceId) {
                     setTargetingCardId(undefined);
@@ -496,7 +526,7 @@ export function CombatView({
                   }
                   return;
                 }
-                if (definition?.target === CardTarget.Enemy && definition.type === CardType.Hex) {
+                if (definition?.target === CardTarget.Enemy) {
                   setTargetingCardId((current) =>
                     current === instance.instanceId ? undefined : instance.instanceId,
                   );
@@ -597,6 +627,13 @@ export function CombatView({
         />
       )}
       {viewingPile && <PileViewer run={run} pile={viewingPile} onClose={() => setViewingPile(undefined)} />}
+      {combat.pendingSelection && (
+        <CombatCardSelectionModal
+          run={run}
+          onResolve={(selectedIds) => commit((state) => resolveCombatSelection(state, selectedIds))}
+          onCancel={() => commit(cancelCombatSelection)}
+        />
+      )}
       {fusionAttackId && (
         <FusionAttackModal
           run={run}

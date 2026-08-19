@@ -45,6 +45,7 @@ import { rewardQualityWeight } from './rewards/room-rewards.js';
 import { migrateRunSnapshot } from './state/migrations.js';
 import {
   AttackMode,
+  CardEffectOpcode,
   CardTarget,
   CardType,
   ChoiceAction,
@@ -54,11 +55,16 @@ import {
   CombatLogTone,
   CombatMovementStyle,
   CombatRoomShape,
+  CombatSelectionKind,
   DealType,
   EnemyMovementPattern,
   HeartKind,
   IntentKind,
+  ItemActionMethod,
+  ItemActionTrigger,
   ItemKind,
+  ItemUseTiming,
+  PocketItemAction,
   ResourceKind,
   RewardContext,
   RewardOptionType,
@@ -66,6 +72,7 @@ import {
   RoomKind,
   RoomMissingQuadrant,
   RunPhase,
+  StatusKind,
   UpgradeKind,
 } from './types.js';
 
@@ -83,6 +90,7 @@ export {
 } from './combat/grid.js';
 import type {
   AttackFusionPreview,
+  CardEffect,
   CardDefinition,
   CardInstance,
   ChoiceState,
@@ -103,6 +111,24 @@ function ensureCombatGrid(run: RunState): void {
   const combat = run.combat;
   if (!combat) return;
   combat.roomLayout ??= { ...DEFAULT_COMBAT_ROOM_LAYOUT };
+  combat.playerStatuses ??= {};
+  combat.playerStatusPower ??= {};
+  combat.cardDefinitionOverrides ??= {};
+  combat.temporaryCardIds ??= [];
+  combat.blankBookActive ??= false;
+  combat.damoclesActive ??= false;
+  combat.damoclesFallen ??= false;
+  combat.ragnarokActive ??= false;
+  combat.unlimitedVitalityTurns ??= 0;
+  combat.usedPassiveItems ??= [];
+  combat.itemActionCounters ??= {};
+  combat.usedItemActions ??= [];
+  combat.observedDefeatIds ??= [];
+  combat.statFloorLocked ??= false;
+  combat.activeEffectRepeats ??= 0;
+  combat.enemies.forEach((enemy) => {
+    enemy.statuses ??= {};
+  });
   const stats = run.player.stats;
   stats.baseDamage ??= 6;
   stats.damageMultiplier ??= 1;
@@ -125,8 +151,10 @@ function ensureCombatGrid(run: RunState): void {
   combat.playerDamageMultiplier ??= 1;
   combat.playerFireRateBuff ??= 0;
   combat.playerCritChanceBuff ??= 0;
+  combat.playerDodgeChanceBuff ??= 0;
   combat.playerRangeBuff ??= 0;
   combat.playerMovementBuff ??= 0;
+  combat.curvedShotsOverride ??= false;
   combat.attackMeter ??= 0;
   combat.usedPassiveItems ??= [];
   combat.animationSequence ??= 0;
@@ -187,8 +215,11 @@ export function getPlayerMovementSpeed(run: RunState): number {
 }
 
 export function playerHasCurvedShots(run: RunState): boolean {
-  return (run.combat?.usedPassiveItems ?? []).some((id) =>
-    ITEMS[id]?.effects?.some((effect) => effect.curvedShots === true),
+  return Boolean(
+    run.combat?.curvedShotsOverride ||
+    (run.combat?.usedPassiveItems ?? []).some((id) =>
+      ITEMS[id]?.effects?.some((effect) => effect.curvedShots === true),
+    ),
   );
 }
 
@@ -209,7 +240,12 @@ function isPositionInPlayerAttackRangeWithFusion(
 }
 
 export function getReachablePlayerCells(run: RunState): GridPosition[] {
-  if (run.phase !== RunPhase.Combat || !run.combat || run.combat.vitality < 1) return [];
+  if (
+    run.phase !== RunPhase.Combat ||
+    !run.combat ||
+    (run.combat.unlimitedVitalityTurns <= 0 && run.combat.vitality < 1)
+  )
+    return [];
   const playerPosition = run.combat.playerPosition ?? ISAAC_DOOR_POSITION;
   const blocked = new Set(
     run.combat.enemies
@@ -261,9 +297,12 @@ function touch(run: RunState): RunState {
 }
 
 function itemHasEffect(run: RunState, key: 'revealSecrets' | 'revealAll' | 'guaranteeDeal'): boolean {
-  return (run.combat?.usedPassiveItems ?? []).some((id) =>
-    ITEMS[id]?.effects?.some((effect) => effect[key] === true),
-  );
+  return Object.values(ITEMS).some((item) => {
+    const active = itemUsesCombatCard(item)
+      ? (run.combat?.usedPassiveItems ?? []).includes(item.id)
+      : run.player.items.includes(item.id);
+    return active && item.effects?.some((effect) => effect[key] === true);
+  });
 }
 
 export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLOCKS): RunState {
@@ -296,6 +335,89 @@ export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLO
   run.player = createIsaac(run);
   makeFloorStartChoice(run);
   return run;
+}
+
+export function usePocketItem(
+  state: RunState,
+  pocketInstanceId: string,
+  selectedCardInstanceIds: readonly string[] = [],
+): RunState {
+  const run = clone(state);
+  const pocket = run.player.pocketItems.find((entry) => entry.instanceId === pocketInstanceId);
+  if (!pocket) throw new Error('Unknown pocket item');
+  const item = ITEMS[pocket.itemId];
+  if (!item?.pocketAction) throw new Error('This item cannot be used from the pocket bar');
+  if (item.timing === ItemUseTiming.RunOnce && pocket.used)
+    throw new Error('This item has already been used');
+  if (item.timing === ItemUseTiming.FloorOnce && pocket.lastUsedFloor === run.floorIndex) {
+    throw new Error('This item has already been used on this floor');
+  }
+  const deckEditing = [PocketItemAction.DeckEdit, PocketItemAction.DuplicateDeck].includes(item.pocketAction);
+  if (deckEditing && [RunPhase.Combat, RunPhase.Discard].includes(run.phase)) {
+    throw new Error('Deck editing is only available outside combat');
+  }
+  const selected = [...new Set(selectedCardInstanceIds)];
+  if (selected.some((id) => !run.player.deck.some((card) => card.instanceId === id))) {
+    throw new Error('A selected card is not in the current deck');
+  }
+
+  switch (item.pocketAction) {
+    case PocketItemAction.DeckEdit: {
+      if (selected.length > 30) throw new Error('Travel Pack can hold at most 30 cards');
+      const retained = selected
+        .map((id) => run.player.deck.find((card) => card.instanceId === id))
+        .filter((card): card is CardInstance => Boolean(card));
+      const activeSkills = run.player.deck.filter(
+        (card) => CARDS[card.definitionId]?.type === CardType.Skill,
+      );
+      for (const skill of activeSkills) {
+        if (!retained.some((card) => card.instanceId === skill.instanceId)) retained.push(skill);
+      }
+      if (retained.length > 30) throw new Error('The active item leaves fewer than 30 editable slots');
+      while (retained.length < 30) retained.push(createCard(run, 'blank'));
+      run.player.deck = retained;
+      break;
+    }
+    case PocketItemAction.DuplicateDeck:
+      for (const instanceId of selected) {
+        const original = run.player.deck.find((card) => card.instanceId === instanceId)!;
+        const copy = createCard(run, original.definitionId);
+        copy.upgraded = original.upgraded;
+        run.player.deck.push(copy);
+      }
+      break;
+    case PocketItemAction.RestartRun:
+      run.floorIndex = 0;
+      run.floorMap = createFloorMap(0, run.seed);
+      run.floorRedDamage = 0;
+      run.floorSecretVisits = [];
+      run.floorBombSearches = [];
+      run.mapBombResult = undefined;
+      run.currentRoomId = undefined;
+      run.combat = undefined;
+      run.roomCheckpoint = undefined;
+      run.choice = undefined;
+      run.phase = RunPhase.Map;
+      makeFloorStartChoice(run);
+      break;
+    case PocketItemAction.ShopDiscount:
+      run.player.stats.shopDiscount = Math.max(run.player.stats.shopDiscount, 0.5);
+      break;
+    case PocketItemAction.ClearDebuffs:
+      if (run.combat) {
+        run.combat.playerStatuses = {};
+        run.combat.playerStatusPower = {};
+      }
+      pocket.lastUsedFloor = run.floorIndex;
+      break;
+  }
+
+  run.lastReward = [item.name];
+  if (item.timing === ItemUseTiming.RunOnce) {
+    pocket.used = true;
+    run.player.pocketItems = run.player.pocketItems.filter((entry) => entry.instanceId !== pocketInstanceId);
+  }
+  return touch(run);
 }
 
 export function getAvailableNodes(run: RunState): string[] {
@@ -338,7 +460,8 @@ export function getCard(run: RunState, instanceId: string): CardInstance | undef
 
 export function getCardDefinition(run: RunState, instanceId: string): CardDefinition | undefined {
   const instance = getCard(run, instanceId);
-  return instance ? CARDS[instance.definitionId] : undefined;
+  const definitionId = run.combat?.cardDefinitionOverrides?.[instanceId] ?? instance?.definitionId;
+  return definitionId ? CARDS[definitionId] : undefined;
 }
 
 export function getAttackFusionMaterialIds(run: RunState, attackInstanceId: string): string[] {
@@ -373,13 +496,14 @@ export function getAttackFusionPreview(
     const card = getCardDefinition(run, instanceId);
     const item = card?.type === CardType.Item && card.itemId ? ITEMS[card.itemId] : undefined;
     if (!card || !item?.fusion) continue;
-    preview.damageMultiplier *= item.fusion.damageMultiplier ?? 1;
-    preview.flatDamage += item.fusion.flatDamage ?? 0;
-    preview.projectileScale *= item.fusion.projectileScale ?? 1;
-    preview.knockback += item.fusion.knockback ?? 0;
-    preview.poisonTurns = Math.max(preview.poisonTurns, item.fusion.poisonTurns ?? 0);
-    preview.poisonDamage = Math.max(preview.poisonDamage, item.fusion.poisonDamage ?? 0);
-    preview.slowTurns = Math.max(preview.slowTurns, item.fusion.slowTurns ?? 0);
+    const scale = run.combat?.damoclesActive && !run.combat.damoclesFallen ? 2 : 1;
+    preview.damageMultiplier *= Math.pow(item.fusion.damageMultiplier ?? 1, scale);
+    preview.flatDamage += (item.fusion.flatDamage ?? 0) * scale;
+    preview.projectileScale *= Math.pow(item.fusion.projectileScale ?? 1, scale);
+    preview.knockback += (item.fusion.knockback ?? 0) * scale;
+    preview.poisonTurns = Math.max(preview.poisonTurns, (item.fusion.poisonTurns ?? 0) * scale);
+    preview.poisonDamage = Math.max(preview.poisonDamage, (item.fusion.poisonDamage ?? 0) * scale);
+    preview.slowTurns = Math.max(preview.slowTurns, (item.fusion.slowTurns ?? 0) * scale);
     preview.curvedShots ||= item.fusion.curvedShots === true;
     if (item.fusion.attackMode) preview.attackMode = item.fusion.attackMode;
   }
@@ -387,9 +511,13 @@ export function getAttackFusionPreview(
 }
 
 function unlockedPool(run: RunState, pool: RewardPool): ItemDefinition[] {
+  const pocketItemIds = new Set(run.player.pocketItems.map((item) => item.itemId));
   const eligible = Object.values(ITEMS).filter(
     (item) =>
-      run.unlocks.includes(item.id) && item.pool.includes(pool) && !run.player.items.includes(item.id),
+      run.unlocks.includes(item.id) &&
+      item.pool.includes(pool) &&
+      !run.player.items.includes(item.id) &&
+      !pocketItemIds.has(item.id),
   );
   if (eligible.length) return eligible;
   return Object.values(ITEMS).filter((item) => run.unlocks.includes(item.id) && item.pool.includes(pool));
@@ -473,8 +601,13 @@ function revealMap(run: RunState): void {
 }
 
 function returnToMap(run: RunState): void {
+  if (run.combat?.temporaryCardIds.length) {
+    const temporary = new Set(run.combat.temporaryCardIds);
+    run.player.deck = run.player.deck.filter((card) => !temporary.has(card.instanceId));
+  }
   run.phase = RunPhase.Map;
   run.combat = undefined;
+  run.roomCheckpoint = undefined;
   run.choice = undefined;
   run.currentRoomId = undefined;
   revealMap(run);
@@ -839,6 +972,7 @@ function makeEnemy(
     staggeredTurns: 0,
     poisonTurns: 0,
     poisonDamage: 0,
+    statuses: {},
     slowedTurns: 0,
     prepared: false,
     behavior: behaviorFor(definition),
@@ -1028,9 +1162,25 @@ function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite |
     playerDamageMultiplier: 1,
     playerFireRateBuff: 0,
     playerCritChanceBuff: 0,
+    playerDodgeChanceBuff: 0,
     playerRangeBuff: 0,
     playerMovementBuff: 0,
+    curvedShotsOverride: false,
     usedPassiveItems: [],
+    itemActionCounters: {},
+    usedItemActions: [],
+    observedDefeatIds: [],
+    statFloorLocked: false,
+    activeEffectRepeats: 0,
+    playerStatuses: {},
+    playerStatusPower: {},
+    cardDefinitionOverrides: {},
+    temporaryCardIds: [],
+    blankBookActive: false,
+    damoclesActive: false,
+    damoclesFallen: false,
+    ragnarokActive: false,
+    unlimitedVitalityTurns: 0,
     playerPosition: { ...ISAAC_DOOR_POSITION },
     attackMeter: 0,
     hand: [...skills],
@@ -1076,6 +1226,13 @@ function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite |
   );
   run.choice = undefined;
   run.phase = RunPhase.Combat;
+  runItemActions(run, ItemActionTrigger.CombatStart);
+  run.roomCheckpoint = {
+    rngState: run.rngState,
+    player: clone(run.player),
+    combat: clone(combat),
+    floorRedDamage: run.floorRedDamage,
+  };
 }
 
 function selectedTarget(combat: CombatState, requestedId?: string): EnemyState | undefined {
@@ -1087,7 +1244,8 @@ function hurtEnemy(enemy: EnemyState, rawDamage: number, armorPierce = 0): numbe
   ensureEnemyBehavior(enemy);
   enemy.alerted = true;
   const durabilityBefore = enemy.hp + enemy.shield;
-  const afterArmor = Math.max(1, Math.round(rawDamage) - Math.max(0, enemy.armor - armorPierce));
+  const effectiveArmor = (enemy.statuses?.[StatusKind.ArmorBreak] ?? 0) > 0 ? 0 : enemy.armor;
+  const afterArmor = Math.max(1, Math.round(rawDamage) - Math.max(0, effectiveArmor - armorPierce));
   const absorbed = Math.min(enemy.shield, afterArmor);
   enemy.shield -= absorbed;
   const hpDamage = afterArmor - absorbed;
@@ -1105,12 +1263,14 @@ function attackDamage(
   const upgraded = instance.upgraded ? 2 : 0;
   const nominal = card.value ?? 6;
   const factor = nominal / 6;
+  const weakness = (combat.playerStatuses[StatusKind.Weak] ?? 0) > 0 ? 0.5 : 1;
   return Math.max(
     1,
     (run.player.stats.baseDamage + combat.playerDamageBuff + upgraded) *
       run.player.stats.damageMultiplier *
       combat.playerDamageMultiplier *
-      factor,
+      factor *
+      weakness,
   );
 }
 
@@ -1280,17 +1440,624 @@ function skillChargeRounds(run: RunState, instance: CardInstance): number {
   return Math.max(1, (item?.chargeRounds ?? 3) - (instance.upgraded ? 1 : 0));
 }
 
-function playSkill(run: RunState, combat: CombatState, instance: CardInstance): void {
+function effectScale(combat: CombatState, opcode: CardEffectOpcode): number {
+  if (opcode === CardEffectOpcode.Damocles) return 1;
+  return combat.damoclesActive && !combat.damoclesFallen ? 2 : 1;
+}
+
+function animateEnemyDamage(combat: CombatState, enemy: EnemyState, amount: number): void {
+  const wasAlive = enemy.hp > 0;
+  const dealt = hurtEnemy(enemy, amount, 99);
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.PlayerAttack,
+    sourceId: 'isaac',
+    targetId: enemy.instanceId,
+    value: dealt,
+    attackMode: AttackMode.Basic,
+  });
+  if (wasAlive && enemy.hp <= 0) {
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Defeat,
+      sourceId: enemy.instanceId,
+      targetId: enemy.instanceId,
+    });
+  }
+}
+
+function rerollHandCards(
+  run: RunState,
+  combat: CombatState,
+  sourceInstanceId: string,
+  amount: number,
+): number {
+  const candidates = combat.hand
+    .filter((id) => id !== sourceInstanceId)
+    .map((id) => getCard(run, id))
+    .filter((card): card is CardInstance => Boolean(card))
+    .slice(0, Math.max(0, amount));
+  const pool = Object.values(CARDS).filter(
+    (card) =>
+      ![CardType.Skill, CardType.Curse, CardType.Blank].includes(card.type) &&
+      (card.type !== CardType.Item || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
+  );
+  for (const candidate of candidates) {
+    const replacements = pool.filter((card) => card.id !== candidate.definitionId);
+    if (replacements.length) candidate.definitionId = pickOne(run, replacements).id;
+    candidate.upgraded = false;
+  }
+  return candidates.length;
+}
+
+function cycleCards(run: RunState, combat: CombatState, sourceInstanceId: string, amount: number): number {
+  const candidates = combat.hand
+    .filter((id) => id !== sourceInstanceId)
+    .sort((left, right) => {
+      const leftType = getCardDefinition(run, left)?.type;
+      const rightType = getCardDefinition(run, right)?.type;
+      const priority = (type: CardType | undefined) =>
+        type === CardType.Blank ? 0 : type === CardType.Curse ? 1 : 2;
+      return priority(leftType) - priority(rightType);
+    })
+    .slice(0, Math.max(0, amount));
+  for (const id of candidates) {
+    combat.hand = combat.hand.filter((entry) => entry !== id);
+    combat.discardPile.push(id);
+  }
+  drawToHand(run, combat, combat.hand.length + candidates.length);
+  return candidates.length;
+}
+
+function applyStatusToEnemy(
+  combat: CombatState,
+  enemy: EnemyState,
+  status: StatusKind,
+  turns: number,
+  power: number,
+): void {
+  enemy.statuses[status] = Math.max(enemy.statuses[status] ?? 0, turns);
+  if (status === StatusKind.Poison) {
+    enemy.poisonTurns = Math.max(enemy.poisonTurns, turns);
+    enemy.poisonDamage = Math.max(enemy.poisonDamage, power || 3);
+  }
+  pushAnimation(combat, {
+    kind: status === StatusKind.Poison ? CombatAnimationKind.Poison : CombatAnimationKind.Curse,
+    sourceId: 'isaac',
+    targetId: enemy.instanceId,
+    value: turns,
+    poisonTurns: status === StatusKind.Poison ? turns : undefined,
+  });
+}
+
+function applyCardEffects(
+  run: RunState,
+  combat: CombatState,
+  effects: readonly CardEffect[],
+  sourceInstanceId: string,
+  targetId?: string,
+): void {
+  for (const effect of effects) {
+    const scale = effectScale(combat, effect.opcode);
+    const amount = (effect.amount ?? 0) * scale;
+    const turns = Math.max(0, Math.round((effect.turns ?? 0) * scale));
+    const target = selectedTarget(combat, targetId);
+    switch (effect.opcode) {
+      case CardEffectOpcode.GainDamage:
+        if (combat.statFloorLocked && amount < 0) break;
+        combat.playerDamageBuff += amount;
+        break;
+      case CardEffectOpcode.MultiplyDamage:
+        combat.playerDamageMultiplier *= Math.pow(effect.amount ?? 1, scale);
+        break;
+      case CardEffectOpcode.GainFireRate:
+        if (combat.statFloorLocked && amount < 0) break;
+        combat.playerFireRateBuff += amount;
+        break;
+      case CardEffectOpcode.GainArmor:
+        if (combat.statFloorLocked && amount < 0) break;
+        combat.playerArmorBuff += amount;
+        break;
+      case CardEffectOpcode.GainShield:
+        combat.playerShield += amount;
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Shield,
+          sourceId: 'isaac',
+          targetId: 'isaac',
+          value: amount,
+        });
+        break;
+      case CardEffectOpcode.Heal: {
+        const healed = healRed(run.player, amount);
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Heal,
+          sourceId: 'isaac',
+          targetId: 'isaac',
+          value: healed,
+        });
+        break;
+      }
+      case CardEffectOpcode.GainRange:
+        if (combat.statFloorLocked && amount < 0) break;
+        combat.playerRangeBuff += amount;
+        break;
+      case CardEffectOpcode.GainMovement:
+        if (combat.statFloorLocked && amount < 0) break;
+        combat.playerMovementBuff += amount;
+        break;
+      case CardEffectOpcode.GainVitality:
+        combat.vitality += amount;
+        break;
+      case CardEffectOpcode.GainCritical:
+        combat.playerCritChanceBuff += amount;
+        break;
+      case CardEffectOpcode.GainDodge:
+        combat.playerDodgeChanceBuff += amount;
+        break;
+      case CardEffectOpcode.EnableCurvedShots:
+        combat.curvedShotsOverride = true;
+        break;
+      case CardEffectOpcode.SetAttackMode:
+        if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
+        break;
+      case CardEffectOpcode.Draw:
+        drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round(amount)));
+        break;
+      case CardEffectOpcode.Cycle:
+        cycleCards(run, combat, sourceInstanceId, Math.max(1, Math.round(amount)));
+        break;
+      case CardEffectOpcode.DamageTarget:
+        if (target) animateEnemyDamage(combat, target, amount);
+        break;
+      case CardEffectOpcode.DamageAll:
+        combat.enemies
+          .filter((enemy) => enemy.hp > 0)
+          .forEach((enemy) => animateEnemyDamage(combat, enemy, amount));
+        break;
+      case CardEffectOpcode.ApplyStatus:
+        if (effect.status && effect.target === CardTarget.AllEnemies) {
+          combat.enemies
+            .filter((enemy) => enemy.hp > 0)
+            .forEach((enemy) => applyStatusToEnemy(combat, enemy, effect.status!, turns || 1, amount));
+        } else if (effect.status && target) {
+          applyStatusToEnemy(combat, target, effect.status, turns || 1, amount);
+        }
+        break;
+      case CardEffectOpcode.AddBlank:
+        for (let index = 0; index < Math.max(1, Math.round(amount)); index += 1) {
+          const blank = createCard(run, 'blank');
+          run.player.deck.push(blank);
+          combat.discardPile.push(blank.instanceId);
+        }
+        break;
+      case CardEffectOpcode.RerollHand: {
+        const count = rerollHandCards(run, combat, sourceInstanceId, Math.max(1, Math.round(amount)));
+        pushLog(combat, `Rerolled ${count} cards.`, CombatLogTone.Special, 'reroll', { count });
+        break;
+      }
+      case CardEffectOpcode.RevealMap:
+        revealMap(run);
+        break;
+      case CardEffectOpcode.GainCoins:
+        run.player.coins += Math.round(amount);
+        break;
+      case CardEffectOpcode.GainBombs:
+        run.player.bombs += Math.round(amount);
+        break;
+      case CardEffectOpcode.GainKeys:
+        run.player.keys += Math.round(amount);
+        break;
+      case CardEffectOpcode.ClearDebuffs:
+        combat.playerStatuses = {};
+        combat.playerStatusPower = {};
+        break;
+      case CardEffectOpcode.Transposition: {
+        const candidates = combat.drawPile.filter((id) => {
+          const definition = getCardDefinition(run, id);
+          return (
+            definition?.type === CardType.Item &&
+            ITEMS[definition.itemId ?? '']?.timing !== ItemUseTiming.ActiveCharge
+          );
+        });
+        if (candidates.length) {
+          combat.pendingSelection = {
+            kind: CombatSelectionKind.Transposition,
+            sourceInstanceId,
+            candidateInstanceIds: candidates,
+            min: 0,
+            max: candidates.length,
+          };
+        }
+        break;
+      }
+      case CardEffectOpcode.BlankBook:
+        combat.blankBookActive = true;
+        break;
+      case CardEffectOpcode.Damocles:
+        combat.damoclesActive = true;
+        combat.damoclesFallen = false;
+        break;
+      case CardEffectOpcode.Ragnarok:
+        combat.ragnarokActive = true;
+        break;
+      case CardEffectOpcode.Stimulant:
+        combat.unlimitedVitalityTurns = Math.max(combat.unlimitedVitalityTurns, turns || 5);
+        break;
+      case CardEffectOpcode.RestartRoom:
+        break;
+    }
+  }
+}
+
+interface ItemActionContext {
+  sourceItem?: ItemDefinition;
+  sourceInstanceId?: string;
+  targetId?: string;
+  amount?: number;
+}
+
+function removeOwnedItem(run: RunState, item: ItemDefinition): void {
+  run.player.items = run.player.items.filter((id) => id !== item.id);
+  if (run.player.activeItemId === item.id) run.player.activeItemId = undefined;
+  const removed = new Set(
+    run.player.deck
+      .filter((instance) => {
+        const definition = CARDS[instance.definitionId];
+        return definition?.itemId === item.id || instance.definitionId === item.skillCardId;
+      })
+      .map((instance) => instance.instanceId),
+  );
+  run.player.deck = run.player.deck.filter((instance) => !removed.has(instance.instanceId));
+  if (!run.combat) return;
+  run.combat.hand = run.combat.hand.filter((id) => !removed.has(id));
+  run.combat.drawPile = run.combat.drawPile.filter((id) => !removed.has(id));
+  run.combat.discardPile = run.combat.discardPile.filter((id) => !removed.has(id));
+  run.combat.exhausted.push(...removed);
+}
+
+function rerollItemCardsBy(
+  run: RunState,
+  combat: CombatState,
+  replacementFor: (item: ItemDefinition) => CardDefinition | undefined,
+): number {
+  let changed = 0;
+  for (const instanceId of combat.hand) {
+    const instance = getCard(run, instanceId);
+    const definition = instance ? getCardDefinition(run, instanceId) : undefined;
+    const item = definition?.itemId ? ITEMS[definition.itemId] : undefined;
+    if (!instance || !definition || definition.type !== CardType.Item || !item) continue;
+    const replacement = replacementFor(item);
+    if (!replacement || replacement.id === definition.id) continue;
+    instance.definitionId = replacement.id;
+    instance.upgraded = false;
+    changed += 1;
+  }
+  return changed;
+}
+
+function executeItemActionMethod(
+  run: RunState,
+  combat: CombatState,
+  item: ItemDefinition,
+  action: NonNullable<ItemDefinition['actions']>[number],
+  context: ItemActionContext,
+): void {
+  const sourceInstanceId = context.sourceInstanceId ?? `action:${item.id}:${action.id}`;
+  switch (action.method) {
+    case ItemActionMethod.ApplyEffects:
+      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId);
+      break;
+    case ItemActionMethod.DuplicateRandomHandCard: {
+      const candidates = combat.hand.filter((id) => id !== context.sourceInstanceId);
+      const originalId = candidates.length ? pickOne(run, candidates) : undefined;
+      const original = originalId ? getCard(run, originalId) : undefined;
+      if (!original) break;
+      const duplicate = createCard(run, original.definitionId);
+      duplicate.upgraded = original.upgraded;
+      run.player.deck.push(duplicate);
+      combat.hand.push(duplicate.instanceId);
+      break;
+    }
+    case ItemActionMethod.RechargeActive:
+      for (const id of Object.keys(combat.cooldowns)) {
+        combat.cooldowns[id] = Math.max(0, combat.cooldowns[id]! - Math.max(1, action.amount ?? 1));
+      }
+      break;
+    case ItemActionMethod.Revive:
+      if (run.player.redHp > 0) break;
+      run.player.redHp = Math.min(
+        maxRedHp(run.player),
+        Math.max(1, action.amount ?? run.player.stats.heartSize),
+      );
+      combat.playerShield += Math.max(0, action.secondaryAmount ?? 0);
+      break;
+    case ItemActionMethod.ReplayPreviousCard: {
+      const previous = combat.previousCardDefinitionId ? CARDS[combat.previousCardDefinitionId] : undefined;
+      if (!previous || previous.type === CardType.Skill || previous.itemId === item.id) break;
+      if (previous.effects?.length)
+        applyCardEffects(run, combat, previous.effects, sourceInstanceId, context.targetId);
+      if (previous.type === CardType.Shield) combat.playerShield += previous.value ?? 5;
+      if (previous.type === CardType.Recovery) healRed(run.player, previous.value ?? 10);
+      break;
+    }
+    case ItemActionMethod.ExecuteWeakestEnemy: {
+      const target = combat.enemies
+        .filter((enemy) => enemy.hp > 0)
+        .sort((left, right) => left.hp - right.hp)[0];
+      if (!target) break;
+      const threshold = action.amount ?? 12;
+      animateEnemyDamage(combat, target, target.hp <= threshold ? target.hp : threshold);
+      break;
+    }
+    case ItemActionMethod.RerollEnemies: {
+      const pool = enemyPoolForFloor(run.floorIndex);
+      combat.enemies = combat.enemies.map((enemy, index) => {
+        if (enemy.boss) return enemy;
+        const replacement = makeEnemy(run, pickOne(run, pool), index);
+        replacement.position = { ...enemy.position };
+        replacement.hp = Math.max(1, Math.round(replacement.maxHp * (enemy.hp / Math.max(1, enemy.maxHp))));
+        return replacement;
+      });
+      ensureCombatGrid(run);
+      break;
+    }
+    case ItemActionMethod.RerollItemCards: {
+      const pool = Object.values(CARDS).filter(
+        (card) => card.type === CardType.Item && card.itemId && run.unlocks.includes(card.itemId),
+      );
+      rerollItemCardsBy(run, combat, (original) => {
+        const candidates = pool.filter((card) => card.itemId !== original.id);
+        return candidates.length ? pickOne(run, candidates) : undefined;
+      });
+      break;
+    }
+    case ItemActionMethod.SpindownItemCards:
+      rerollItemCardsBy(run, combat, (original) => {
+        const replacement = Object.values(ITEMS).find(
+          (candidate) =>
+            candidate.isaacId === (original.isaacId ?? 0) - 1 && candidate.kind === ItemKind.Passive,
+        );
+        return replacement ? CARDS[`item:${replacement.id}`] : undefined;
+      });
+      break;
+    case ItemActionMethod.TransformHand:
+      rerollHandCards(run, combat, sourceInstanceId, combat.hand.length);
+      break;
+    case ItemActionMethod.RestartRoom:
+      restartCurrentRoom(run);
+      break;
+    case ItemActionMethod.RestartFloor:
+      run.floorMap = createFloorMap(run.floorIndex, `${run.seed}:restart:${run.rngState}`);
+      run.floorRedDamage = 0;
+      run.floorSecretVisits = [];
+      run.floorBombSearches = [];
+      run.mapBombResult = undefined;
+      run.choice = undefined;
+      run.combat = undefined;
+      run.roomCheckpoint = undefined;
+      run.currentRoomId = undefined;
+      run.phase = RunPhase.Map;
+      makeFloorStartChoice(run);
+      break;
+    case ItemActionMethod.RerollPlayerStats: {
+      const stats = run.player.stats;
+      stats.baseDamage = randomInt(run, 4, 11);
+      stats.armor = randomInt(run, 1, 6);
+      stats.fireRate = randomInt(run, 75, 175) / 100;
+      stats.movementSpeed = randomInt(run, 2, 5);
+      stats.attackRange = randomInt(run, 3, 8);
+      break;
+    }
+    case ItemActionMethod.GenerateItemCard: {
+      const pool = Object.values(CARDS).filter(
+        (card) =>
+          card.type === CardType.Item &&
+          card.itemId &&
+          run.unlocks.includes(card.itemId) &&
+          card.itemId !== item.id,
+      );
+      if (!pool.length) break;
+      const generated = createCard(run, pickOne(run, pool).id);
+      run.player.deck.push(generated);
+      combat.discardPile.push(generated.instanceId);
+      break;
+    }
+    case ItemActionMethod.DestroyAllEnemies:
+      combat.enemies
+        .filter((enemy) => enemy.hp > 0)
+        .forEach((enemy) => animateEnemyDamage(combat, enemy, 9999));
+      if ((action.secondaryAmount ?? 0) > 0)
+        loseDirectHeartHp(run, combat, action.secondaryAmount!, item.name);
+      break;
+    case ItemActionMethod.SacrificeHeart:
+      loseDirectHeartHp(run, combat, action.amount ?? run.player.stats.heartSize, item.name);
+      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId);
+      break;
+    case ItemActionMethod.ConvertShieldToHealth: {
+      const shieldCost = Math.max(1, action.amount ?? 10);
+      if (combat.playerShield < shieldCost) break;
+      combat.playerShield -= shieldCost;
+      const healed = healRed(run.player, Math.max(1, action.secondaryAmount ?? 15));
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Heal,
+        sourceId: 'isaac',
+        targetId: 'isaac',
+        value: healed,
+      });
+      break;
+    }
+    case ItemActionMethod.SpendCoins: {
+      const coinCost = Math.max(1, action.amount ?? 1);
+      if (run.player.coins < coinCost) break;
+      run.player.coins -= coinCost;
+      const damage = Math.max(1, action.secondaryAmount ?? 10);
+      combat.enemies
+        .filter((enemy) => enemy.hp > 0)
+        .forEach((enemy) => animateEnemyDamage(combat, enemy, damage));
+      break;
+    }
+    case ItemActionMethod.ConsumeItemCards: {
+      const consumed = combat.hand.filter((id) => {
+        if (id === context.sourceInstanceId) return false;
+        return getCardDefinition(run, id)?.type === CardType.Item;
+      });
+      const consumedSet = new Set(consumed);
+      combat.hand = combat.hand.filter((id) => !consumedSet.has(id));
+      run.player.deck = run.player.deck.filter((card) => !consumedSet.has(card.instanceId));
+      combat.exhausted.push(...consumed);
+      if (consumed.length)
+        applyCardEffects(
+          run,
+          combat,
+          [
+            {
+              opcode: CardEffectOpcode.DamageAll,
+              amount: consumed.length * Math.max(3, action.amount ?? 5),
+              target: CardTarget.AllEnemies,
+            },
+            {
+              opcode: CardEffectOpcode.GainShield,
+              amount: consumed.length * Math.max(2, action.secondaryAmount ?? 3),
+              target: CardTarget.Self,
+            },
+          ],
+          sourceInstanceId,
+        );
+      break;
+    }
+    case ItemActionMethod.DuplicateResources:
+      run.player.coins *= 2;
+      run.player.bombs *= 2;
+      run.player.keys *= 2;
+      break;
+    case ItemActionMethod.CrookedPenny:
+      if (nextRandom(run) < 0.5) {
+        run.player.coins *= 2;
+        run.player.bombs *= 2;
+        run.player.keys *= 2;
+      } else {
+        run.player.coins = Math.floor(run.player.coins / 2);
+        run.player.bombs = Math.floor(run.player.bombs / 2);
+        run.player.keys = Math.floor(run.player.keys / 2);
+      }
+      break;
+    case ItemActionMethod.LockStatFloor:
+      combat.statFloorLocked = true;
+      break;
+    case ItemActionMethod.EnableActiveDoubling:
+      combat.activeEffectRepeats = Math.max(combat.activeEffectRepeats, 1);
+      break;
+    case ItemActionMethod.TriggerPlayerDamaged:
+      runItemActions(run, ItemActionTrigger.PlayerDamaged, {
+        sourceInstanceId,
+        amount: Math.max(0, action.amount ?? 0),
+      });
+      break;
+    case ItemActionMethod.RandomItemEffect: {
+      const candidates = Object.values(ITEMS).filter(
+        (candidate) => candidate.id !== item.id && candidate.cardEffects?.length,
+      );
+      if (!candidates.length) break;
+      const selected = pickOne(run, candidates);
+      applyCardEffects(run, combat, selected.cardEffects!, sourceInstanceId, context.targetId);
+      break;
+    }
+    case ItemActionMethod.RevealMap:
+      revealMap(run);
+      break;
+  }
+  if (
+    action.effects?.length &&
+    action.method !== ItemActionMethod.ApplyEffects &&
+    action.method !== ItemActionMethod.SacrificeHeart
+  ) {
+    applyCardEffects(run, combat, action.effects, sourceInstanceId, context.targetId);
+  }
+}
+
+function actionItemsFor(
+  run: RunState,
+  trigger: ItemActionTrigger,
+  sourceItem?: ItemDefinition,
+): ItemDefinition[] {
+  if (sourceItem) return [sourceItem];
+  const combat = run.combat;
+  if (!combat) return [];
+  return run.player.items
+    .map((id) => ITEMS[id])
+    .filter((item): item is ItemDefinition =>
+      Boolean(item?.actions?.some((action) => action.trigger === trigger)),
+    )
+    .filter(
+      (item) =>
+        !itemUsesCombatCard(item) ||
+        combat.usedPassiveItems.includes(item.id) ||
+        item.timing === ItemUseTiming.Permanent,
+    );
+}
+
+function runItemActions(run: RunState, trigger: ItemActionTrigger, context: ItemActionContext = {}): void {
+  const combat = run.combat;
+  if (!combat) return;
+  for (const item of actionItemsFor(run, trigger, context.sourceItem)) {
+    for (const action of item.actions ?? []) {
+      if (action.trigger !== trigger) continue;
+      const key = `${item.id}:${action.id}`;
+      if (action.oncePerCombat && combat.usedItemActions.includes(key)) continue;
+      combat.itemActionCounters[key] = (combat.itemActionCounters[key] ?? 0) + 1;
+      if (action.every && combat.itemActionCounters[key] % action.every !== 0) continue;
+      if (action.chance !== undefined && nextRandom(run) >= action.chance) continue;
+      executeItemActionMethod(run, combat, item, action, context);
+      if (action.oncePerCombat) combat.usedItemActions.push(key);
+      if (action.consumeItem) removeOwnedItem(run, item);
+      pushLog(combat, `${item.name}: ${action.id}.`, CombatLogTone.Special, 'itemAction', {
+        itemId: item.id,
+        actionId: action.id,
+      });
+    }
+  }
+}
+
+function notifyNewEnemyDeaths(run: RunState): void {
+  const combat = run.combat;
+  if (!combat) return;
+  let found = true;
+  while (found) {
+    const next = combat.enemies.find(
+      (enemy) => enemy.hp <= 0 && !combat.observedDefeatIds.includes(enemy.instanceId),
+    );
+    if (!next) {
+      found = false;
+      continue;
+    }
+    combat.observedDefeatIds.push(next.instanceId);
+    runItemActions(run, ItemActionTrigger.EnemyKilled, { targetId: next.instanceId, amount: 1 });
+  }
+}
+
+function playSkill(run: RunState, combat: CombatState, instance: CardInstance, targetId?: string): void {
+  const activeScale = combat.damoclesActive && !combat.damoclesFallen ? 2 : 1;
+  const activeItem = Object.values(ITEMS).find((entry) => entry.skillCardId === instance.definitionId);
+  if (activeItem?.actions?.length) {
+    for (let repeat = 0; repeat <= combat.activeEffectRepeats; repeat += 1) {
+      runItemActions(run, ItemActionTrigger.Activate, {
+        sourceItem: activeItem,
+        sourceInstanceId: instance.instanceId,
+        targetId,
+      });
+      if (run.combat !== combat) break;
+    }
+    if (run.combat === combat) combat.cooldowns[instance.instanceId] = skillChargeRounds(run, instance);
+    return;
+  }
   switch (instance.definitionId) {
     case 'skill-d6': {
       const rerolled = combat.hand
         .filter((id) => id !== instance.instanceId)
         .map((id) => getCard(run, id))
-        .filter((card): card is CardInstance => Boolean(card));
+        .filter((card): card is CardInstance =>
+          Boolean(card && getCardDefinition(run, card.instanceId)?.type === CardType.Item),
+        );
       const pool = Object.values(CARDS).filter(
-        (card) =>
-          ![CardType.Skill, CardType.Curse].includes(card.type) &&
-          (card.type !== CardType.Item || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
+        (card) => card.type === CardType.Item && Boolean(card.itemId && run.unlocks.includes(card.itemId)),
       );
       for (const rerolledCard of rerolled) {
         const candidates = pool.filter((card) => card.id !== rerolledCard.definitionId);
@@ -1307,7 +2074,7 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
       break;
     }
     case 'skill-yum-heart': {
-      const healed = healRed(run.player, 15);
+      const healed = healRed(run.player, 15 * activeScale);
       pushAnimation(combat, {
         kind: CombatAnimationKind.Heal,
         sourceId: 'isaac',
@@ -1321,24 +2088,24 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
       break;
     }
     case 'skill-belial':
-      combat.playerDamageBuff += 1;
+      combat.playerDamageBuff += activeScale;
       pushAnimation(combat, {
         kind: CombatAnimationKind.Prepare,
         sourceId: 'isaac',
         targetId: 'isaac',
-        value: 1,
+        value: activeScale,
       });
-      pushLog(combat, 'Book of Belial granted +1 room damage.', CombatLogTone.Special, 'belial');
+      pushLog(combat, `Book of Belial granted +${activeScale} room damage.`, CombatLogTone.Special, 'belial');
       break;
     case 'skill-shadows':
-      combat.playerShield += 12;
+      combat.playerShield += 12 * activeScale;
       pushAnimation(combat, {
         kind: CombatAnimationKind.Shield,
         sourceId: 'isaac',
         targetId: 'isaac',
-        value: 12,
+        value: 12 * activeScale,
       });
-      pushLog(combat, 'Book of Shadows granted 12 shield.', CombatLogTone.Good, 'shadows');
+      pushLog(combat, `Book of Shadows granted ${12 * activeScale} shield.`, CombatLogTone.Good, 'shadows');
       break;
     case 'skill-tammy': {
       const damage =
@@ -1349,7 +2116,7 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
         .filter((enemy) => enemy.hp > 0)
         .forEach((enemy) => {
           const wasAlive = enemy.hp > 0;
-          const dealt = hurtEnemy(enemy, damage);
+          const dealt = hurtEnemy(enemy, damage * activeScale);
           pushAnimation(combat, {
             kind: CombatAnimationKind.PlayerAttack,
             sourceId: 'isaac',
@@ -1366,30 +2133,35 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
         });
       pushLog(
         combat,
-        `Tammy's Head burst for ${Math.round(damage)} damage to all enemies.`,
+        `Tammy's Head burst for ${Math.round(damage * activeScale)} damage to all enemies.`,
         CombatLogTone.Good,
         'tammy',
-        { damage: Math.round(damage) },
+        { damage: Math.round(damage * activeScale) },
       );
       break;
     }
     case 'skill-nail':
-      addPocketHeart(run, HeartKind.Black);
-      combat.playerArmorBuff += 1;
+      addPocketHeart(run, HeartKind.Black, activeScale);
+      combat.playerArmorBuff += activeScale;
       pushAnimation(combat, {
         kind: CombatAnimationKind.Shield,
         sourceId: 'isaac',
         targetId: 'isaac',
         value: 1,
       });
-      pushLog(combat, 'The Nail granted a black heart and +1 room armor.', CombatLogTone.Special, 'nail');
+      pushLog(
+        combat,
+        `The Nail granted ${activeScale} black heart and +${activeScale} room armor.`,
+        CombatLogTone.Special,
+        'nail',
+      );
       break;
     case 'skill-hourglass':
       combat.enemies
         .filter((enemy) => enemy.hp > 0)
         .forEach((enemy) => {
           ensureEnemyBehavior(enemy);
-          enemy.staggeredTurns = Math.max(1, enemy.staggeredTurns ?? 0);
+          enemy.staggeredTurns = Math.max(activeScale, enemy.staggeredTurns ?? 0);
           pushAnimation(combat, {
             kind: CombatAnimationKind.Curse,
             sourceId: 'isaac',
@@ -1399,35 +2171,60 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
         });
       pushLog(combat, 'Time folds. Every enemy loses its next action.', CombatLogTone.Special, 'hourglass');
       break;
-    default:
-      pushLog(combat, 'The active item fizzled.', CombatLogTone.Normal, 'fizzled');
+    default: {
+      const definition = getCardDefinition(run, instance.instanceId);
+      if (definition?.effects?.length) {
+        applyCardEffects(run, combat, definition.effects, instance.instanceId, targetId);
+        pushLog(combat, `${definition.name} activated.`, CombatLogTone.Special, 'activeAdapted', {
+          cardId: definition.id,
+        });
+      } else {
+        pushLog(combat, 'The active item fizzled.', CombatLogTone.Normal, 'fizzled');
+      }
+    }
   }
-  combat.cooldowns[instance.instanceId] = skillChargeRounds(run, instance);
+  if (run.combat === combat) combat.cooldowns[instance.instanceId] = skillChargeRounds(run, instance);
 }
 
-function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefinition): void {
+function playPassiveItemCard(
+  run: RunState,
+  combat: CombatState,
+  card: CardDefinition,
+  instanceId: string,
+  targetId?: string,
+): void {
   const item = card.itemId ? ITEMS[card.itemId] : undefined;
   if (!item || item.kind !== ItemKind.Passive) return;
   if (!combat.usedPassiveItems.includes(item.id)) combat.usedPassiveItems.push(item.id);
   let shieldGained = 0;
   let healed = 0;
+  const scale = combat.damoclesActive && !combat.damoclesFallen && item.id !== 'damocles' ? 2 : 1;
   for (const effect of item.effects ?? []) {
-    if (effect.stat === 'baseDamage') combat.playerDamageBuff += effect.amount ?? 0;
-    if (effect.stat === 'armor') combat.playerArmorBuff += effect.amount ?? 0;
-    if (effect.stat === 'fireRate') combat.playerFireRateBuff += effect.amount ?? 0;
-    if (effect.stat === 'damageMultiplier') combat.playerDamageMultiplier *= effect.multiplier ?? 1;
-    if (effect.stat === 'critChance') combat.playerCritChanceBuff += effect.amount ?? 0;
-    if (effect.stat === 'attackRange') combat.playerRangeBuff += effect.amount ?? 0;
-    if (effect.stat === 'movementSpeed') combat.playerMovementBuff += effect.amount ?? 0;
+    if (effect.stat === 'baseDamage') combat.playerDamageBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'armor') combat.playerArmorBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'fireRate') combat.playerFireRateBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'damageMultiplier')
+      combat.playerDamageMultiplier *= Math.pow(effect.multiplier ?? 1, scale);
+    if (effect.stat === 'critChance') combat.playerCritChanceBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'attackRange') combat.playerRangeBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'movementSpeed') combat.playerMovementBuff += (effect.amount ?? 0) * scale;
     if (effect.stat === 'drawCount')
-      drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round(effect.amount ?? 1)));
-    if (effect.stat === 'baseShield') shieldGained += effect.amount ?? 0;
-    if (effect.stat === 'shopDiscount') run.player.coins += 2;
+      drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round((effect.amount ?? 1) * scale)));
+    if (effect.stat === 'baseShield') shieldGained += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'shopDiscount') run.player.coins += 2 * scale;
     if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
-    if (effect.redContainers) healed += healRed(run.player, 15);
-    if (effect.soulHearts) shieldGained += effect.soulHearts * 10;
+    if (effect.redContainers) healed += healRed(run.player, 15 * scale);
+    if (effect.soulHearts) shieldGained += effect.soulHearts * 10 * scale;
     if (effect.damageCap !== undefined)
       combat.damageCap = Math.min(combat.damageCap ?? Number.POSITIVE_INFINITY, effect.damageCap);
+  }
+  if (card.effects?.length) applyCardEffects(run, combat, card.effects, instanceId, targetId);
+  if (item.actions?.length) {
+    runItemActions(run, ItemActionTrigger.Activate, {
+      sourceItem: item,
+      sourceInstanceId: instanceId,
+      targetId,
+    });
   }
   if (shieldGained > 0) {
     combat.playerShield += shieldGained;
@@ -1462,6 +2259,11 @@ export function canPlayFusedAttack(
   targetId?: string,
 ): { ok: boolean; reason?: string } {
   if (run.phase !== RunPhase.Combat || !run.combat) return { ok: false, reason: 'Not in combat' };
+  if (run.combat.pendingSelection) return { ok: false, reason: 'Finish the current card selection first' };
+  if ((run.combat.playerStatuses[StatusKind.Silence] ?? 0) > 0)
+    return { ok: false, reason: 'Silence prevents attacks' };
+  if (itemInstanceIds.length && (run.combat.playerStatuses[StatusKind.ItemLock] ?? 0) > 0)
+    return { ok: false, reason: 'Item Lock disables fusion item cards' };
   if (!run.combat.hand.includes(attackInstanceId)) return { ok: false, reason: 'Card is not in hand' };
   const attack = getCardDefinition(run, attackInstanceId);
   if (!attack || attack.type !== CardType.Attack) return { ok: false, reason: 'Choose an attack card' };
@@ -1475,7 +2277,7 @@ export function canPlayFusedAttack(
     if (!item?.fusion) return { ok: false, reason: 'That item card cannot enhance an attack' };
   }
   const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
-  if (run.combat.vitality < preview.totalCost)
+  if (run.combat.unlimitedVitalityTurns <= 0 && run.combat.vitality < preview.totalCost)
     return { ok: false, reason: 'Not enough vitality for this fusion' };
   const inRange = (enemy: EnemyState) =>
     enemy.hp > 0 &&
@@ -1500,13 +2302,30 @@ export function canPlayCard(
   if (run.phase !== RunPhase.Combat || !run.combat) return { ok: false, reason: 'Not in combat' };
   if (!run.combat.hand.includes(instanceId)) return { ok: false, reason: 'Card is not in hand' };
   const instance = getCard(run, instanceId);
-  const card = instance ? CARDS[instance.definitionId] : undefined;
+  const card = instance ? getCardDefinition(run, instanceId) : undefined;
   if (!instance || !card) return { ok: false, reason: 'Unknown card' };
   if (card.type === CardType.Curse) return { ok: false, reason: 'Curse cards are unplayable' };
-  if (run.combat.vitality < card.cost) return { ok: false, reason: 'Not enough vitality' };
+  if (run.combat.pendingSelection) return { ok: false, reason: 'Finish the current card selection first' };
+  if (card.type === CardType.Blank && !run.combat.blankBookActive)
+    return { ok: false, reason: 'Blank cards have no effect' };
+  if (card.type === CardType.Attack && (run.combat.playerStatuses[StatusKind.Silence] ?? 0) > 0)
+    return { ok: false, reason: 'Silence prevents attacks' };
+  if (
+    [CardType.Item, CardType.Skill].includes(card.type) &&
+    (run.combat.playerStatuses[StatusKind.ItemLock] ?? 0) > 0
+  )
+    return { ok: false, reason: 'Item Lock disables item cards' };
+  if (run.combat.unlimitedVitalityTurns <= 0 && run.combat.vitality < card.cost)
+    return { ok: false, reason: 'Not enough vitality' };
   if (card.type === CardType.Skill && (run.combat.cooldowns[instanceId] ?? 0) > 0)
     return { ok: false, reason: 'Active item is recharging' };
-  if (card.type === CardType.Attack || card.type === CardType.Hex) {
+  if (card.itemId) {
+    const item = ITEMS[card.itemId];
+    if (item?.timing === ItemUseTiming.CombatOnce && run.combat.usedPassiveItems.includes(item.id)) {
+      return { ok: false, reason: 'This item has already been used in this combat' };
+    }
+  }
+  if (card.target === CardTarget.Enemy || card.target === CardTarget.AllEnemies) {
     if (card.target === CardTarget.AllEnemies) {
       const hasTargetInRange = run.combat.enemies.some(
         (enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId),
@@ -1545,7 +2364,7 @@ export function playFusedAttack(
   const attack = CARDS[attackInstance.definitionId]!;
   const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
   if (targetId) combat.selectedEnemyId = targetId;
-  combat.vitality -= preview.totalCost;
+  if (combat.unlimitedVitalityTurns <= 0) combat.vitality -= preview.totalCost;
   pushAnimation(combat, {
     kind: CombatAnimationKind.CardPlay,
     sourceId: 'isaac',
@@ -1562,6 +2381,12 @@ export function playFusedAttack(
     });
   }
   playAttack(run, combat, attack, attackInstance, targetId, preview, itemInstanceIds.length);
+  runItemActions(run, ItemActionTrigger.CardPlayed, {
+    sourceInstanceId: attackInstanceId,
+    targetId,
+  });
+  combat.previousCardDefinitionId = attack.id;
+  notifyNewEnemyDeaths(run);
 
   for (const instanceId of [attackInstanceId, ...itemInstanceIds]) {
     const card = getCardDefinition(run, instanceId)!;
@@ -1646,7 +2471,7 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
   }
   const from = { ...run.combat.playerPosition };
   run.combat.playerPosition = destination;
-  run.combat.vitality -= 1;
+  if (run.combat.unlimitedVitalityTurns <= 0) run.combat.vitality -= 1;
   pushAnimation(run.combat, {
     kind: CombatAnimationKind.Move,
     sourceId: 'isaac',
@@ -1668,6 +2493,7 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
       y,
     },
   );
+  runItemActions(run, ItemActionTrigger.PlayerMoved, { amount: gridDistance(from, destination) });
   return touch(run);
 }
 
@@ -1740,8 +2566,27 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
       y,
     },
   );
+  notifyNewEnemyDeaths(run);
   if (allEnemiesDefeated(run.combat)) finishCombat(run);
   return touch(run);
+}
+
+function restartCurrentRoom(run: RunState): void {
+  const checkpoint = run.roomCheckpoint;
+  if (!checkpoint) throw new Error('This room has no restart checkpoint');
+  run.rngState = checkpoint.rngState;
+  run.player = clone(checkpoint.player);
+  run.floorRedDamage = checkpoint.floorRedDamage;
+  run.combat = clone(checkpoint.combat);
+  run.combat.usedPassiveItems.push('regret-medicine');
+  run.combat.deploymentPending = true;
+  run.phase = RunPhase.Combat;
+  pushLog(
+    run.combat,
+    'Regret Medicine rewound the room. It cannot be used again in this combat.',
+    CombatLogTone.Special,
+    'roomRestarted',
+  );
 }
 
 export function playCard(state: RunState, instanceId: string, targetId?: string): RunState {
@@ -1751,20 +2596,34 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   const playable = canPlayCard(state, instanceId, targetId);
   if (!playable.ok) throw new Error(playable.reason);
   const pendingInstance = getCard(state, instanceId);
-  const pendingCard = pendingInstance ? CARDS[pendingInstance.definitionId] : undefined;
-  if (
-    pendingCard?.target === CardTarget.Enemy &&
-    [CardType.Attack, CardType.Hex].includes(pendingCard.type) &&
-    targetId === undefined
-  ) {
+  const pendingCard = pendingInstance ? getCardDefinition(state, instanceId) : undefined;
+  if (pendingCard?.target === CardTarget.Enemy && targetId === undefined) {
     throw new Error('Choose an enemy target');
   }
   const run = clone(state);
   const combat = run.combat!;
   const instance = getCard(run, instanceId)!;
-  const card = CARDS[instance.definitionId]!;
+  const card = getCardDefinition(run, instanceId)!;
+  if (card.type === CardType.Blank) {
+    const candidates = [...combat.drawPile, ...combat.discardPile].filter(
+      (id) => getCardDefinition(run, id)?.type !== CardType.Blank,
+    );
+    if (!candidates.length) throw new Error('There is no card for Blank to imitate');
+    combat.pendingSelection = {
+      kind: CombatSelectionKind.BlankImitation,
+      sourceInstanceId: instanceId,
+      candidateInstanceIds: candidates,
+      min: 1,
+      max: 1,
+    };
+    return touch(run);
+  }
+  if (card.effects?.some((effect) => effect.opcode === CardEffectOpcode.RestartRoom)) {
+    restartCurrentRoom(run);
+    return touch(run);
+  }
   if (targetId) combat.selectedEnemyId = targetId;
-  combat.vitality -= card.cost;
+  if (combat.unlimitedVitalityTurns <= 0) combat.vitality -= card.cost;
   pushAnimation(combat, {
     kind: CombatAnimationKind.CardPlay,
     sourceId: 'isaac',
@@ -1802,7 +2661,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   }
   if (card.type === CardType.Hex) {
     const target = selectedTarget(combat, targetId);
-    if (target) {
+    if (target && !card.effects?.length) {
       target.cursedTurns += (card.value ?? 1) + (instance.upgraded ? 1 : 0);
       pushAnimation(combat, {
         kind: CombatAnimationKind.Curse,
@@ -1815,6 +2674,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
         enemy: target.name,
       });
     }
+    if (card.effects?.length) applyCardEffects(run, combat, card.effects, instanceId, targetId);
   }
   if (card.type === CardType.Tarot) {
     if (card.id === 'the-empress') combat.playerDamageBuff += card.value ?? 3;
@@ -1852,8 +2712,17 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
       });
     }
   }
-  if (card.type === CardType.Skill) playSkill(run, combat, instance);
-  if (card.type === CardType.Item) playPassiveItemCard(run, combat, card);
+  if (card.type === CardType.Skill) playSkill(run, combat, instance, targetId);
+  if (card.type === CardType.Item) playPassiveItemCard(run, combat, card, instanceId, targetId);
+
+  if (run.combat === combat) {
+    runItemActions(run, ItemActionTrigger.CardPlayed, {
+      sourceInstanceId: instanceId,
+      targetId,
+    });
+    combat.previousCardDefinitionId = card.id;
+    notifyNewEnemyDeaths(run);
+  }
 
   if (card.type !== CardType.Skill) {
     combat.hand = combat.hand.filter((id) => id !== instanceId);
@@ -1863,14 +2732,80 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     } else {
       combat.discardPile.push(instanceId);
     }
+    delete combat.cardDefinitionOverrides[instanceId];
   }
   if (allEnemiesDefeated(combat)) finishCombat(run);
+  return touch(run);
+}
+
+export function resolveCombatSelection(state: RunState, selectedInstanceIds: readonly string[]): RunState {
+  const run = clone(state);
+  const combat = run.combat;
+  const pending = combat?.pendingSelection;
+  if (!combat || !pending) throw new Error('There is no combat card selection to resolve');
+  const selected = [...new Set(selectedInstanceIds)];
+  if (selected.length < pending.min || selected.length > pending.max) {
+    throw new Error(`Select between ${pending.min} and ${pending.max} cards`);
+  }
+  if (selected.some((id) => !pending.candidateInstanceIds.includes(id))) {
+    throw new Error('A selected card is not available');
+  }
+
+  if (pending.kind === CombatSelectionKind.BlankImitation) {
+    const source = selected[0];
+    const definition = source ? getCardDefinition(run, source) : undefined;
+    if (!definition) throw new Error('Choose one card for Blank to imitate');
+    combat.cardDefinitionOverrides[pending.sourceInstanceId] = definition.id;
+    combat.pendingSelection = undefined;
+    pushLog(combat, `Blank copied ${definition.name}.`, CombatLogTone.Special, 'blankCopied', {
+      cardId: definition.id,
+    });
+    return touch(run);
+  }
+
+  const itemCardPool = Object.values(CARDS).filter(
+    (card) =>
+      card.type === CardType.Item &&
+      Boolean(card.itemId && run.unlocks.includes(card.itemId)) &&
+      ITEMS[card.itemId!]?.timing !== ItemUseTiming.CombatOnce,
+  );
+  for (const selectedId of selected) {
+    const original = getCardDefinition(run, selectedId);
+    const drawIndex = combat.drawPile.indexOf(selectedId);
+    if (!original || drawIndex < 0) continue;
+    const replacements = itemCardPool.filter((card) => card.id !== original.id);
+    if (!replacements.length) continue;
+    const replacement = createCard(run, pickOne(run, replacements).id);
+    run.player.deck.push(replacement);
+    combat.temporaryCardIds.push(replacement.instanceId);
+    combat.drawPile.splice(drawIndex, 1, replacement.instanceId);
+    combat.discardPile.push(selectedId);
+  }
+  combat.pendingSelection = undefined;
+  pushLog(
+    combat,
+    `Transposition replaced ${selected.length} draw-pile item cards.`,
+    CombatLogTone.Special,
+    'transposed',
+    {
+      count: selected.length,
+    },
+  );
+  return touch(run);
+}
+
+export function cancelCombatSelection(state: RunState): RunState {
+  const run = clone(state);
+  if (!run.combat?.pendingSelection) return run;
+  if (run.combat.pendingSelection.min > 0) throw new Error('This selection requires a card');
+  run.combat.pendingSelection = undefined;
   return touch(run);
 }
 
 export function endTurn(state: RunState): RunState {
   const run = clone(state);
   if (run.phase !== RunPhase.Combat || !run.combat) throw new Error('Not in combat');
+  if (run.combat.pendingSelection) throw new Error('Finish the current card selection first');
   run.phase = RunPhase.Discard;
   pushAnimation(run.combat, {
     kind: CombatAnimationKind.DiscardPhase,
@@ -1928,7 +2863,7 @@ export function discardCard(state: RunState, instanceId: string): RunState {
 export function finishDiscard(state: RunState): RunState {
   const run = clone(state);
   if (run.phase !== RunPhase.Discard || !run.combat) throw new Error('Not choosing discards');
-  if (run.combat.hand.length > run.player.stats.maxRetain)
+  if (!run.combat.ragnarokActive && run.combat.hand.length > run.player.stats.maxRetain)
     throw new Error(`Retain no more than ${run.player.stats.maxRetain} cards`);
   pushAnimation(run.combat, {
     kind: CombatAnimationKind.EnemyPhase,
@@ -1944,6 +2879,90 @@ function addCurseCard(run: RunState, combat: CombatState): void {
   run.player.deck.push(curse);
   combat.discardPile.push(curse.instanceId);
   pushLog(combat, 'A Dead Weight curse was added to your deck.', CombatLogTone.Danger, 'deadWeight');
+}
+
+function loseDirectHeartHp(run: RunState, combat: CombatState, amount: number, reason: string): number {
+  let remaining = Math.max(0, Math.round(amount));
+  const initial = remaining;
+  while (remaining > 0 && run.player.pocketHearts.length) {
+    const heart = run.player.pocketHearts.at(-1)!;
+    const applied = Math.min(heart.hp, remaining);
+    heart.hp -= applied;
+    remaining -= applied;
+    if (heart.hp <= 0) {
+      run.player.pocketHearts.pop();
+      if (heart.kind === HeartKind.Black) blackHeartBurst(combat);
+    }
+  }
+  const redDamage = Math.min(run.player.redHp, remaining);
+  run.player.redHp -= redDamage;
+  remaining -= redDamage;
+  run.floorRedDamage += redDamage;
+  const dealt = initial - remaining;
+  combat.damageTakenThisFloor += dealt;
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.EnemyAttack,
+    sourceId: reason,
+    targetId: 'isaac',
+    value: dealt,
+    secondaryValue: 0,
+    rawValue: initial,
+    armorValue: 0,
+  });
+  pushLog(combat, `${reason} removed ${dealt} HP directly.`, CombatLogTone.Danger, 'directHeartDamage', {
+    reason,
+    damage: dealt,
+  });
+  return dealt;
+}
+
+function applyRandomPlayerCurse(run: RunState, combat: CombatState, enemy: EnemyState): void {
+  const outcomes = [
+    StatusKind.Silence,
+    StatusKind.Poison,
+    StatusKind.Blind,
+    StatusKind.ArmorBreak,
+    StatusKind.Weak,
+    StatusKind.ItemLock,
+    'bloat',
+  ] as const;
+  const outcome = pickOne(run, outcomes);
+  if (outcome === 'bloat') {
+    const count = enemy.elite || enemy.boss ? 2 : 1;
+    for (let index = 0; index < count; index += 1) {
+      const blank = createCard(run, 'blank');
+      run.player.deck.push(blank);
+      combat.discardPile.push(blank.instanceId);
+    }
+    pushLog(
+      combat,
+      `${enemy.name} bloated the deck with ${count} Blank card.`,
+      CombatLogTone.Danger,
+      'bloat',
+      {
+        enemyId: enemy.id,
+        enemy: enemy.name,
+        count,
+      },
+    );
+    return;
+  }
+  const turns = enemy.boss ? 3 : 2;
+  combat.playerStatuses[outcome] = Math.max(combat.playerStatuses[outcome] ?? 0, turns);
+  if (outcome === StatusKind.Poison) combat.playerStatusPower[outcome] = Math.max(4, enemy.attack / 3);
+  if (outcome === StatusKind.Blind) combat.hand = shuffle(run, combat.hand);
+  pushLog(
+    combat,
+    `${enemy.name} applied ${outcome} for ${turns} turns.`,
+    CombatLogTone.Danger,
+    'playerStatus',
+    {
+      enemyId: enemy.id,
+      enemy: enemy.name,
+      status: outcome,
+      turns,
+    },
+  );
 }
 
 function blackHeartBurst(combat: CombatState): void {
@@ -1973,7 +2992,7 @@ function blackHeartBurst(combat: CombatState): void {
 }
 
 function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: EnemyState): number {
-  if (nextRandom(run) < run.player.stats.dodgeChance) {
+  if (nextRandom(run) < run.player.stats.dodgeChance + combat.playerDodgeChanceBuff) {
     if (source)
       pushAnimation(combat, {
         kind: CombatAnimationKind.EnemyAttack,
@@ -1988,7 +3007,10 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
   const cap = combat.damageCap;
   const capped = cap === undefined ? raw : Math.min(raw, cap);
   const rounded = Math.round(capped);
-  const totalArmor = run.player.stats.armor + combat.playerArmorBuff;
+  const totalArmor =
+    (combat.playerStatuses[StatusKind.ArmorBreak] ?? 0) > 0
+      ? 0
+      : run.player.stats.armor + combat.playerArmorBuff;
   const armorBlocked = Math.min(rounded, totalArmor);
   let damage = Math.max(0, rounded - totalArmor);
   const initial = damage;
@@ -2045,6 +3067,8 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
       },
     );
   }
+  if (heartDamage > 0) runItemActions(run, ItemActionTrigger.PlayerDamaged, { amount: heartDamage });
+  if (run.player.redHp <= 0) runItemActions(run, ItemActionTrigger.FatalDamage, { amount: heartDamage });
   return heartDamage;
 }
 
@@ -2242,7 +3266,8 @@ function resolveEnemyAction(
         targetId: 'isaac',
         value: 1,
       });
-      addCurseCard(run, combat);
+      if (nextRandom(run) < 0.3) addCurseCard(run, combat);
+      else applyRandomPlayerCurse(run, combat, enemy);
       break;
     case IntentKind.Heal: {
       const allies = combat.enemies.filter((entry) => entry.hp > 0);
@@ -2338,6 +3363,9 @@ function resolveEnemyTurn(run: RunState): void {
   const combat = run.combat!;
   ensureCombatGrid(run);
   run.phase = RunPhase.Combat;
+  if ((combat.playerStatuses[StatusKind.Poison] ?? 0) > 0) {
+    loseDirectHeartHp(run, combat, combat.playerStatusPower[StatusKind.Poison] ?? 4, 'Poison');
+  }
   for (const enemy of combat.enemies.filter((entry) => entry.hp > 0)) {
     if (enemy.hp <= 0) continue;
     ensureEnemyBehavior(enemy);
@@ -2345,6 +3373,7 @@ function resolveEnemyTurn(run: RunState): void {
       const wasAlive = enemy.hp > 0;
       const dealt = hurtEnemy(enemy, enemy.poisonDamage || 3, 99);
       enemy.poisonTurns -= 1;
+      enemy.statuses[StatusKind.Poison] = enemy.poisonTurns;
       pushAnimation(combat, {
         kind: CombatAnimationKind.Poison,
         sourceId: 'isaac',
@@ -2390,8 +3419,12 @@ function resolveEnemyTurn(run: RunState): void {
       if (roaming) moveEnemyRandomly(run, combat, enemy);
       else moveEnemyTowardPlayer(combat, enemy);
       const actionLimit = enemy.boss ? 2 : 1;
+      const visibleIntent =
+        (enemy.statuses[StatusKind.Blind] ?? 0) > 0 ? rollIntent(run, enemy) : enemy.intent;
       const rolledActions = (
-        enemy.intent.actions?.length ? enemy.intent.actions : [action(enemy.intent.kind, enemy.intent.value)]
+        visibleIntent.actions?.length
+          ? visibleIntent.actions
+          : [action(visibleIntent.kind, visibleIntent.value)]
       ).slice(0, actionLimit);
       const intendedActions = rolledActions.map((rolledAction) =>
         roaming && (rolledAction.kind === IntentKind.Attack || rolledAction.kind === IntentKind.Curse)
@@ -2400,7 +3433,24 @@ function resolveEnemyTurn(run: RunState): void {
       );
       const weakened = enemy.cursedTurns > 0 && !roaming;
       if (roaming && enemy.cursedTurns > 0) enemy.cursedTurns -= 1;
-      const enemyActions = weakened ? cursedActions(enemy, intendedActions) : intendedActions;
+      let enemyActions = weakened ? cursedActions(enemy, intendedActions) : intendedActions;
+      if ((enemy.statuses[StatusKind.Silence] ?? 0) > 0) {
+        enemyActions = enemyActions.map((entry) =>
+          entry.kind === IntentKind.Attack ? action(IntentKind.Idle, 0) : entry,
+        );
+      }
+      if ((enemy.statuses[StatusKind.ItemLock] ?? 0) > 0) {
+        enemyActions = enemyActions.map((entry) =>
+          [IntentKind.Attack, IntentKind.Idle].includes(entry.kind) ? entry : action(IntentKind.Idle, 0),
+        );
+      }
+      if ((enemy.statuses[StatusKind.Weak] ?? 0) > 0) {
+        enemyActions = enemyActions.map((entry) =>
+          entry.kind === IntentKind.Attack
+            ? action(IntentKind.Attack, Math.max(1, Math.round(entry.value * 0.5)))
+            : entry,
+        );
+      }
       if (weakened) {
         enemy.cursedTurns -= 1;
         pushLog(
@@ -2424,12 +3474,47 @@ function resolveEnemyTurn(run: RunState): void {
       enemy.turnsSinceAttack = attacked ? 0 : enemy.turnsSinceAttack + 1;
     }
     if (enemy.slowedTurns > 0) enemy.slowedTurns -= 1;
+    for (const status of Object.values(StatusKind)) {
+      if (status === StatusKind.Poison) continue;
+      if ((enemy.statuses[status] ?? 0) > 0) enemy.statuses[status] = (enemy.statuses[status] ?? 0) - 1;
+    }
     if (run.player.redHp <= 0) break;
   }
 
+  notifyNewEnemyDeaths(run);
   if (allEnemiesDefeated(combat)) {
     finishCombat(run);
     return;
+  }
+  runItemActions(run, ItemActionTrigger.RoundEnd);
+  notifyNewEnemyDeaths(run);
+  if (allEnemiesDefeated(combat)) {
+    finishCombat(run);
+    return;
+  }
+  if (combat.ragnarokActive && combat.hand.length > 0) {
+    loseDirectHeartHp(run, combat, combat.hand.length, 'Ragnarok');
+  }
+  if (combat.damoclesActive && !combat.damoclesFallen && nextRandom(run) < 0.5) {
+    combat.damoclesFallen = true;
+    loseDirectHeartHp(run, combat, run.player.stats.heartSize, 'Damocles');
+  }
+  if (combat.unlimitedVitalityTurns > 0) {
+    combat.unlimitedVitalityTurns -= 1;
+    if (combat.unlimitedVitalityTurns === 0) {
+      run.player.stats.maxVitality = Math.max(1, run.player.stats.maxVitality - 1);
+      pushLog(
+        combat,
+        'The stimulant crash permanently removed 1 max vitality.',
+        CombatLogTone.Danger,
+        'stimulantCrash',
+      );
+    }
+  }
+  for (const status of Object.values(StatusKind)) {
+    if ((combat.playerStatuses[status] ?? 0) > 0) {
+      combat.playerStatuses[status] = (combat.playerStatuses[status] ?? 0) - 1;
+    }
   }
   if (run.player.redHp <= 0) {
     run.phase = RunPhase.Defeat;
@@ -2448,7 +3533,11 @@ function resolveEnemyTurn(run: RunState): void {
     .forEach((enemy) => {
       enemy.intent = rollIntent(run, enemy);
     });
-  drawToHand(run, combat);
+  if (combat.ragnarokActive) drawToHand(run, combat, combat.hand.length + 5);
+  else drawToHand(run, combat);
+  runItemActions(run, ItemActionTrigger.RoundStart);
+  notifyNewEnemyDeaths(run);
+  if ((combat.playerStatuses[StatusKind.Blind] ?? 0) > 0) combat.hand = shuffle(run, combat.hand);
   if (!combat.enemies.some((enemy) => enemy.hp > 0 && enemy.instanceId === combat.selectedEnemyId)) {
     combat.selectedEnemyId = undefined;
   }
@@ -2618,6 +3707,7 @@ function makeBossGate(run: RunState): void {
 
 function finishCombat(run: RunState): void {
   const combat = run.combat!;
+  runItemActions(run, ItemActionTrigger.RoomCleared);
   const loot = rollLoot(run);
   run.lastReward = [loot];
   run.clearedRooms += 1;
@@ -2720,6 +3810,7 @@ function advanceFloor(run: RunState): void {
   run.mapBombResult = undefined;
   run.choice = undefined;
   run.combat = undefined;
+  run.roomCheckpoint = undefined;
   run.currentRoomId = undefined;
   run.phase = RunPhase.Map;
   revealMap(run);
@@ -2733,6 +3824,7 @@ function finishVictory(run: RunState): void {
   run.phase = RunPhase.Victory;
   run.choice = undefined;
   run.combat = undefined;
+  run.roomCheckpoint = undefined;
   run.victory = true;
   run.score += 2000;
 }

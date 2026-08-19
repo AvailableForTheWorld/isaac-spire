@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CARDS, ITEMS, itemUsesCombatCard } from '../catalog.js';
-import { RewardPool, RewardQuality } from '../domain/enums.js';
+import { CardType, RewardPool, RewardQuality } from '../domain/enums.js';
 import { ROOM_REWARD_PROFILES, RewardStrength } from './room-rewards.js';
 
 const designedRoomPools: RewardPool[] = [
@@ -38,8 +38,13 @@ function expectedQuality(pool: RewardPool): number {
 describe('room reward balance', () => {
   it('classifies every current card into one or more configured room pools', () => {
     for (const card of Object.values(CARDS)) {
+      if (card.type === CardType.Blank) {
+        expect(card.rewardPools).toEqual([]);
+        expect(card.quality).toBe(RewardQuality.Poor);
+        continue;
+      }
       expect(card.rewardPools.length, card.id).toBeGreaterThan(0);
-      expect(card.quality, card.id).toBeGreaterThanOrEqual(RewardQuality.Common);
+      expect(card.quality, card.id).toBeGreaterThanOrEqual(RewardQuality.Poor);
       expect(card.quality, card.id).toBeLessThanOrEqual(RewardQuality.Legendary);
       for (const pool of card.rewardPools)
         expect(ROOM_REWARD_PROFILES[pool], `${card.id}:${pool}`).toBeDefined();

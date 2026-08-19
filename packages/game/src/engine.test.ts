@@ -31,6 +31,7 @@ import {
   skipChoice,
   useCombatBomb,
   useMapBomb,
+  usePocketItem,
 } from './engine.js';
 import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
@@ -1454,22 +1455,23 @@ describe('combat', () => {
     expect(run.combat!.hand).toContain(itemCard.instanceId);
   });
 
-  it('keeps non-combat passive rewards out of the combat deck while their run effects remain active', () => {
-    const run = createRun('NON-COMBAT-ITEMS');
+  it('keeps non-combat passives out of the deck and carries Steam Sale as a run-once pocket item', () => {
+    let run = createRun('NON-COMBAT-ITEMS');
     equipItem(run, 'goat-head');
     equipItem(run, 'compass');
     equipItem(run, 'blue-map');
     equipItem(run, 'steam-sale');
 
-    expect(run.player.items).toEqual(
-      expect.arrayContaining(['goat-head', 'compass', 'blue-map', 'steam-sale']),
-    );
+    expect(run.player.items).toEqual(expect.arrayContaining(['goat-head', 'compass', 'blue-map']));
+    expect(run.player.pocketItems.map((item) => item.itemId)).toContain('steam-sale');
     expect(
       run.player.deck.some((card) =>
         ['item:goat-head', 'item:compass', 'item:blue-map', 'item:steam-sale'].includes(card.definitionId),
       ),
     ).toBe(false);
-    expect(CARDS['item:goat-head']).toBeUndefined();
+    expect(CARDS['item:goat-head']).toBeDefined();
+    expect(run.player.stats.shopDiscount).toBe(0);
+    run = usePocketItem(run, run.player.pocketItems.find((item) => item.itemId === 'steam-sale')!.instanceId);
     expect(run.player.stats.shopDiscount).toBe(0.5);
   });
 
@@ -1513,13 +1515,16 @@ describe('combat', () => {
     expect(run.combat!.exhausted).toContain(activeCard.instanceId);
   });
 
-  it('makes The D6 transform every other card in hand without discarding them', () => {
+  it('makes The D6 transform every other Item card in hand without touching non-item cards', () => {
     let run = createRun('D6-TRUE-REROLL');
+    equipItem(run, 'terra');
+    equipItem(run, 'pentagram');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const d6 = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
-    const otherCards = run.player.deck.filter((card) => card.instanceId !== d6.instanceId).slice(0, 4);
-    const hand = [d6.instanceId, ...otherCards.map((card) => card.instanceId)];
-    const definitionsBefore = new Map(otherCards.map((card) => [card.instanceId, card.definitionId]));
+    const itemCards = run.player.deck.filter((card) => CARDS[card.definitionId]?.type === CardType.Item);
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const hand = [d6.instanceId, attack.instanceId, ...itemCards.map((card) => card.instanceId)];
+    const definitionsBefore = new Map(itemCards.map((card) => [card.instanceId, card.definitionId]));
     run.combat!.hand = hand;
     run.combat!.drawPile = run.combat!.drawPile.filter((id) => !hand.includes(id));
     run.combat!.discardPile = run.combat!.discardPile.filter((id) => !hand.includes(id));
@@ -1528,10 +1533,13 @@ describe('combat', () => {
 
     expect(run.combat!.hand).toEqual(hand);
     expect(run.player.deck.find((card) => card.instanceId === d6.instanceId)?.definitionId).toBe('skill-d6');
-    for (const card of otherCards) {
+    expect(run.player.deck.find((card) => card.instanceId === attack.instanceId)?.definitionId).toBe(
+      'basic-attack',
+    );
+    for (const card of itemCards) {
       const rerolled = run.player.deck.find((entry) => entry.instanceId === card.instanceId)!;
       expect(rerolled.definitionId).not.toBe(definitionsBefore.get(card.instanceId));
-      expect([CardType.Skill, CardType.Curse]).not.toContain(CARDS[rerolled.definitionId]!.type);
+      expect(CARDS[rerolled.definitionId]!.type).toBe(CardType.Item);
     }
     expect(run.combat!.discardPile).toHaveLength(0);
     expect(run.combat!.cooldowns[d6.instanceId]).toBe(3);

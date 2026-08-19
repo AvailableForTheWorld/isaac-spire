@@ -1,12 +1,21 @@
 import type {
   AttackMode,
+  CardEffectOpcode,
   CardTarget,
   CardType,
   CharacterId,
   HeartKind,
+  ItemEffectFamily,
+  ItemActionMethod,
+  ItemActionTrigger,
   ItemKind,
+  ItemMechanic,
+  ItemTrait,
+  ItemUseTiming,
+  PocketItemAction,
   RewardPool,
   RewardQuality,
+  StatusKind,
   UnlockEvent,
 } from './enums.js';
 
@@ -52,8 +61,19 @@ export interface PlayerState {
   keys: number;
   items: string[];
   activeItemId?: string;
+  pocketItems: PocketItemInstance[];
+  pocketItemSlots: number;
   deck: CardInstance[];
 }
+
+export interface PocketItemInstance {
+  instanceId: string;
+  itemId: string;
+  used: boolean;
+  lastUsedFloor?: number;
+}
+
+export type StatusDurations = Partial<Record<StatusKind, number>>;
 
 export interface CardDefinition {
   id: string;
@@ -70,6 +90,7 @@ export interface CardDefinition {
   quality: RewardQuality;
   rewardPools: RewardPool[];
   rewardWeight?: number;
+  effects?: CardEffect[];
 }
 
 export interface CardInstance {
@@ -91,6 +112,17 @@ export interface ItemEffect {
   guaranteeDeal?: boolean;
   damageCap?: number;
   curvedShots?: boolean;
+}
+
+/** A serializable effect instruction interpreted by the combat engine. */
+export interface CardEffect {
+  opcode: CardEffectOpcode;
+  amount?: number;
+  secondaryAmount?: number;
+  turns?: number;
+  status?: StatusKind;
+  target?: CardTarget;
+  attackMode?: AttackMode;
 }
 
 export interface AttackFusionEffect {
@@ -120,18 +152,42 @@ export interface AttackFusionPreview {
 
 export interface ItemDefinition {
   id: string;
+  isaacId?: number;
   name: string;
+  nameZh?: string;
   kind: ItemKind;
   pool: RewardPool[];
   description: string;
+  descriptionZh?: string;
   icon: string;
   quality: RewardQuality;
+  timing?: ItemUseTiming;
+  family?: ItemEffectFamily;
+  originalMechanics?: ItemMechanic[];
+  originalTraits?: ItemTrait[];
   chargeRounds?: number;
+  cardCost?: number;
   skillCardId?: string;
   combatCard?: boolean;
   effects?: ItemEffect[];
+  cardEffects?: CardEffect[];
+  actions?: ItemActionDefinition[];
+  pocketAction?: PocketItemAction;
   fusion?: AttackFusionEffect;
   unlock?: { event: UnlockEvent; label: string };
+}
+
+export interface ItemActionDefinition {
+  id: string;
+  trigger: ItemActionTrigger;
+  method: ItemActionMethod;
+  effects?: CardEffect[];
+  chance?: number;
+  every?: number;
+  amount?: number;
+  secondaryAmount?: number;
+  oncePerCombat?: boolean;
+  consumeItem?: boolean;
 }
 
 export interface FloorDefinition {

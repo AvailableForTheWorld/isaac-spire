@@ -8,7 +8,7 @@ export interface RoomRewardProfile {
   offerCount: number;
   pickCount: number;
   rewardKind: RewardKind;
-  qualityWeights: Record<RewardQuality, number>;
+  qualityWeights: Partial<Record<RewardQuality, number>>;
   design: string;
 }
 
@@ -346,5 +346,7 @@ export const ROOM_REWARD_PROFILES = {
 } satisfies Record<RewardPool, RoomRewardProfile>;
 
 export function rewardQualityWeight(pool: RewardPool, quality: RewardQuality): number {
-  return ROOM_REWARD_PROFILES[pool].qualityWeights[quality];
+  const weights = ROOM_REWARD_PROFILES[pool].qualityWeights;
+  if (quality === RewardQuality.Poor) return Math.round((weights[RewardQuality.Common] ?? 0) * 0.45);
+  return weights[quality] ?? 0;
 }

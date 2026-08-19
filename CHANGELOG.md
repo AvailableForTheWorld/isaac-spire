@@ -6,6 +6,18 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Added
 
+- An enum-backed item-action lifecycle with activation, combat, round, card, movement, damage, kill, fatal-damage, and room-clear triggers plus stateful method dispatch.
+- Hand-authored action definitions for 116 behavior-dependent Isaac collectibles, including rerolls, card copying/replay, revival, recharge, conversions, restart effects, resource costs, and conditional reactions.
+- Runtime invariants and behavioral tests for action precedence, collectible-ID uniqueness, Car Battery repetition, fake-damage listeners, retaliation, and fatal-damage revival.
+- Fine-grained `ItemTrait` analysis and a compositional card-effect compiler covering homing, piercing, multishot, attack forms, exact statuses, hearts, defense, resources, map control, copying, rerolling, retaliation, and stat tradeoffs.
+- Exhaustive manifest-to-run tests requiring every source collectible to have an executable effect recipe and a reachable active/passive card or an explicit pocket-item exception.
+- A generated Repentance/Repentance+ catalog containing all 718 valid collectible IDs, Chinese names, original active/passive classification, quality, recharge, room pools, semantic mechanics, and data-driven tactical adaptations.
+- A generic collectible effect instruction set for draw, cycle, damage, defense, sustain, movement, resources, map reveal, rerolls, statuses, and curated room/run control without item-specific engine branches.
+- Run-once and floor-once pocket inventory with Travel Pack, Diplopia, R Key, Steam Sale, and Holy Protection React interactions.
+- Silence, poison, blind, armor break, weak, item lock, and Blank/Bloat rules for players and enemies.
+- Curated Damocles, Ragnarok, Strong Stimulant, Transposition, Blank Book, and Regret Medicine combat mechanics and card-selection panels.
+- Collectible source, regeneration, adaptation, timing, status, and balance documentation.
+
 - Bounded domain modules for player/content, routes, combat, and run persistence types.
 - O(1) content registries and composable content packs for future items, enemies, floors, expansions, and PvP-only rules.
 - Dedicated grid/pathfinding, enemy-AI, combat-event, and save-migration modules in `packages/game`.
@@ -22,6 +34,10 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- Authored and curated collectible definitions now override generated records by both project ID and original `isaacId`; generated aliases can no longer create a second runtime item, and existing R Key/Damocles-style project definitions remain authoritative.
+- Action-driven active items bypass the historical item-specific switch and execute only through the action dispatcher, preventing duplicate effects while keeping legacy curated actives intact.
+- Generated mapping/economy passives now become reusable deck cards; every passive also has an inspectable `item:<id>` card definition, while deliberately permanent utility upgrades still apply on pickup and remain outside combat piles.
+- Collectible adaptation now derives effects from each item's original-effect traits instead of assigning one generic effect solely from its broad family or numeric ID.
 - `App.tsx` is now a five-line composition entry instead of the application controller and every view living in one file.
 - `GET /api/runs` returns lightweight `RunSummary` records; `GET /api/runs/active/latest` loads only the resumable snapshot.
 - Battle/grid helpers preserve the original root exports while living in cohesive modules.
