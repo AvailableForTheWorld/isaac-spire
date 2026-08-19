@@ -13,7 +13,7 @@ import type {
   RoomMissingQuadrant,
   StatusKind,
 } from './enums.js';
-import type { GridPosition, StatusDurations } from './player.js';
+import type { CardEffect, GridPosition, StatusDurations } from './player.js';
 
 export interface EnemyDefinition {
   id: string;
@@ -76,6 +76,8 @@ export interface PendingCombatSelection {
   candidateInstanceIds: string[];
   min: number;
   max: number;
+  remainingEffects?: CardEffect[];
+  targetId?: string;
 }
 
 export interface CombatAnimationEvent {

@@ -61,7 +61,7 @@ function specialize(
   return {
     ...base,
     ...patch,
-    description: `Action-driven adaptation: ${actions.map((action) => action.id).join('; ')}.`,
+    description: patch.description ?? base.description,
     descriptionZh,
     cardEffects: [],
     actions,
@@ -207,7 +207,7 @@ export const ISAAC_ACTION_ITEM_DEFINITIONS: Record<string, ItemDefinition> = {
   'clear-rune': specialize('clear-rune', '重复上一张非主动牌的效果，用牌组中的上一张牌模拟符文。', [
     methodAction('repeat-rune', ItemActionTrigger.Activate, ItemActionMethod.ReplayPreviousCard),
   ]),
-  undefined: specialize('undefined', '随机传送的牌组化改编：揭示本层地图并重置当前手牌。', [
+  undefined: specialize('undefined', '揭示本层地图并重置当前手牌。', [
     methodAction('unknown-map', ItemActionTrigger.Activate, ItemActionMethod.RevealMap),
     methodAction('unknown-hand', ItemActionTrigger.Activate, ItemActionMethod.TransformHand),
   ]),

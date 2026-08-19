@@ -14,7 +14,7 @@ import {
   type RunState,
 } from '@isaac-spire/game';
 import { cardName, enemyName, roomName } from '../localize';
-import { BattleScene } from './BattleScene';
+import { BattleScene, BattleSceneEvent } from './BattleScene';
 
 function roomGridStyle(layout: CombatRoomLayout) {
   const cellSize = Math.min(876 / layout.width, 464 / layout.height);
@@ -35,6 +35,7 @@ export function PhaserStage({
   movementDisabled = false,
   bombTargeting = false,
   highlightedEnemyId,
+  onAnimationStateChange,
   onMove,
   onDeploy,
   onBomb,
@@ -43,6 +44,7 @@ export function PhaserStage({
   movementDisabled?: boolean;
   bombTargeting?: boolean;
   highlightedEnemyId?: string;
+  onAnimationStateChange: (playing: boolean) => void;
   onMove: (x: number, y: number) => void;
   onDeploy: (x: number, y: number) => void;
   onBomb: (x: number, y: number) => void;
@@ -69,12 +71,15 @@ export function PhaserStage({
       scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
       render: { antialias: true, pixelArt: false, roundPixels: true },
     });
+    const handleAnimationStateChange = (playing: boolean) => onAnimationStateChange(playing);
+    game.events.on(BattleSceneEvent.AnimationStateChange, handleAnimationStateChange);
     gameRef.current = game;
     return () => {
+      game.events.off(BattleSceneEvent.AnimationStateChange, handleAnimationStateChange);
       game.destroy(true);
       gameRef.current = null;
     };
-  }, []);
+  }, [onAnimationStateChange]);
 
   useEffect(() => {
     const game = gameRef.current;
@@ -101,7 +106,7 @@ export function PhaserStage({
       ),
       cards: Object.fromEntries(Object.values(CARDS).map((card) => [card.id, cardName(t, card.id)])),
     });
-    game.events.emit('run-sync');
+    game.events.emit(BattleSceneEvent.RunSync);
   }, [highlightedEnemyId, i18n.resolvedLanguage, run, t]);
 
   const combat = run.combat;

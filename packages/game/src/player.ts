@@ -3,6 +3,20 @@ import type { CardInstance, HeartKind, PlayerState, RunState } from './types.js'
 import { AttackMode, CardEffectOpcode, CharacterId, ItemKind } from './types.js';
 import { randomInt } from './random.js';
 
+export const ISAAC_STARTER_PASSIVE_ITEM_IDS = ['battery-pack', 'starter-deck', 'the-common-cold'] as const;
+
+export const ISAAC_STARTER_DECK_RECIPE = [
+  { definitionId: 'basic-attack', count: 4 },
+  { definitionId: 'wooden-cross', count: 4 },
+  ...ISAAC_STARTER_PASSIVE_ITEM_IDS.map((itemId) => ({
+    definitionId: passiveCardId(itemId),
+    count: 1,
+  })),
+  { definitionId: 'skill-d6', count: 1 },
+  { definitionId: 'half-heart', count: 2 },
+  { definitionId: 'the-empress', count: 1 },
+] as const;
+
 export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string): CardInstance {
   if (!CARDS[definitionId]) throw new Error(`Unknown card: ${definitionId}`);
   return {
@@ -39,20 +53,15 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
     coins: 5,
     bombs: 1,
     keys: 1,
-    items: ['d6'],
+    items: ['d6', ...ISAAC_STARTER_PASSIVE_ITEM_IDS],
     activeItemId: 'd6',
     pocketItems: [],
     pocketItemSlots: 3,
     deck: [],
   };
-  const starterCards = [
-    ...Array<string>(6).fill('basic-attack'),
-    ...Array<string>(3).fill('wooden-cross'),
-    ...Array<string>(2).fill('half-heart'),
-    'bad-trip',
-    'the-empress',
-    'skill-d6',
-  ];
+  const starterCards = ISAAC_STARTER_DECK_RECIPE.flatMap(({ definitionId, count }) =>
+    Array<string>(count).fill(definitionId),
+  );
   player.deck = starterCards.map((id) => createCard(run, id));
   return player;
 }

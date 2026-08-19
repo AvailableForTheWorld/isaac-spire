@@ -8,8 +8,3 @@ export enum CombatPileKind {
   Draw = 'draw',
   Discard = 'discard',
 }
-
-export enum ActiveDiscardScope {
-  Single = 'single',
-  All = 'all',
-}

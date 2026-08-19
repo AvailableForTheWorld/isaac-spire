@@ -1,10 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CardTarget,
   CardType,
-  CombatAnimationKind,
-  ITEMS,
   IntentKind,
   RoomKind,
   RunPhase,
@@ -34,17 +32,15 @@ import {
   type RunState,
 } from '@isaac-spire/game';
 import { HeartMeter } from '../../components/game/HeartMeter';
-import { cardName, enemyName, floorBoss, intentLabel, itemName, logText, roomName } from '../../localize';
+import { cardName, enemyName, floorBoss, intentLabel, logText, roomName } from '../../localize';
 
 const PhaserStage = lazy(() =>
   import('../../phaser/PhaserStage').then((module) => ({ default: module.PhaserStage })),
 );
-import { ConfirmationPanel } from '../../components/game/ConfirmationPanel';
 import { CombatCardSelectionModal, CombatItemRail, CardView, PileViewer } from './components/CombatCards';
 import { FusionAttackModal } from './components/FusionAttackModal';
 import { TargetingGuide } from './components/TargetingGuide';
-import { combatAnimationDuration } from './animationTiming';
-import { ActiveDiscardScope, CombatCardMode, CombatPileKind } from './combat-ui.enums';
+import { CombatCardMode, CombatPileKind } from './combat-ui.enums';
 
 function enemyIntentIcon(kind: EnemyIntent['kind']): string {
   return kind === IntentKind.Attack
@@ -78,12 +74,8 @@ export function CombatView({
   const [pendingFusionItemIds, setPendingFusionItemIds] = useState<string[]>([]);
   const [hoveredTargetId, setHoveredTargetId] = useState<string>();
   const [bombTargeting, setBombTargeting] = useState(false);
-  const [pendingActiveDiscard, setPendingActiveDiscard] = useState<
-    { type: ActiveDiscardScope.Single; instanceId: string } | { type: ActiveDiscardScope.All }
-  >();
   const combat = run.combat!;
   const deploymentPending = Boolean(combat.deploymentPending);
-  const lastAnimationSequence = useRef(combat.animationSequence);
   const discardMode = run.phase === RunPhase.Discard;
   const handCards = combat.hand
     .map((id) => run.player.deck.find((card) => card.instanceId === id))
@@ -100,21 +92,6 @@ export function CombatView({
   const cardsToDiscard = combat.ragnarokActive
     ? 0
     : Math.max(0, handCards.length - run.player.stats.maxRetain);
-  const activeItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
-  const activeSkillCardId = activeItem?.skillCardId;
-  useEffect(() => {
-    const events = combat.animationEvents.filter((event) => event.sequence > lastAnimationSequence.current);
-    lastAnimationSequence.current = combat.animationSequence;
-    if (!events.length) return;
-    const blockingEvents = events.filter(
-      (event) => event.kind !== CombatAnimationKind.Move || event.sourceId !== 'isaac',
-    );
-    if (!blockingEvents.length) return;
-    const duration = combatAnimationDuration(blockingEvents);
-    setAnimationLocked(true);
-    const timer = window.setTimeout(() => setAnimationLocked(false), duration);
-    return () => window.clearTimeout(timer);
-  }, [combat.animationEvents, combat.animationSequence]);
   useEffect(() => {
     if (targetingCardId && (discardMode || !combat.hand.includes(targetingCardId))) {
       setTargetingCardId(undefined);
@@ -175,13 +152,6 @@ export function CombatView({
       for (const id of ids) next = discardCard(next, id);
       return next;
     });
-  };
-  const discardAll = () => {
-    if (activeSkillCardId && handCards.some((card) => card.definitionId === activeSkillCardId)) {
-      setPendingActiveDiscard({ type: ActiveDiscardScope.All });
-      return;
-    }
-    discardAllCards();
   };
   return (
     <main
@@ -247,6 +217,7 @@ export function CombatView({
           <Suspense fallback={<div className="phaser-stage stage-loading">{t('combat.preparing')}</div>}>
             <PhaserStage
               run={run}
+              onAnimationStateChange={setAnimationLocked}
               highlightedEnemyId={targetingCardId ? hoveredTargetId : undefined}
               bombTargeting={bombTargeting}
               movementDisabled={animationLocked || discardMode || deploymentPending || bombTargeting}
@@ -536,13 +507,6 @@ export function CombatView({
                 animateCardAction(instance.instanceId, (state) => playCard(state, instance.instanceId));
               }}
               onDiscard={() => {
-                if (instance.definitionId === activeSkillCardId) {
-                  setPendingActiveDiscard({
-                    type: ActiveDiscardScope.Single,
-                    instanceId: instance.instanceId,
-                  });
-                  return;
-                }
                 animateCardAction(instance.instanceId, (state) => discardCard(state, instance.instanceId));
               }}
             />
@@ -573,7 +537,7 @@ export function CombatView({
               <button
                 className="text-button"
                 disabled={!discardable.length || animationLocked}
-                onClick={discardAll}
+                onClick={discardAllCards}
               >
                 {t('combat.discardAll')}
               </button>
@@ -666,32 +630,6 @@ export function CombatView({
                   : playCard(state, attackId),
               );
             }
-          }}
-        />
-      )}
-      {pendingActiveDiscard && activeItem && (
-        <ConfirmationPanel
-          eyebrow={t('confirmation.irreversible')}
-          title={t('confirmation.discardActiveTitle')}
-          message={t('combat.confirmActiveDiscard', { item: itemName(t, activeItem.id) })}
-          items={[
-            {
-              icon: activeItem.icon,
-              name: itemName(t, activeItem.id),
-              note: t('confirmation.currentActive'),
-            },
-          ]}
-          confirmLabel={t(
-            pendingActiveDiscard.type === ActiveDiscardScope.All
-              ? 'confirmation.discardAll'
-              : 'confirmation.discardActive',
-          )}
-          onCancel={() => setPendingActiveDiscard(undefined)}
-          onConfirm={() => {
-            const pending = pendingActiveDiscard;
-            setPendingActiveDiscard(undefined);
-            if (pending.type === ActiveDiscardScope.All) discardAllCards();
-            else animateCardAction(pending.instanceId, (state) => discardCard(state, pending.instanceId));
           }}
         />
       )}

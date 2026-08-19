@@ -237,6 +237,7 @@ export enum PocketItemAction {
 }
 
 export enum CombatSelectionKind {
+  Draw = 'draw',
   Transposition = 'transposition',
   BlankImitation = 'blank-imitation',
 }

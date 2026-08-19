@@ -7,7 +7,6 @@ import {
   DealType,
   ITEMS,
   ItemKind,
-  ROOM_REWARD_PROFILES,
   RewardContext,
   RewardOptionType,
   chooseOption,
@@ -26,6 +25,7 @@ import {
   optionLabel,
   rewardsText,
 } from '../../localize';
+import { cardAppearanceClass, itemForCard } from '../cards/cardAppearance';
 
 function ChoiceCard({
   option,
@@ -44,11 +44,12 @@ function ChoiceCard({
     (option.price ?? 0) > run.player.coins ||
     (dealType === DealType.Devil && option.type === RewardOptionType.Item && run.player.redContainers <= 1);
   const offeredCard = option.cardId ? CARDS[option.cardId] : undefined;
-  const offeredCardItem = offeredCard?.itemId ? ITEMS[offeredCard.itemId] : undefined;
-  const rewardPools = option.itemId ? ITEMS[option.itemId]?.pool : offeredCard?.rewardPools;
+  const offeredCardItem = offeredCard ? itemForCard(offeredCard) : undefined;
+  const offeredItem = option.itemId ? ITEMS[option.itemId] : undefined;
+  const appearance = offeredItem || offeredCard ? cardAppearanceClass(offeredCard, offeredItem) : '';
   return (
     <button
-      className={`choice-card ${option.type} ${option.sold ? 'sold' : ''}`}
+      className={`choice-card ${option.type} ${appearance} ${option.sold ? 'sold' : ''}`}
       disabled={option.sold || unaffordable}
       onClick={onChoose}
     >
@@ -69,13 +70,6 @@ function ChoiceCard({
         <small>
           {t('choice.cardLabel', { type: cardTypeName(t, offeredCard.type) })} ·{' '}
           {t('choice.quality', { quality: offeredCardItem?.quality ?? offeredCard.quality })}
-        </small>
-      )}
-      {rewardPools && rewardPools.length > 0 && (
-        <small className="reward-origins">
-          {t('choice.rewardOrigins', {
-            rooms: rewardPools.map((pool) => t(`rewardPools.${pool}`)).join(' / '),
-          })}
         </small>
       )}
       {choice.rewardContext === RewardContext.FloorStart && option.type === RewardOptionType.Resource && (
@@ -123,7 +117,6 @@ export function ChoiceView({
   };
   const currentActiveItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
   const pendingReplacement = pendingActiveChoice?.itemId ? ITEMS[pendingActiveChoice.itemId] : undefined;
-  const rewardProfile = choice.rewardPool ? ROOM_REWARD_PROFILES[choice.rewardPool] : undefined;
   const hasExplicitLeaveOption = choice.options.some((option) => option.action === ChoiceAction.Leave);
   return (
     <main className={`choice-page ${choice.dealType ?? choice.kind}`}>
@@ -134,15 +127,6 @@ export function ChoiceView({
         </p>
         <h1>{choiceTitle(t, run)}</h1>
         <p>{choiceSubtitle(t, run)}</p>
-        {choice.rewardPool && rewardProfile && (
-          <div className="reward-strength">
-            {t('choice.rewardStrength', {
-              pool: t(`rewardPools.${choice.rewardPool}`),
-              strength: rewardProfile.strength,
-              label: t(`rewardStrength.${rewardProfile.strength}`),
-            })}
-          </div>
-        )}
         {run.lastReward.length > 0 && (
           <div className="drop-notice">{t('choice.roomDrop', { rewards: rewardsText(t, run) })}</div>
         )}

@@ -27,6 +27,7 @@ import {
   placePlayerForDeployment,
   playCard,
   playFusedAttack,
+  resolveCombatSelection,
   selectEnemy,
   skipChoice,
   useCombatBomb,
@@ -46,6 +47,7 @@ import {
   CombatAnimationKind,
   CombatMovementStyle,
   CombatRoomShape,
+  CombatSelectionKind,
   EnemyMovementPattern,
   HeartKind,
   IntentKind,
@@ -160,7 +162,7 @@ describe('run generation', () => {
     expect(left.player.stats.baseShield).toBe(10);
     expect(left.player.stats.movementSpeed).toBe(3);
     expect(left.player.stats.attackRange).toBe(5);
-    expect(left.player.deck).toHaveLength(14);
+    expect(left.player.deck).toHaveLength(15);
     expect(left.player.activeItemId).toBe('d6');
   });
 
@@ -1463,7 +1465,8 @@ describe('combat', () => {
         { kind: IntentKind.Shield, value: 9 },
       ],
     };
-    const curse = run.player.deck.find((card) => card.definitionId === 'bad-trip')!;
+    const curse = createCard(run, 'bad-trip');
+    run.player.deck.push(curse);
     run.combat!.hand = [curse.instanceId];
     run.player.stats.armor = 0;
     run.player.stats.dodgeChance = 0;
@@ -1571,19 +1574,144 @@ describe('combat', () => {
     expect(hydrated.player.deck).not.toContainEqual(retired);
   });
 
-  it('permanently loses an active item when its skill card is discarded', () => {
+  it('cycles a discarded active item card without losing the equipped item', () => {
     let run = createRun('ACTIVE-DISCARD');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const activeCard = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
     run.combat!.hand = [activeCard.instanceId];
+    run.combat!.cooldowns[activeCard.instanceId] = 2;
     run = endTurn(run);
     run = discardCard(run, activeCard.instanceId);
 
-    expect(run.player.activeItemId).toBeUndefined();
-    expect(run.player.items).not.toContain('d6');
-    expect(run.player.deck.some((card) => card.instanceId === activeCard.instanceId)).toBe(false);
+    expect(run.player.activeItemId).toBe('d6');
+    expect(run.player.items).toContain('d6');
+    expect(run.player.deck.some((card) => card.instanceId === activeCard.instanceId)).toBe(true);
+    expect(run.combat!.discardPile).toContain(activeCard.instanceId);
+    expect(run.combat!.exhausted).not.toContain(activeCard.instanceId);
+    expect(run.combat!.cooldowns[activeCard.instanceId]).toBe(2);
+  });
+
+  it('protects active item cards from automatic cycle effects', () => {
+    let run = createRun('ACTIVE-AUTO-CYCLE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const activeCard = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
+    const cycleCard = run.player.deck.find((card) => card.definitionId === 'item:starter-deck')!;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const hand = [activeCard.instanceId, cycleCard.instanceId, attack.instanceId];
+    run.combat!.hand = hand;
+    run.combat!.drawPile = run.player.deck
+      .filter((card) => !hand.includes(card.instanceId))
+      .map((card) => card.instanceId);
+    run.combat!.discardPile = [];
+
+    run = playCard(run, cycleCard.instanceId);
+
+    expect(run.combat!.hand).toContain(activeCard.instanceId);
     expect(run.combat!.discardPile).not.toContain(activeCard.instanceId);
-    expect(run.combat!.exhausted).toContain(activeCard.instanceId);
+    expect(run.player.activeItemId).toBe('d6');
+  });
+
+  it('opens the draw pile and lets the player choose cards for explicit draw effects', () => {
+    let run = createRun('CHOOSE-DRAW');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:battery-pack')!;
+    const candidates = run.player.deck
+      .filter(
+        (card) =>
+          card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type !== CardType.Skill,
+      )
+      .slice(0, 2);
+    run.combat!.hand = [drawCard.instanceId];
+    run.combat!.drawPile = candidates.map((card) => card.instanceId);
+    run.combat!.discardPile = [];
+
+    run = playCard(run, drawCard.instanceId);
+
+    expect(run.combat!.pendingSelection).toMatchObject({
+      kind: CombatSelectionKind.Draw,
+      candidateInstanceIds: candidates.map((card) => card.instanceId),
+      min: 1,
+      max: 1,
+    });
+    expect(run.combat!.hand).not.toContain(candidates[1]!.instanceId);
+
+    run = resolveCombatSelection(run, [candidates[1]!.instanceId]);
+
+    expect(run.combat!.pendingSelection).toBeUndefined();
+    expect(run.combat!.hand).toContain(candidates[1]!.instanceId);
+    expect(run.combat!.drawPile).toEqual([candidates[0]!.instanceId]);
+    expect(run.combat!.discardPile).toContain(drawCard.instanceId);
+  });
+
+  it('reshuffles the discard pile before an interactive draw when the draw pile is empty', () => {
+    let run = createRun('CHOOSE-DRAW-RESHUFFLE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:battery-pack')!;
+    const discarded = run.player.deck.find(
+      (card) => card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type === CardType.Attack,
+    )!;
+    run.combat!.hand = [drawCard.instanceId];
+    run.combat!.drawPile = [];
+    run.combat!.discardPile = [discarded.instanceId];
+
+    run = playCard(run, drawCard.instanceId);
+
+    expect(run.combat!.pendingSelection).toMatchObject({
+      kind: CombatSelectionKind.Draw,
+      candidateInstanceIds: [discarded.instanceId],
+      min: 1,
+      max: 1,
+    });
+    expect(run.combat!.discardPile).toEqual([drawCard.instanceId]);
+
+    run = resolveCombatSelection(run, [discarded.instanceId]);
+    expect(run.combat!.hand).toContain(discarded.instanceId);
+  });
+
+  it('resumes card effects after the interactive draw choice is resolved', () => {
+    let run = createRun('CHOOSE-DRAW-CONTINUATION');
+    equipItem(run, 'harlequin-baby');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:harlequin-baby')!;
+    const selected = run.player.deck.find(
+      (card) => card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type === CardType.Attack,
+    )!;
+    const target = run.combat!.enemies[0]!;
+    target.position = { x: 4, y: 4 };
+    target.footprintWidth = 1;
+    target.footprintHeight = 1;
+    target.hp = 100;
+    target.maxHp = 100;
+    target.armor = 0;
+    target.shield = 0;
+    run.combat!.hand = [drawCard.instanceId];
+    run.combat!.drawPile = [selected.instanceId];
+    run.combat!.discardPile = [];
+
+    run = playCard(run, drawCard.instanceId);
+
+    expect(run.combat!.pendingSelection?.kind).toBe(CombatSelectionKind.Draw);
+    expect(run.combat!.enemies[0]!.hp).toBe(100);
+
+    run = resolveCombatSelection(run, [selected.instanceId]);
+
+    expect(run.combat!.pendingSelection).toBeUndefined();
+    expect(run.combat!.enemies[0]!.hp).toBe(95);
+    expect(run.combat!.hand).toContain(selected.instanceId);
+  });
+
+  it('keeps exactly one active item card when a new active item replaces it', () => {
+    const run = createRun('ACTIVE-REPLACEMENT');
+
+    equipItem(run, 'yum-heart');
+
+    expect(run.player.activeItemId).toBe('yum-heart');
+    expect(run.player.items).toContain('yum-heart');
+    expect(run.player.items).not.toContain('d6');
+    expect(run.player.deck.some((card) => card.definitionId === 'skill-d6')).toBe(false);
+    expect(run.player.deck.filter((card) => CARDS[card.definitionId]?.type === CardType.Skill)).toEqual([
+      expect.objectContaining({ definitionId: 'skill-yum-heart' }),
+    ]);
   });
 
   it('makes The D6 transform every other Item card in hand without touching non-item cards', () => {

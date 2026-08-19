@@ -6,6 +6,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Added
 
+- Interactive draw-pile selection: explicit Draw effects now open the pile and let the player choose the requested cards instead of taking the top cards automatically.
 - Visible auto-save state, manual save, save-and-return controls, local page-exit preservation, and a main-menu Continue slot with seed/time details.
 - Serialized server-save requests, offline local-save fallback, save failure states, and a React warning before a new run replaces the Continue slot.
 - A reusable Isaac boss-attack archetype catalog with telegraphed spread, radial, spiral, laser, leap, stomp, charge, rock-wave, and projectile-rain grid resolvers.
@@ -44,6 +45,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- Automatic cycle effects now protect active-item cards, while player-selected discards still send them to the reusable discard pile.
+- Tarot cards now use a dedicated crimson-and-ivory surface distinct from every item-quality color, and attack damage calculations resolve in 500 ms.
+- Active-item cards can now be discarded and reshuffled within combat without unequipping them; acquiring another active item still replaces the previous item and keeps the one-active-card deck limit.
+- Player-facing collectible copy is now concise and omits adaptation/debug terminology, reward-pool metadata, and internal strength labels; active-card charge text is carried by the charge UI instead of repeated descriptions.
+- Item cards now use quality-coded gray, green, blue, purple, and gold surfaces for qualities 0–4; ordinary cards use an ivory-white surface and Tarot cards use a dedicated crimson-and-ivory treatment.
+- Isaac's starting deck is now a strict 15-card build: four attacks, four shields, four item cards (including The D6), two recovery cards, and one Tarot card; Battery Pack, Starter Deck, and The Common Cold add early draw, cycling, and status choices.
 - Combat bombs now deal 30 damage on the center cell, 20 on each cardinal neighbor, and 15 on each diagonal cell; multi-cell enemies accumulate the covered cell values.
 - Achievement completion is now shown inside the blocking room-reward reveal and then queued as a persistent, explicitly acknowledged notice; saved unacknowledged achievements reappear after resuming instead of expiring behind another overlay.
 - Resume selection now compares local and server snapshot timestamps instead of always preferring any stale local snapshot.
@@ -67,6 +74,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Performance
 
+- Combat input locking now follows Phaser's real queue-completion signal instead of summing duplicated duration guesses; large-room enemy movement/status effects run in four-unit waves and ordinary attacks in readable two-unit salvos, while boss attacks remain serial.
 - Animation and combat log buffers remain bounded, preventing snapshots from retaining an unlimited event history.
 - BFS pathfinding uses an index cursor rather than repeated `Array.shift()`, avoiding needless O(n) queue moves.
 - SQLite upserts replace full-file read/parse/rewrite cycles, and compressed snapshots reduce disk and API payload pressure.

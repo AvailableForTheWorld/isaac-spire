@@ -55,6 +55,20 @@ describe('full Isaac collectible content pack', () => {
     ).toBeGreaterThan(150);
   });
 
+  it('keeps runtime item and card copy free of implementation-facing adaptation text', () => {
+    const implementationCopy = /adapt(?:ed|ation)|action-driven|依据原作|根据原作|改编/i;
+    for (const item of Object.values(ITEMS)) {
+      expect(item.description, item.id).not.toMatch(implementationCopy);
+      expect(item.descriptionZh ?? '', item.id).not.toMatch(implementationCopy);
+      if (item.kind === ItemKind.Passive) {
+        expect(CARDS[passiveCardId(item.id)]?.description ?? '', item.id).not.toMatch(implementationCopy);
+      }
+      if (item.kind === ItemKind.Active) {
+        expect(CARDS[item.skillCardId!]?.description ?? '', item.id).not.toMatch(implementationCopy);
+      }
+    }
+  });
+
   it('maps every collectible to a card in the run or an explicit non-combat pocket exception', () => {
     const base = createRun('ALL-COLLECTIBLE-CARDS');
     for (const source of FULL_ISAAC_ITEM_MANIFEST) {

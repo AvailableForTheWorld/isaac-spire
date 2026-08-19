@@ -325,7 +325,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'The D6',
     type: CardType.Skill,
     cost: 3,
-    description: 'Reroll every other Item card in hand into a different Item card. Recharges in 3 rounds.',
+    description: 'Reroll every other Item card in hand.',
     target: CardTarget.None,
     icon: '⚅',
     quality: RewardQuality.Legendary,
@@ -336,7 +336,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'Yum Heart',
     type: CardType.Skill,
     cost: 2,
-    description: 'Recover 15 red-heart HP. Recharges in 4 rounds.',
+    description: 'Recover 15 red-heart HP.',
     target: CardTarget.Self,
     icon: '♥',
     quality: RewardQuality.Uncommon,
@@ -347,7 +347,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'Book of Belial',
     type: CardType.Skill,
     cost: 2,
-    description: 'Gain +1 damage for this room. Recharges in 3 rounds.',
+    description: 'Gain +1 damage for this room.',
     target: CardTarget.Self,
     icon: '✦',
     quality: RewardQuality.Rare,
@@ -358,7 +358,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'Book of Shadows',
     type: CardType.Skill,
     cost: 2,
-    description: 'Gain 12 shield. Recharges in 3 rounds.',
+    description: 'Gain 12 shield.',
     target: CardTarget.Self,
     icon: '◈',
     quality: RewardQuality.Rare,
@@ -369,7 +369,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: "Tammy's Head",
     type: CardType.Skill,
     cost: 2,
-    description: 'Deal attack damage to all enemies. Recharges in 3 rounds.',
+    description: 'Deal attack damage to all enemies.',
     target: CardTarget.AllEnemies,
     icon: '✺',
     quality: RewardQuality.Uncommon,
@@ -386,7 +386,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'The Nail',
     type: CardType.Skill,
     cost: 3,
-    description: 'Gain a black heart and +1 armor this room. Recharges in 6 rounds.',
+    description: 'Gain a black heart and +1 armor this room.',
     target: CardTarget.Self,
     icon: '†',
     quality: RewardQuality.Rare,
@@ -397,7 +397,7 @@ export const CARDS: Record<string, CardDefinition> = {
     name: 'Glowing Hour Glass',
     type: CardType.Skill,
     cost: 3,
-    description: 'All enemies lose their next action. Recharges in 6 rounds.',
+    description: 'All enemies lose their next action.',
     target: CardTarget.AllEnemies,
     icon: '⌛',
     quality: RewardQuality.Rare,
@@ -894,13 +894,7 @@ for (const item of Object.values(ITEMS).filter((entry) => entry.kind === ItemKin
     icon: item.icon,
     quality: item.quality,
     rewardPools: [...item.pool],
-    description: `${PASSIVE_CARD_TEXT[item.id] ?? item.description} ${
-      itemUsesCombatCard(item)
-        ? item.timing === ItemUseTiming.CombatOnce
-          ? 'Usable once per combat.'
-          : 'Reusable after the discard pile is reshuffled.'
-        : 'Takes effect when acquired and stays in the item rail.'
-    }`,
+    description: PASSIVE_CARD_TEXT[item.id] ?? item.description,
     effects: item.cardEffects,
   };
 }
@@ -920,7 +914,7 @@ for (const item of Object.values(ITEMS).filter(
     icon: item.icon,
     quality: item.quality,
     rewardPools: [...item.pool],
-    description: `${item.description} Recharges in ${item.chargeRounds ?? 3} rounds.`,
+    description: item.description,
     effects: item.cardEffects,
   };
 }

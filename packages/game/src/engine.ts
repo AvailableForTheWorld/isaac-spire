@@ -1155,6 +1155,38 @@ function drawToHand(run: RunState, combat: CombatState, target = run.player.stat
   }
 }
 
+function queueDrawSelection(
+  run: RunState,
+  combat: CombatState,
+  sourceInstanceId: string,
+  amount: number,
+): number {
+  const requested = Math.max(1, Math.round(amount));
+  const existing =
+    combat.pendingSelection?.kind === CombatSelectionKind.Draw ? combat.pendingSelection : undefined;
+  const totalRequested = requested + (existing?.max ?? 0);
+  if (combat.drawPile.length < totalRequested && combat.discardPile.length) {
+    combat.drawPile.push(...shuffle(run, combat.discardPile));
+    combat.discardPile = [];
+  }
+  const selectable = Math.min(totalRequested, combat.drawPile.length);
+  if (selectable <= 0) return 0;
+  if (existing) {
+    existing.candidateInstanceIds = [...combat.drawPile];
+    existing.min = selectable;
+    existing.max = selectable;
+  } else {
+    combat.pendingSelection = {
+      kind: CombatSelectionKind.Draw,
+      sourceInstanceId,
+      candidateInstanceIds: [...combat.drawPile],
+      min: selectable,
+      max: selectable,
+    };
+  }
+  return selectable;
+}
+
 function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite | RoomKind.Boss): void {
   const generatedLayout = createCombatRoomLayout(run, roomKind);
   const definitions = encounterDefinitions(run, roomKind, generatedLayout);
@@ -1505,7 +1537,7 @@ function rerollHandCards(
 
 function cycleCards(run: RunState, combat: CombatState, sourceInstanceId: string, amount: number): number {
   const candidates = combat.hand
-    .filter((id) => id !== sourceInstanceId)
+    .filter((id) => id !== sourceInstanceId && getCardDefinition(run, id)?.type !== CardType.Skill)
     .sort((left, right) => {
       const leftType = getCardDefinition(run, left)?.type;
       const rightType = getCardDefinition(run, right)?.type;
@@ -1550,7 +1582,8 @@ function applyCardEffects(
   sourceInstanceId: string,
   targetId?: string,
 ): void {
-  for (const effect of effects) {
+  for (let effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
+    const effect = effects[effectIndex]!;
     const scale = effectScale(combat, effect.opcode);
     const amount = (effect.amount ?? 0) * scale;
     const turns = Math.max(0, Math.round((effect.turns ?? 0) * scale));
@@ -1614,7 +1647,11 @@ function applyCardEffects(
         if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
         break;
       case CardEffectOpcode.Draw:
-        drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round(amount)));
+        if (queueDrawSelection(run, combat, sourceInstanceId, amount) > 0) {
+          combat.pendingSelection!.remainingEffects = effects.slice(effectIndex + 1);
+          combat.pendingSelection!.targetId = targetId;
+          return;
+        }
         break;
       case CardEffectOpcode.Cycle:
         cycleCards(run, combat, sourceInstanceId, Math.max(1, Math.round(amount)));
@@ -2217,6 +2254,7 @@ function playPassiveItemCard(
   if (!combat.usedPassiveItems.includes(item.id)) combat.usedPassiveItems.push(item.id);
   let shieldGained = 0;
   let healed = 0;
+  let cardsToChoose = 0;
   const scale = combat.damoclesActive && !combat.damoclesFallen && item.id !== 'damocles' ? 2 : 1;
   for (const effect of item.effects ?? []) {
     if (effect.stat === 'baseDamage') combat.playerDamageBuff += (effect.amount ?? 0) * scale;
@@ -2227,8 +2265,7 @@ function playPassiveItemCard(
     if (effect.stat === 'critChance') combat.playerCritChanceBuff += (effect.amount ?? 0) * scale;
     if (effect.stat === 'attackRange') combat.playerRangeBuff += (effect.amount ?? 0) * scale;
     if (effect.stat === 'movementSpeed') combat.playerMovementBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'drawCount')
-      drawToHand(run, combat, combat.hand.length + Math.max(1, Math.round((effect.amount ?? 1) * scale)));
+    if (effect.stat === 'drawCount') cardsToChoose += (effect.amount ?? 1) * scale;
     if (effect.stat === 'baseShield') shieldGained += (effect.amount ?? 0) * scale;
     if (effect.stat === 'shopDiscount') run.player.coins += 2 * scale;
     if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
@@ -2245,6 +2282,7 @@ function playPassiveItemCard(
       targetId,
     });
   }
+  if (cardsToChoose > 0) queueDrawSelection(run, combat, instanceId, cardsToChoose);
   if (shieldGained > 0) {
     combat.playerShield += shieldGained;
     pushAnimation(combat, {
@@ -2421,7 +2459,7 @@ export function playFusedAttack(
       combat.discardPile.push(instanceId);
     }
   }
-  if (allEnemiesDefeated(combat)) finishCombat(run);
+  if (allEnemiesDefeated(combat) && !combat.pendingSelection) finishCombat(run);
   return touch(run);
 }
 
@@ -2765,7 +2803,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     }
     delete combat.cardDefinitionOverrides[instanceId];
   }
-  if (allEnemiesDefeated(combat)) finishCombat(run);
+  if (allEnemiesDefeated(combat) && !combat.pendingSelection) finishCombat(run);
   return touch(run);
 }
 
@@ -2780,6 +2818,31 @@ export function resolveCombatSelection(state: RunState, selectedInstanceIds: rea
   }
   if (selected.some((id) => !pending.candidateInstanceIds.includes(id))) {
     throw new Error('A selected card is not available');
+  }
+
+  if (pending.kind === CombatSelectionKind.Draw) {
+    for (const selectedId of selected) {
+      const drawIndex = combat.drawPile.indexOf(selectedId);
+      if (drawIndex < 0) throw new Error('A selected draw card is no longer available');
+      combat.drawPile.splice(drawIndex, 1);
+      combat.hand.push(selectedId);
+    }
+    const remainingEffects = pending.remainingEffects ?? [];
+    const continuationTargetId = pending.targetId;
+    combat.pendingSelection = undefined;
+    pushLog(
+      combat,
+      `Chose ${selected.length} card${selected.length === 1 ? '' : 's'} from the draw pile.`,
+      CombatLogTone.Special,
+      'chosenDraw',
+      { count: selected.length },
+    );
+    if (remainingEffects.length) {
+      applyCardEffects(run, combat, remainingEffects, pending.sourceInstanceId, continuationTargetId);
+    }
+    notifyNewEnemyDeaths(run);
+    if (allEnemiesDefeated(combat) && !combat.pendingSelection) finishCombat(run);
+    return touch(run);
   }
 
   if (pending.kind === CombatSelectionKind.BlankImitation) {
@@ -2858,31 +2921,9 @@ export function discardCard(state: RunState, instanceId: string): RunState {
   if (run.phase !== RunPhase.Discard || !run.combat) throw new Error('Not choosing discards');
   const instance = getCard(run, instanceId);
   if (!instance) throw new Error('Unknown card');
-  const definition = CARDS[instance.definitionId];
   if (!run.combat.hand.includes(instanceId)) throw new Error('Card is not in hand');
   run.combat.hand = run.combat.hand.filter((id) => id !== instanceId);
-  if (definition?.type === CardType.Skill) {
-    const item = Object.values(ITEMS).find((entry) => entry.skillCardId === instance.definitionId);
-    run.combat.exhausted.push(instanceId);
-    run.player.deck = run.player.deck.filter((card) => card.instanceId !== instanceId);
-    if (item) {
-      run.player.items = run.player.items.filter((id) => id !== item.id);
-      if (run.player.activeItemId === item.id) run.player.activeItemId = undefined;
-    }
-    delete run.combat.cooldowns[instanceId];
-    pushLog(
-      run.combat,
-      `${item?.name ?? definition.name} was discarded and is gone.`,
-      CombatLogTone.Danger,
-      'activeDiscarded',
-      {
-        itemId: item?.id ?? '',
-        cardId: definition.id,
-      },
-    );
-  } else {
-    run.combat.discardPile.push(instanceId);
-  }
+  run.combat.discardPile.push(instanceId);
   pushAnimation(run.combat, {
     kind: CombatAnimationKind.CardDiscard,
     sourceId: 'isaac',

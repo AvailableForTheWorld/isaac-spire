@@ -21,6 +21,7 @@ import {
   itemDescription,
   itemName,
 } from '../../../localize';
+import { cardAppearanceClass, itemForCard } from '../../cards/cardAppearance';
 import { CombatCardMode, CombatPileKind } from '../combat-ui.enums';
 
 export function CardView({
@@ -59,15 +60,13 @@ export function CardView({
   const playable = directPlayable.ok || fusionStarter ? { ok: true } : directPlayable;
   const cooldown = run.combat?.cooldowns[instance.instanceId] ?? 0;
   const isSkill = definition.type === CardType.Skill;
-  const item = definition.itemId
-    ? ITEMS[definition.itemId]
-    : Object.values(ITEMS).find((entry) => entry.skillCardId === definition.id);
+  const item = itemForCard(definition);
   const maxCharge = isSkill && item ? Math.max(1, (item.chargeRounds ?? 3) - (instance.upgraded ? 1 : 0)) : 0;
   const charge = Math.max(0, maxCharge - cooldown);
   const disabled = locked || (mode === CombatCardMode.Play ? !playable.ok : false);
   return (
     <button
-      className={`game-card ${definition.type} ${instance.upgraded ? 'upgraded' : ''} ${targeting ? 'targeting' : ''} ${animating ? (mode === CombatCardMode.Discard ? 'discarding-out' : 'playing-out') : ''}`}
+      className={`game-card ${definition.type} ${cardAppearanceClass(definition, item)} ${instance.upgraded ? 'upgraded' : ''} ${targeting ? 'targeting' : ''} ${animating ? (mode === CombatCardMode.Discard ? 'discarding-out' : 'playing-out') : ''}`}
       style={{ '--card-index': index } as CSSProperties}
       disabled={disabled}
       onClick={mode === CombatCardMode.Play ? onPlay : onDiscard}
@@ -92,9 +91,6 @@ export function CardView({
         <small>
           {cooldown > 0 ? t('combat.recharging', { rounds: cooldown }) : t('combat.activeRetained')}
         </small>
-      )}
-      {isSkill && mode === CombatCardMode.Discard && (
-        <small className="active-loss">{t('combat.activeDiscardWarning')}</small>
       )}
       {definition.exhaust && <small>{t('combat.oneOff')}</small>}
       {isSkill && item && (
@@ -163,8 +159,12 @@ export function PileViewer({
         <div className="pile-card-grid">
           {cards.map((instance, index) => {
             const definition = getCardDefinition(run, instance.instanceId);
+            const item = definition ? itemForCard(definition) : undefined;
             return definition ? (
-              <article className={`pile-card ${definition.type}`} key={instance.instanceId}>
+              <article
+                className={`pile-card ${definition.type} ${cardAppearanceClass(definition, item)}`}
+                key={instance.instanceId}
+              >
                 <span>{index + 1}</span>
                 <b>{definition.icon}</b>
                 <strong>{cardName(t, definition.id)}</strong>
@@ -196,13 +196,17 @@ export function CombatCardSelectionModal({
   const [selected, setSelected] = useState<string[]>([]);
   if (!pending) return null;
   const title =
-    pending.kind === CombatSelectionKind.Transposition
-      ? t('combatSelection.transpositionTitle')
-      : t('combatSelection.blankTitle');
+    pending.kind === CombatSelectionKind.Draw
+      ? t('combatSelection.drawTitle', { count: pending.max })
+      : pending.kind === CombatSelectionKind.Transposition
+        ? t('combatSelection.transpositionTitle')
+        : t('combatSelection.blankTitle');
   const hint =
-    pending.kind === CombatSelectionKind.Transposition
-      ? t('combatSelection.transpositionHint')
-      : t('combatSelection.blankHint');
+    pending.kind === CombatSelectionKind.Draw
+      ? t('combatSelection.drawHint', { count: pending.max })
+      : pending.kind === CombatSelectionKind.Transposition
+        ? t('combatSelection.transpositionHint')
+        : t('combatSelection.blankHint');
   const toggle = (instanceId: string) => {
     setSelected((current) => {
       if (current.includes(instanceId)) return current.filter((id) => id !== instanceId);
@@ -234,13 +238,18 @@ export function CombatCardSelectionModal({
           {pending.candidateInstanceIds.map((instanceId) => {
             const definition = getCardDefinition(run, instanceId);
             if (!definition) return null;
+            const item = itemForCard(definition);
             const active = selected.includes(instanceId);
             return (
               <button
                 type="button"
-                className={`pile-card ${definition.type} ${active ? 'selected' : ''}`}
+                className={`pile-card ${definition.type} ${cardAppearanceClass(definition, item)} ${active ? 'selected' : ''}`}
                 key={instanceId}
-                onClick={() => toggle(instanceId)}
+                onClick={() =>
+                  pending.kind === CombatSelectionKind.Draw && pending.max === 1
+                    ? onResolve([instanceId])
+                    : toggle(instanceId)
+                }
               >
                 <b>{definition.icon}</b>
                 <strong>{cardName(t, definition.id)}</strong>
@@ -253,21 +262,23 @@ export function CombatCardSelectionModal({
             );
           })}
         </div>
-        <footer>
-          {pending.min === 0 && (
-            <button type="button" className="text-button" onClick={onCancel}>
-              {t('confirmation.cancel')}
+        {!(pending.kind === CombatSelectionKind.Draw && pending.max === 1) && (
+          <footer>
+            {pending.min === 0 && (
+              <button type="button" className="text-button" onClick={onCancel}>
+                {t('confirmation.cancel')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="primary-button"
+              disabled={selected.length < pending.min || selected.length > pending.max}
+              onClick={() => onResolve(selected)}
+            >
+              {t('combatSelection.confirm', { count: selected.length })}
             </button>
-          )}
-          <button
-            type="button"
-            className="primary-button"
-            disabled={selected.length < pending.min || selected.length > pending.max}
-            onClick={() => onResolve(selected)}
-          >
-            {t('combatSelection.confirm', { count: selected.length })}
-          </button>
-        </footer>
+          </footer>
+        )}
       </section>
     </div>
   );

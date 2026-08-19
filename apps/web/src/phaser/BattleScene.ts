@@ -12,6 +12,7 @@ import {
   type EnemyState,
   type RunState,
 } from '@isaac-spire/game';
+import { takeNextCombatAnimationBatch } from './combatAnimationQueue';
 
 interface BattleLabels {
   round: string;
@@ -38,6 +39,11 @@ interface ActorVisual {
   footprintHeight: number;
 }
 
+export enum BattleSceneEvent {
+  RunSync = 'battle-scene:run-sync',
+  AnimationStateChange = 'battle-scene:animation-state-change',
+}
+
 export class BattleScene extends Phaser.Scene {
   private gridLeft = 42;
   private gridTop = 48;
@@ -59,10 +65,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.game.events.on('run-sync', this.syncRun, this);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () =>
-      this.game.events.off('run-sync', this.syncRun, this),
-    );
+    this.game.events.on(BattleSceneEvent.RunSync, this.syncRun, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.events.off(BattleSceneEvent.RunSync, this.syncRun, this);
+      this.setPlayingEvents(false);
+    });
     this.syncRun();
   }
 
@@ -78,7 +85,7 @@ export class BattleScene extends Phaser.Scene {
       this.currentCombatId = combatId;
       this.lastSequence = newestSequence;
       this.queuedEvents = [];
-      this.playingEvents = false;
+      this.setPlayingEvents(false);
       this.renderRun(run);
       return;
     }
@@ -96,15 +103,21 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private async playNextEvent(): Promise<void> {
-    const event = this.queuedEvents.shift();
-    if (!event) {
-      this.playingEvents = false;
+    const events = takeNextCombatAnimationBatch(this.queuedEvents);
+    if (!events.length) {
+      this.setPlayingEvents(false);
       if (this.latestRun?.combat) this.renderRun(this.latestRun);
       return;
     }
-    this.playingEvents = true;
-    await this.animateEvent(event);
+    this.setPlayingEvents(true);
+    await Promise.all(events.map((event, index) => this.animateEvent(event, index, events.length)));
     await this.playNextEvent();
+  }
+
+  private setPlayingEvents(playing: boolean): void {
+    if (this.playingEvents === playing) return;
+    this.playingEvents = playing;
+    this.game.events.emit(BattleSceneEvent.AnimationStateChange, playing);
   }
 
   private renderRun(run: RunState): void {
@@ -327,7 +340,7 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private async animateEvent(event: CombatAnimationEvent): Promise<void> {
+  private async animateEvent(event: CombatAnimationEvent, batchIndex = 0, batchSize = 1): Promise<void> {
     switch (event.kind) {
       case CombatAnimationKind.CardPlay:
         await this.animateCard(event, false);
@@ -354,7 +367,7 @@ export class BattleScene extends Phaser.Scene {
         await this.animatePlayerAttack(event);
         break;
       case CombatAnimationKind.EnemyAttack:
-        await this.animateEnemyAttack(event);
+        await this.animateEnemyAttack(event, batchIndex, batchSize);
         break;
       case CombatAnimationKind.Shield:
         await this.animateShield(event);
@@ -744,10 +757,16 @@ export class BattleScene extends Phaser.Scene {
     await this.impact(target, event.value ?? 0, 0x81c46c);
   }
 
-  private async animateEnemyAttack(event: CombatAnimationEvent): Promise<void> {
+  private async animateEnemyAttack(
+    event: CombatAnimationEvent,
+    batchIndex: number,
+    batchSize: number,
+  ): Promise<void> {
     const source = this.actor(event.sourceId);
     const target = this.actor('isaac');
     if (!source || !target) return;
+    if (batchSize > 1 && batchIndex > 0) await this.wait(batchIndex * 120);
+    const labelOffsetX = (batchIndex - (batchSize - 1) / 2) * 92;
     await this.animateBossPattern(event, source);
     this.tweens.add({
       targets: source.parts,
@@ -806,8 +825,14 @@ export class BattleScene extends Phaser.Scene {
       miss.destroy();
       return;
     }
-    if ((event.armorValue ?? 0) > 0) await this.animateArmorBlock(target, event.armorValue ?? 0);
-    if ((event.secondaryValue ?? 0) > 0) await this.animateShieldLoss(target, event.secondaryValue ?? 0);
+    await Promise.all([
+      (event.armorValue ?? 0) > 0
+        ? this.animateArmorBlock(target, event.armorValue ?? 0, labelOffsetX)
+        : Promise.resolve(),
+      (event.secondaryValue ?? 0) > 0
+        ? this.animateShieldLoss(target, event.secondaryValue ?? 0, labelOffsetX)
+        : Promise.resolve(),
+    ]);
     await this.impact(
       target,
       event.value ?? 0,
@@ -815,6 +840,7 @@ export class BattleScene extends Phaser.Scene {
       event.secondaryValue ?? 0,
       event.armorValue ?? 0,
       event.rawValue,
+      labelOffsetX,
     );
     if ((event.value ?? 0) > 0) this.bloodDrop(target, event.value ?? 0);
   }
@@ -925,7 +951,7 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private async animateArmorBlock(target: ActorVisual, amount: number): Promise<void> {
+  private async animateArmorBlock(target: ActorVisual, amount: number, labelOffsetX = 0): Promise<void> {
     const plate = this.add
       .text(target.x - 36, target.y - 10, '⛉', {
         fontFamily: 'Georgia, serif',
@@ -939,14 +965,19 @@ export class BattleScene extends Phaser.Scene {
       .setAngle(-12);
     const labelPosition = this.floatingLabelPosition(target.y, 70);
     const label = this.add
-      .text(target.x, labelPosition.y, `${this.labels()?.armorBlocked ?? 'ARMOR'}  −${amount}`, {
-        fontFamily: 'Arial, sans-serif',
-        fontSize: '14px',
-        fontStyle: 'bold',
-        color: '#f0ce86',
-        stroke: '#34250f',
-        strokeThickness: 4,
-      })
+      .text(
+        target.x + labelOffsetX,
+        labelPosition.y,
+        `${this.labels()?.armorBlocked ?? 'ARMOR'}  −${amount}`,
+        {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '14px',
+          fontStyle: 'bold',
+          color: '#f0ce86',
+          stroke: '#34250f',
+          strokeThickness: 4,
+        },
+      )
       .setOrigin(0.5);
     const labelTween = this.tween(label, {
       y: label.y + labelPosition.drift,
@@ -962,18 +993,23 @@ export class BattleScene extends Phaser.Scene {
     plate.destroy();
   }
 
-  private async animateShieldLoss(target: ActorVisual, amount: number): Promise<void> {
+  private async animateShieldLoss(target: ActorVisual, amount: number, labelOffsetX = 0): Promise<void> {
     const ring = this.add.circle(target.x, target.y, 56, 0x78d6e8, 0.08).setStrokeStyle(7, 0x9be8f2, 0.88);
     const labelPosition = this.floatingLabelPosition(target.y, 56);
     const label = this.add
-      .text(target.x + 42, labelPosition.y, `${this.labels()?.shieldBlocked ?? 'SHIELD'}  −${amount}`, {
-        fontFamily: 'Arial, sans-serif',
-        fontSize: '13px',
-        fontStyle: 'bold',
-        color: '#a9ecf4',
-        stroke: '#173b43',
-        strokeThickness: 4,
-      })
+      .text(
+        target.x + 42 + labelOffsetX,
+        labelPosition.y,
+        `${this.labels()?.shieldBlocked ?? 'SHIELD'}  −${amount}`,
+        {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '13px',
+          fontStyle: 'bold',
+          color: '#a9ecf4',
+          stroke: '#173b43',
+          strokeThickness: 4,
+        },
+      )
       .setOrigin(0.5);
     for (let index = 0; index < 6; index += 1) {
       const shard = this.add.triangle(target.x, target.y, 0, 0, 7, 2, 2, 8, 0x8be1ed, 0.9);
@@ -1041,6 +1077,7 @@ export class BattleScene extends Phaser.Scene {
     shieldDamage = 0,
     armorDamage = 0,
     rawValue?: number,
+    labelOffsetX = 0,
   ): Promise<void> {
     this.cameras.main.shake(120, 0.008);
     const burst = this.add.circle(target.x, target.y, 22, color, 0.45).setStrokeStyle(4, color, 0.9);
@@ -1055,7 +1092,7 @@ export class BattleScene extends Phaser.Scene {
       : `⚔ ${rawValue}  −  ⛉ ${armorDamage}  −  ⬡ ${shieldDamage}\n${value > 0 ? `${this.labels()?.hpDamage ?? 'HP DAMAGE'}  −${value}` : (this.labels()?.noHeartDamage ?? 'NO HEART DAMAGE')}`;
     const damagePosition = this.floatingLabelPosition(target.y, 62);
     const damage = this.add
-      .text(target.x, damagePosition.y, damageLabel, {
+      .text(target.x + labelOffsetX, damagePosition.y, damageLabel, {
         fontFamily: 'Arial, sans-serif',
         fontSize: detailed ? '17px' : '18px',
         fontStyle: 'bold',
@@ -1066,7 +1103,7 @@ export class BattleScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setDepth(60);
-    const calculationDuration = detailed ? 1300 : 850;
+    const calculationDuration = 500;
     await Promise.all([
       this.tween(damage, {
         y: damage.y + damagePosition.drift,

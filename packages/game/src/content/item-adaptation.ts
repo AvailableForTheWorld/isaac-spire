@@ -5,7 +5,7 @@ import {
   CardTarget,
   ItemEffectFamily,
   ItemKind,
-  ItemMechanic,
+  type ItemMechanic,
   ItemTrait,
   ItemUseTiming,
   RewardPool,
@@ -42,28 +42,6 @@ const FAMILY_ICONS: Record<ItemEffectFamily, string> = {
   [ItemEffectFamily.Draw]: '▤',
   [ItemEffectFamily.Cycle]: '↻',
   [ItemEffectFamily.Wildcard]: '✺',
-};
-
-const MECHANIC_LABELS: Record<ItemMechanic, { en: string; zh: string }> = {
-  [ItemMechanic.Attack]: { en: 'damage', zh: '伤害' },
-  [ItemMechanic.AttackPattern]: { en: 'attack pattern', zh: '攻击形态' },
-  [ItemMechanic.FireRate]: { en: 'fire rate', zh: '射速' },
-  [ItemMechanic.Familiar]: { en: 'familiar', zh: '跟班' },
-  [ItemMechanic.Defense]: { en: 'defense', zh: '防御' },
-  [ItemMechanic.Health]: { en: 'health', zh: '生命' },
-  [ItemMechanic.Movement]: { en: 'movement', zh: '移动' },
-  [ItemMechanic.Range]: { en: 'range', zh: '射程' },
-  [ItemMechanic.Status]: { en: 'status', zh: '状态' },
-  [ItemMechanic.Bomb]: { en: 'bombs', zh: '炸弹' },
-  [ItemMechanic.Resource]: { en: 'pickups', zh: '资源' },
-  [ItemMechanic.Economy]: { en: 'economy', zh: '经济' },
-  [ItemMechanic.Map]: { en: 'map control', zh: '地图控制' },
-  [ItemMechanic.Reroll]: { en: 'rerolls', zh: '重置' },
-  [ItemMechanic.Deck]: { en: 'card flow', zh: '牌序' },
-  [ItemMechanic.RoomControl]: { en: 'room control', zh: '房间控制' },
-  [ItemMechanic.Revival]: { en: 'revival', zh: '复活' },
-  [ItemMechanic.RiskReward]: { en: 'risk and reward', zh: '风险收益' },
-  [ItemMechanic.Wildcard]: { en: 'variable effects', zh: '随机效果' },
 };
 
 const ATTACK_MODE_LABELS: Record<AttackMode, { en: string; zh: string }> = {
@@ -366,15 +344,7 @@ function timingFor(entry: IsaacItemManifestEntry): ItemUseTiming {
   return ItemUseTiming.CombatCard;
 }
 
-function effectDescription(
-  entry: IsaacItemManifestEntry,
-  effects: CardEffect[],
-  language: 'en' | 'zh',
-): string {
-  const mechanicText = entry.mechanics
-    .slice(0, 3)
-    .map((mechanic) => MECHANIC_LABELS[mechanic][language])
-    .join(language === 'zh' ? '、' : ', ');
+function effectDescription(effects: CardEffect[], language: 'en' | 'zh'): string {
   const rendered = effects
     .map((effect) => {
       const amount = effect.amount ?? 0;
@@ -410,7 +380,7 @@ function effectDescription(
           case CardEffectOpcode.DamageAll:
             return `对所有敌人造成 ${amount} 点伤害`;
           case CardEffectOpcode.ApplyStatus:
-            return `施加 ${turns} 层${effect.status ? STATUS_LABELS[effect.status].zh : '状态'}`;
+            return `${effect.status ? STATUS_LABELS[effect.status].zh : '负面状态'} ${turns} 回合`;
           case CardEffectOpcode.GainCoins:
             return `获得 ${amount} 枚硬币`;
           case CardEffectOpcode.GainBombs:
@@ -475,9 +445,8 @@ function effectDescription(
       }
     })
     .join(language === 'zh' ? '；' : '; ');
-  return language === 'zh'
-    ? `依据原作的${mechanicText || '特殊'}机制改编：${rendered}。`
-    : `Adapted from its ${mechanicText || 'special'} mechanics: ${rendered}.`;
+  if (language === 'zh') return `${rendered}。`;
+  return `${rendered.charAt(0).toUpperCase()}${rendered.slice(1)}.`;
 }
 
 export function adaptIsaacItem(entry: IsaacItemManifestEntry): ItemDefinition {
@@ -491,8 +460,8 @@ export function adaptIsaacItem(entry: IsaacItemManifestEntry): ItemDefinition {
     nameZh: entry.nameZh,
     kind: entry.kind,
     pool: entry.pools.length ? [...entry.pools] : [RewardPool.Treasure],
-    description: effectDescription(entry, cardEffects, 'en'),
-    descriptionZh: effectDescription(entry, cardEffects, 'zh'),
+    description: effectDescription(cardEffects, 'en'),
+    descriptionZh: effectDescription(cardEffects, 'zh'),
     icon: FAMILY_ICONS[entry.family],
     quality: entry.quality,
     timing,
