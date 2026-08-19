@@ -1,15 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy } from './catalog.js';
+import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy, itemUsesCombatCard } from './catalog.js';
 import {
-  canPlayCard, canPlayFusedAttack, chooseOption, confirmPlayerDeployment, createRun, discardCard, endTurn, enterRoom, finishDiscard,
-  getAttackFusionMaterialIds, getAttackFusionPreview, getAvailableNodes, getEnemyMovementSpeed, getEnemyOccupiedCells, getPlayerDeploymentCells, getPlayerMovementSpeed, getReachablePlayerCells, hydrateRunState,
-  isPlayerInEnemyVision, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice,
+  canPlayCard, canPlayFusedAttack, chooseOption, confirmPlayerDeployment, createRun as createRunWithFloorChoice, DEFAULT_COMBAT_ROOM_LAYOUT, discardCard, endTurn, enterRoom, finishDiscard,
+  getAttackFusionMaterialIds, getAttackFusionPreview, getAvailableNodes, getCombatRoomCells, getEnemyMovementSpeed, getEnemyOccupiedCells, getPlayerDeploymentCells, getPlayerMovementSpeed, getReachablePlayerCells, hydrateRunState,
+  isPlayerInEnemyVision, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice, useCombatBomb, useMapBomb,
 } from './engine.js';
+import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
 
-function settleChoice(run: ReturnType<typeof createRun>) {
+function createRun(seed?: string, unlockedItemIds = DEFAULT_UNLOCKS) {
+  const run = createRunWithFloorChoice(seed, unlockedItemIds);
+  if (run.choice?.rewardContext !== 'floor-start') return run;
+  const resource = run.choice.options.find((option) => option.type === 'resource')!;
+  return chooseOption(run, resource.id);
+}
+
+function settleChoice(run: ReturnType<typeof createRun>, onChoice?: (choiceRun: ReturnType<typeof createRun>) => void) {
   let next = run;
   while (next.phase === 'choice') {
+    onChoice?.(next);
     const choice = next.choice!;
     if (choice.kind === 'shop') {
       next = chooseOption(next, choice.options.find((option) => option.action === 'leave')!.id);
@@ -32,7 +41,7 @@ function instantlyWinCombat(run: ReturnType<typeof createRun>) {
     enemy.shield = 0;
     enemy.armor = 0;
   });
-  target.position = { x: 4, y: 4 };
+  target.position = { x: combat.playerPosition.x + 4, y: combat.playerPosition.y };
   const attack = run.player.deck.find((card) => CARDS[card.definitionId]?.type === 'attack')!;
   combat.hand = combat.hand.filter((id) => id !== attack.instanceId);
   combat.hand.push(attack.instanceId);
@@ -44,6 +53,36 @@ function instantlyWinCombat(run: ReturnType<typeof createRun>) {
 }
 
 describe('run generation', () => {
+  it('offers a combat item card, a permanent stat item, and an asset pack at floor entry', () => {
+    // A legacy profile may only remember The D6; baseline, non-event items must still fill all three slots.
+    const run = createRunWithFloorChoice('FLOOR-START-REWARDS', ['d6']);
+    expect(run).toMatchObject({ phase: 'choice', floorIndex: 0 });
+    expect(run.choice).toMatchObject({ kind: 'loot', rewardContext: 'floor-start', canSkip: false, next: 'map' });
+    expect(run.choice!.options).toHaveLength(3);
+
+    const combatOption = run.choice!.options.find((option) => option.itemId && itemUsesCombatCard(ITEMS[option.itemId]!))!;
+    const permanentOption = run.choice!.options.find((option) => option.itemId && ITEMS[option.itemId]?.pool.includes('large-room'))!;
+    const resourceOption = run.choice!.options.find((option) => option.type === 'resource')!;
+    expect(ITEMS[combatOption.itemId!]!.kind).toBe('passive');
+    expect(ITEMS[permanentOption.itemId!]!.combatCard).toBe(false);
+    expect(['coins', 'bombs', 'keys']).toContain(resourceOption.resource);
+
+    const withCombatItem = chooseOption(run, combatOption.id);
+    expect(withCombatItem.phase).toBe('map');
+    expect(withCombatItem.player.items).toContain(combatOption.itemId);
+    expect(withCombatItem.player.deck.some((card) => card.definitionId === `item:${combatOption.itemId}`)).toBe(true);
+
+    const deckSize = run.player.deck.length;
+    const withPermanentItem = chooseOption(run, permanentOption.id);
+    expect(withPermanentItem.player.items).toContain(permanentOption.itemId);
+    expect(withPermanentItem.player.deck).toHaveLength(deckSize);
+
+    const resourceKey = resourceOption.resource as 'coins' | 'bombs' | 'keys';
+    const beforeResource = run.player[resourceKey];
+    const withResource = chooseOption(run, resourceOption.id);
+    expect(withResource.player[resourceKey]).toBe(beforeResource + resourceOption.amount!);
+  });
+
   it('creates a deterministic six-floor first-run Isaac build', () => {
     const left = createRun('MOM-1001', DEFAULT_UNLOCKS);
     const right = createRun('MOM-1001', DEFAULT_UNLOCKS);
@@ -56,6 +95,50 @@ describe('run generation', () => {
     expect(left.player.stats.attackRange).toBe(5);
     expect(left.player.deck).toHaveLength(14);
     expect(left.player.activeItemId).toBe('d6');
+  });
+
+  it('builds seeded route layouts with calm stretches, real branches, and no unreachable rooms', () => {
+    const routeSignatures = new Set<string>();
+    const curveDirections = new Set<number>();
+    for (let index = 0; index < 12; index += 1) {
+      const run = createRun(`ROUTE-LAYOUT-${index}`);
+      const mainNodes = run.floorMap.nodes.filter((node) => !node.optional);
+      routeSignatures.add(JSON.stringify(mainNodes.map((node) => [node.mapPosition, node.connections])));
+
+      const reachable = new Set([run.floorMap.currentNodeId]);
+      const queue = [run.floorMap.currentNodeId];
+      while (queue.length) {
+        const id = queue.shift()!;
+        const node = mainNodes.find((entry) => entry.id === id)!;
+        for (const targetId of node.connections) {
+          if (reachable.has(targetId)) continue;
+          reachable.add(targetId);
+          queue.push(targetId);
+        }
+      }
+      expect(reachable.size).toBe(mainNodes.length);
+
+      const transitionalNodes = mainNodes.filter((node) => node.depth >= 1 && node.depth <= 5);
+      expect(transitionalNodes.some((node) => node.connections.length > 1)).toBe(true);
+      expect(Array.from({ length: 5 }, (_, depthIndex) => depthIndex + 1).some((depth) => {
+        const row = transitionalNodes.filter((node) => node.depth === depth);
+        return row.every((node) => node.connections.length === 1
+          && mainNodes.find((target) => target.id === node.connections[0])?.lane === node.lane);
+      })).toBe(true);
+
+      for (let depth = 1; depth <= 6; depth += 1) {
+        const rowX = mainNodes.filter((node) => node.depth === depth).map((node) => node.mapPosition!.x).sort((a, b) => a - b);
+        expect(rowX[1]! - rowX[0]!).toBeGreaterThan(18);
+        expect(rowX[2]! - rowX[1]!).toBeGreaterThan(18);
+      }
+      for (const style of Object.values(run.floorMap.connectionStyles!)) {
+        curveDirections.add(Math.sign(style.startBend));
+        expect(style.tension).toBeGreaterThanOrEqual(0.24);
+        expect(style.tension).toBeLessThanOrEqual(0.43);
+      }
+    }
+    expect(routeSignatures.size).toBeGreaterThan(9);
+    expect(curveDirections).toEqual(new Set([-1, 1]));
   });
 
   it('assigns two, four, sixteen, and twenty-five cell footprints by enemy scale', () => {
@@ -77,14 +160,43 @@ describe('run generation', () => {
   });
 
   it('never lets a bomb-gated detour trap the route', () => {
-    const run = createRun('NO-BOMBS');
+    let run = createRun('NO-BOMBS');
     const anchor = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 3)!;
     run.floorMap.currentNodeId = anchor.id;
     run.player.bombs = 0;
     const secret = run.floorMap.nodes.find((node) => node.kind === 'secret' && node.anchorId === anchor.id)!;
-    expect(getAvailableNodes(run)).toContain(secret.id);
-    expect(() => enterRoom(run, secret.id)).toThrow(/bomb/i);
+    expect(getAvailableNodes(run)).not.toContain(secret.id);
+    expect(() => useMapBomb(run)).toThrow(/bomb/i);
     expect(anchor.connections.every((id) => getAvailableNodes(run).includes(id))).toBe(true);
+
+    run.player.bombs = 1;
+    run = useMapBomb(run);
+    expect(run.player.bombs).toBe(0);
+    expect(run.mapBombResult).toMatchObject({ currentNodeId: anchor.id, found: true, roomKind: 'secret' });
+    expect(run.floorMap.nodes.find((node) => node.id === secret.id)).toMatchObject({ revealed: true, doorOpened: true });
+    expect(getAvailableNodes(run)).toContain(secret.id);
+    run = enterRoom(run, secret.id);
+    expect(run.player.bombs).toBe(0);
+  });
+
+  it('keeps floor-one shops free and spends one key on locked shops and treasure rooms later', () => {
+    let firstFloor = createRun('FIRST-FLOOR-DOOR');
+    const freeShop = firstFloor.floorMap.nodes.find((node) => node.kind === 'shop')!;
+    firstFloor.floorMap.currentNodeId = firstFloor.floorMap.nodes.find((node) => node.connections.includes(freeShop.id))!.id;
+    firstFloor.player.keys = 0;
+    firstFloor = enterRoom(firstFloor, freeShop.id);
+    expect(firstFloor.player.keys).toBe(0);
+
+    let laterFloor = createRun('LOCKED-DOOR');
+    laterFloor.floorIndex = 1;
+    laterFloor.floorMap = createFloorMap(1, laterFloor.seed);
+    const lockedTreasure = laterFloor.floorMap.nodes.find((node) => node.kind === 'treasure')!;
+    laterFloor.floorMap.currentNodeId = laterFloor.floorMap.nodes.find((node) => node.connections.includes(lockedTreasure.id))!.id;
+    laterFloor.player.keys = 0;
+    expect(() => enterRoom(laterFloor, lockedTreasure.id)).toThrow(/key/i);
+    laterFloor.player.keys = 1;
+    laterFloor = enterRoom(laterFloor, lockedTreasure.id);
+    expect(laterFloor.player.keys).toBe(0);
   });
 
   it('makes high-quality rewards rarer and more expensive to play', () => {
@@ -92,8 +204,8 @@ describe('run generation', () => {
     let qualityFourOffers = 0;
     for (let index = 0; index < 60; index += 1) {
       let run = createRun(`QUALITY-${index}`);
-      const anchor = run.floorMap.nodes.find((node) => node.lane === 0 && node.depth === 1)!;
       const treasure = run.floorMap.nodes.find((node) => node.lane === 0 && node.depth === 2)!;
+      const anchor = run.floorMap.nodes.find((node) => node.connections.includes(treasure.id))!;
       run.floorMap.currentNodeId = anchor.id;
       run = enterRoom(run, treasure.id);
       for (const option of run.choice!.options) {
@@ -111,8 +223,8 @@ describe('run generation', () => {
 
   it('can leave a shop after purchasing an option', () => {
     let run = createRun('SHOP-LEAVE-AFTER-BUYING');
-    const anchor = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 1)!;
     const shop = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 2)!;
+    const anchor = run.floorMap.nodes.find((node) => node.connections.includes(shop.id))!;
     run.floorMap.currentNodeId = anchor.id;
     run.player.coins = 100;
     run = enterRoom(run, shop.id);
@@ -129,12 +241,40 @@ describe('run generation', () => {
 });
 
 describe('combat', () => {
+  it('uses one bomb for a 3 by 3 blast and damages a large enemy once per occupied tile', () => {
+    let run = createRun('COMBAT-BOMB');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    run = confirmPlayerDeployment(run);
+    run.combat!.roomLayout = { ...DEFAULT_COMBAT_ROOM_LAYOUT };
+    run.player.bombs = 2;
+    const target = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    target.position = { x: 5, y: 3 };
+    target.footprintWidth = 2;
+    target.footprintHeight = 2;
+    target.hp = 1000;
+    target.maxHp = 1000;
+    target.shield = 0;
+    target.armor = 0;
+
+    run = useCombatBomb(run, 5, 3);
+
+    expect(run.player.bombs).toBe(1);
+    expect(run.combat!.vitality).toBe(run.player.stats.maxVitality);
+    expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(800);
+    expect(run.combat!.animationEvents.slice(-2)).toMatchObject([
+      { kind: 'bomb-blast', toX: 5, toY: 3, value: 50 },
+      { kind: 'bomb-hit', targetId: target.instanceId, value: 200, secondaryValue: 0, rawValue: 200, armorValue: 0, hitCount: 4 },
+    ]);
+  });
+
   it('hydrates movement and grid defaults in runs saved by older versions', () => {
     let run = createRun('LEGACY-COMBAT');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     delete (run.player.stats as Partial<typeof run.player.stats>).movementSpeed;
     delete (run.player.stats as Partial<typeof run.player.stats>).attackRange;
     delete run.combat!.deploymentPending;
+    delete (run.combat as Partial<typeof run.combat>).roomLayout;
     delete (run.combat!.enemies[0] as { movementSpeed?: number }).movementSpeed;
     delete (run.combat!.enemies[0] as { visionRange?: number }).visionRange;
     delete (run.combat!.enemies[0] as { footprintWidth?: number }).footprintWidth;
@@ -145,6 +285,7 @@ describe('combat', () => {
     expect(getPlayerMovementSpeed(hydrated)).toBe(3);
     expect(hydrated.player.stats.attackRange).toBe(5);
     expect(hydrated.combat!.deploymentPending).toBe(false);
+    expect(hydrated.combat!.roomLayout).toMatchObject({ shape: 'standard', width: 17, height: 9, unitCount: 1 });
     expect(getEnemyMovementSpeed(hydrated.combat!.enemies[0]!)).toBe(3);
     expect(hydrated.combat!.enemies[0]!.visionRange).toBeGreaterThan(1);
     expect(hydrated.combat!.enemies[0]!.footprintWidth).toBeGreaterThanOrEqual(1);
@@ -170,25 +311,141 @@ describe('combat', () => {
     expect('tearMeter' in hydrated.combat!).toBe(false);
   });
 
-  it('lets Isaac deploy freely in the left half before combat begins', () => {
+  it('lets Isaac deploy on every unoccupied cell across the whole room', () => {
     let run = createRun('FREE-DEPLOYMENT');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     expect(run.combat!.deploymentPending).toBe(true);
     const cells = getPlayerDeploymentCells(run);
-    expect(cells).toHaveLength(81);
-    expect(Math.max(...cells.map((cell) => cell.x))).toBe(8);
+    const occupied = new Set(run.combat!.enemies
+      .filter((enemy) => enemy.hp > 0)
+      .flatMap((enemy) => getEnemyOccupiedCells(enemy))
+      .map((cell) => `${cell.x}:${cell.y}`));
+    expect(cells).toHaveLength(getCombatRoomCells(run.combat!).length - occupied.size);
+    expect(cells.some((cell) => cell.x >= Math.floor(run.combat!.roomLayout.width / 2))).toBe(true);
 
     const vitality = run.combat!.vitality;
-    run = placePlayerForDeployment(run, 8, 4);
-    expect(run.combat!.playerPosition).toEqual({ x: 8, y: 4 });
+    const destination = cells.find((cell) => cell.x >= Math.floor(run.combat!.roomLayout.width / 2))!;
+    run = placePlayerForDeployment(run, destination.x, destination.y);
+    expect(run.combat!.playerPosition).toEqual(destination);
     expect(run.combat!.vitality).toBe(vitality);
     expect(run.combat!.deploymentPending).toBe(true);
-    expect(() => placePlayerForDeployment(run, 9, 4)).toThrow('outside the deployment zone');
+    expect(() => placePlayerForDeployment(run, run.combat!.roomLayout.width, 0)).toThrow('outside the deployment zone');
 
     run = confirmPlayerDeployment(run);
     expect(run.combat!.deploymentPending).toBe(false);
     expect(run.combat!.log[0]?.messageKey).toBe('deploymentConfirmed');
     expect(getPlayerDeploymentCells(run)).toHaveLength(0);
+  });
+
+  it('generates deterministic standard, double, large, and L-shaped combat rooms', () => {
+    const leftSeed = createRun('VARIABLE-ROOM-DETERMINISM');
+    const left = enterRoom(leftSeed, getAvailableNodes(leftSeed)[0]!);
+    const rightSeed = createRun('VARIABLE-ROOM-DETERMINISM');
+    const right = enterRoom(rightSeed, getAvailableNodes(rightSeed)[0]!);
+    expect(left.combat!.roomLayout).toEqual(right.combat!.roomLayout);
+    expect(left.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position })))
+      .toEqual(right.combat!.enemies.map((enemy) => ({ id: enemy.id, position: enemy.position })));
+
+    const shapes = new Set<string>();
+    const anchors = new Set<string>();
+    let largestEncounter = 0;
+    let sawLeftHalfEnemy = false;
+    let sawRightHalfEnemy = false;
+    let sawLShape = false;
+    for (let index = 0; index < 160; index += 1) {
+      let run = createRun(`VARIABLE-ROOM-${index}`);
+      run.floorIndex = index % 6;
+      run = enterRoom(run, getAvailableNodes(run)[0]!);
+      const combat = run.combat!;
+      const roomCells = getCombatRoomCells(combat);
+      const occupied = new Set<string>();
+      shapes.add(combat.roomLayout.shape);
+      largestEncounter = Math.max(largestEncounter, combat.enemies.length);
+      if (combat.roomLayout.shape === 'l-shaped') {
+        sawLShape = true;
+        expect(combat.roomLayout.width * combat.roomLayout.height - roomCells.length).toBe(17 * 9);
+      }
+      for (const enemy of combat.enemies) {
+        anchors.add(`${enemy.position.x}:${enemy.position.y}`);
+        sawLeftHalfEnemy ||= enemy.position.x < combat.roomLayout.width / 2;
+        sawRightHalfEnemy ||= enemy.position.x >= combat.roomLayout.width / 2;
+        for (const cell of getEnemyOccupiedCells(enemy)) {
+          const key = `${cell.x}:${cell.y}`;
+          expect(roomCells).toContainEqual(cell);
+          expect(occupied.has(key)).toBe(false);
+          occupied.add(key);
+        }
+      }
+      const capacity = Math.max(3, Math.floor(roomCells.length / 50));
+      expect(combat.enemies.length).toBeLessThanOrEqual(capacity);
+      if (combat.roomLayout.unitCount > 1) expect(combat.enemies.length).toBeGreaterThan(3);
+    }
+
+    expect(shapes).toEqual(new Set(['standard', 'wide', 'tall', 'large', 'l-shaped']));
+    expect(largestEncounter).toBeGreaterThan(3);
+    expect(anchors.size).toBeGreaterThan(24);
+    expect(sawLeftHalfEnemy && sawRightHalfEnemy && sawLShape).toBe(true);
+  });
+
+  it('keeps all multi-unit rooms uncommon while the opening deck is still developing', () => {
+    const sampleRoomRates = (floorIndex: number) => {
+      let multiUnitRooms = 0;
+      let tripleOrLargerRooms = 0;
+      let totalUnits = 0;
+      const samples = 360;
+      for (let index = 0; index < samples; index += 1) {
+        let run = createRun(`ROOM-PROGRESSION-${floorIndex}-${index}`);
+        run.floorIndex = floorIndex;
+        run = enterRoom(run, getAvailableNodes(run)[0]!);
+        const units = run.combat!.roomLayout.unitCount;
+        if (units > 1) multiUnitRooms += 1;
+        if (units >= 3) tripleOrLargerRooms += 1;
+        totalUnits += units;
+      }
+      return {
+        multiUnitRate: multiUnitRooms / samples,
+        tripleOrLargerRate: tripleOrLargerRooms / samples,
+        averageUnits: totalUnits / samples,
+      };
+    };
+
+    const basementOne = sampleRoomRates(0);
+    const basementTwo = sampleRoomRates(1);
+    const cavesOne = sampleRoomRates(2);
+    const depthsTwo = sampleRoomRates(5);
+    expect(basementOne.multiUnitRate).toBeLessThan(0.15);
+    expect(basementOne.tripleOrLargerRate).toBeLessThan(0.05);
+    expect(basementTwo.multiUnitRate).toBeLessThan(0.3);
+    expect(basementTwo.averageUnits).toBeLessThan(1.4);
+    expect(cavesOne.multiUnitRate).toBeGreaterThan(basementTwo.multiUnitRate);
+    expect(depthsTwo.tripleOrLargerRate).toBeGreaterThan(0.3);
+    expect(depthsTwo.averageUnits).toBeGreaterThan(cavesOne.averageUnits);
+  });
+
+  it('can reward a large normal room with a permanent stat item outside the combat deck', () => {
+    let rewarded: ReturnType<typeof createRun> | undefined;
+    for (let index = 0; index < 40 && !rewarded; index += 1) {
+      let run = createRun(`LARGE-ROOM-TREASURE-${index}`);
+      run = enterRoom(run, getAvailableNodes(run)[0]!);
+      run.combat!.roomLayout = { shape: 'large', width: 34, height: 18, unitCount: 4 };
+      run = instantlyWinCombat(run);
+      if (run.choice?.rewardContext === 'large-room') rewarded = run;
+    }
+
+    expect(rewarded?.choice).toMatchObject({ kind: 'item', rewardContext: 'large-room', canSkip: true });
+    expect(rewarded!.choice!.options).toHaveLength(3);
+    expect(rewarded!.choice!.options.every((option) => {
+      const item = option.itemId ? ITEMS[option.itemId] : undefined;
+      return item?.pool.includes('large-room') && item.combatCard === false;
+    })).toBe(true);
+
+    const option = rewarded!.choice!.options[0]!;
+    const deckSize = rewarded!.player.deck.length;
+    const statsBefore = { ...rewarded!.player.stats };
+    const chosen = chooseOption(rewarded!, option.id);
+    expect(chosen.player.items).toContain(option.itemId);
+    expect(chosen.player.deck).toHaveLength(deckSize);
+    expect(chosen.player.stats).not.toEqual(statsBefore);
   });
 
   it('moves distant enemies toward Isaac on the opening enemy turn', () => {
@@ -365,6 +622,29 @@ describe('combat', () => {
     expect(run.phase).toBe('choice');
     expect(run.combat!.animationEvents.filter((event) => event.sequence > previousSequence).map((event) => event.kind))
       .toEqual(['card-play', 'player-attack', 'defeat']);
+  });
+
+  it('records the complete player attack calculation for the slower damage animation', () => {
+    let run = createRun('PLAYER-ATTACK-CALCULATION');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const target = run.combat!.enemies[0]!;
+    target.position = { x: 4, y: 4 };
+    target.hp = 100;
+    target.maxHp = 100;
+    target.armor = 2;
+    target.shield = 4;
+    run.combat!.enemies.slice(1).forEach((enemy) => { enemy.hp = 0; });
+    run.player.stats.critChance = 0;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
+
+    run = playCard(run, attack.instanceId, target.instanceId);
+
+    expect(run.combat!.enemies[0]).toMatchObject({ hp: 100, shield: 0 });
+    expect(run.combat!.animationEvents.at(-1)).toMatchObject({
+      kind: 'player-attack', targetId: target.instanceId,
+      rawValue: 6, armorValue: 2, secondaryValue: 4, value: 0, hitCount: 1,
+    });
   });
 
   it('never changes targets automatically when another enemy enters the firing line', () => {
@@ -581,6 +861,7 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const enemy = run.combat!.enemies[0]!;
     enemy.position = { x: 10, y: 4 };
+    enemy.alerted = true;
     run.combat!.enemies.slice(1).forEach((entry) => { entry.hp = 0; });
     enemy.intent = {
       kind: 'shield', value: 9, label: 'Guard 9 + Recover 8',
@@ -832,6 +1113,23 @@ describe('combat', () => {
     expect(run.player.stats.shopDiscount).toBe(0.5);
   });
 
+  it('applies permanent stat items once without adding item cards', () => {
+    const run = createRun('PERMANENT-STAT-ITEM');
+    const deckSize = run.player.deck.length;
+    const baseDamage = run.player.stats.baseDamage;
+    const armor = run.player.stats.armor;
+    const movement = run.player.stats.movementSpeed;
+
+    equipItem(run, 'small-rock');
+    equipItem(run, 'small-rock');
+
+    expect(run.player.stats.baseDamage).toBe(baseDamage + 2);
+    expect(run.player.stats.armor).toBe(armor + 1);
+    expect(run.player.stats.movementSpeed).toBe(movement - 1);
+    expect(run.player.deck).toHaveLength(deckSize);
+    expect(run.player.deck.some((card) => card.definitionId === 'item:small-rock')).toBe(false);
+  });
+
   it('removes retired non-combat item cards when hydrating an older save', () => {
     const run = createRun('OLD-NON-COMBAT-CARD');
     const retired = { instanceId: 'legacy-goat-head-card', definitionId: 'item:goat-head', upgraded: false };
@@ -883,7 +1181,9 @@ describe('combat', () => {
 describe('first run', () => {
   it('can traverse all six floors and defeat Mom', () => {
     let run = createRun('FULL-MOM-RUN');
+    run.player.keys = 99;
     let guard = 0;
+    const provisionFloors = new Set([0]);
     while (run.phase !== 'victory' && guard < 200) {
       guard += 1;
       if (run.phase === 'map') {
@@ -893,7 +1193,9 @@ describe('first run', () => {
       } else if (run.phase === 'combat') {
         run = instantlyWinCombat(run);
       } else if (run.phase === 'choice') {
-        run = settleChoice(run);
+        run = settleChoice(run, (choiceRun) => {
+          if (choiceRun.choice?.rewardContext === 'floor-start') provisionFloors.add(choiceRun.floorIndex);
+        });
       } else {
         throw new Error(`Unexpected phase ${run.phase}`);
       }
@@ -901,6 +1203,7 @@ describe('first run', () => {
     expect(guard).toBeLessThan(200);
     expect(run.phase).toBe('victory');
     expect(run.floorIndex).toBe(5);
+    expect([...provisionFloors]).toEqual([0, 1, 2, 3, 4, 5]);
     expect(run.unlocks).toContain('moms-knife');
     expect(run.unlocks).toContain('brimstone');
   });

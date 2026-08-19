@@ -93,6 +93,8 @@ export function choiceTitle(t: TFunction, run: RunState): string {
   if (choice.dealType) return t(choice.dealType === 'angel' ? 'choice.angelRoom' : 'choice.devilRoom');
   if (choice.kind === 'shop') return t('choice.shopTitle');
   if (choice.kind === 'sacrifice') return t('choice.sacrificeTitle');
+  if (choice.rewardContext === 'floor-start') return t('choice.floorStartTitle', { floor: floorName(t, run.floorIndex) });
+  if (choice.rewardContext === 'large-room') return t('choice.largeRoomTitle');
   if (room === 'treasure') return t('choice.treasureTitle');
   if (room === 'planetarium') return t('choice.planetariumTitle');
   if (room === 'curse') return t('choice.curseTitle');
@@ -114,6 +116,8 @@ export function choiceSubtitle(t: TFunction, run: RunState): string {
   if (choice.dealType) return t(choice.dealType === 'angel' ? 'choice.angelSubtitle' : 'choice.devilSubtitle');
   if (choice.kind === 'shop') return t('choice.shopSubtitle', { coins: run.player.coins });
   if (choice.kind === 'sacrifice') return t('choice.sacrificeSubtitle');
+  if (choice.rewardContext === 'floor-start') return t('choice.floorStartSubtitle');
+  if (choice.rewardContext === 'large-room') return t('choice.largeRoomSubtitle', { reward });
   if (room === 'treasure') return t('choice.treasureSubtitle');
   if (room === 'planetarium') return t('choice.planetariumSubtitle');
   if (room === 'curse') {
@@ -141,7 +145,7 @@ export function optionLabel(t: TFunction, option: RewardOption, choice: ChoiceSt
   if (option.cardId) return cardName(t, option.cardId);
   if (option.upgrade) return t(`upgrades.${option.upgrade}.name`);
   if (option.action) return t(`options.${actionKey(option, choice)}.label`);
-  if (option.resource) return t(`options.${option.resource}.label`);
+  if (option.resource) return `${t(`options.${option.resource}.label`)}${option.amount ? ` · +${option.amount}` : ''}`;
   return option.label;
 }
 
@@ -171,6 +175,9 @@ export function errorText(t: TFunction, message: string): string {
     'Target is outside attack range': 'range', 'That grid cell is outside movement range': 'movement',
     'Player deployment is not active': 'deploymentInactive', 'That grid cell is outside the deployment zone': 'deploymentZone',
     'A bomb is required to open this room': 'bomb', 'A Devil deal needs a spare red-heart container': 'containers',
+    'No bombs available': 'noBombs', 'A key is required to open this room': 'key',
+    'A bomb can only search for doors from the map': 'mapBombOnly', 'This room has already been searched': 'searchedWall',
+    'Confirm deployment before using a bomb': 'deployBomb', 'That grid cell cannot hold a bomb': 'bombCell',
     'Not enough red-heart HP to survive the sacrifice': 'sacrifice',
   };
   const key = keyByMessage[message];

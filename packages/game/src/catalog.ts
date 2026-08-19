@@ -163,6 +163,42 @@ export const ITEMS: Record<string, ItemDefinition> = {
     description: 'Reveals secret and super-secret rooms.', effects: [{ revealSecrets: true }],
     unlock: { event: 'secret-hunter', label: 'Open both secret rooms on one floor' },
   },
+  'wooden-spoon': {
+    id: 'wooden-spoon', name: 'Wooden Spoon', kind: 'passive', pool: ['large-room'], quality: 1, icon: '♧',
+    combatCard: false,
+    description: 'Permanently adds 1 movement range. This item never enters the combat deck.',
+    effects: [{ stat: 'movementSpeed', amount: 1 }],
+  },
+  'moms-heels': {
+    id: 'moms-heels', name: "Mom's Heels", kind: 'passive', pool: ['large-room'], quality: 1, icon: '⌁',
+    combatCard: false,
+    description: 'Permanently adds 1 attack range. This item never enters the combat deck.',
+    effects: [{ stat: 'attackRange', amount: 1 }],
+  },
+  'the-belt': {
+    id: 'the-belt', name: 'The Belt', kind: 'passive', pool: ['large-room'], quality: 2, icon: '▰',
+    combatCard: false,
+    description: 'Permanently adds 4 starting shield. This item never enters the combat deck.',
+    effects: [{ stat: 'baseShield', amount: 4 }],
+  },
+  'wire-coat-hanger': {
+    id: 'wire-coat-hanger', name: 'Wire Coat Hanger', kind: 'passive', pool: ['large-room'], quality: 2, icon: '⌁',
+    combatCard: false,
+    description: 'Permanently adds 1 base attack damage. This item never enters the combat deck.',
+    effects: [{ stat: 'baseDamage', amount: 1 }],
+  },
+  'torn-photo': {
+    id: 'torn-photo', name: 'Torn Photo', kind: 'passive', pool: ['large-room'], quality: 2, icon: '▱',
+    combatCard: false,
+    description: 'Permanently adds 0.15 fire rate. This item never enters the combat deck.',
+    effects: [{ stat: 'fireRate', amount: 0.15 }],
+  },
+  'small-rock': {
+    id: 'small-rock', name: 'Small Rock', kind: 'passive', pool: ['large-room'], quality: 3, icon: '◆',
+    combatCard: false,
+    description: 'Permanently adds 2 base attack damage and 1 armor, but removes 1 movement range.',
+    effects: [{ stat: 'baseDamage', amount: 2 }, { stat: 'armor', amount: 1 }, { stat: 'movementSpeed', amount: -1 }],
+  },
   pentagram: {
     id: 'pentagram', name: 'Pentagram', kind: 'passive', pool: ['devil', 'elite'], quality: 3, icon: '☆',
     description: '×1.2 damage and +10% Devil chance.', effects: [{ stat: 'damageMultiplier', multiplier: 1.2 }],

@@ -13,6 +13,10 @@ describe('game localization', () => {
     expect(i18n.t('fusion.description')).toContain('不会留下持续属性');
     expect(i18n.t('combat.roomClearTitle')).toBe('房间已清理');
     expect(cardName(i18n.t, 'item:goat-head')).toBe('山羊头');
+    expect(i18n.t('combat.confirmActiveDiscard', { item: '六面骰' })).toContain('不再出现在本局战斗中');
+    expect(i18n.t('choice.replaceActiveConfirm', { current: '六面骰', next: '美味的心' })).toContain('确认要拾取吗');
+    expect(i18n.t('confirmation.replaceActiveTitle')).toBe('要替换当前主动道具吗？');
+    expect(i18n.t('confirmation.discardActive')).toBe('永久弃掉');
   });
 
   it('localizes combat logs from runs saved before semantic log keys', () => {

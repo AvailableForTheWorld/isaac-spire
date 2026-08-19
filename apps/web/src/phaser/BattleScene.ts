@@ -1,5 +1,8 @@
 import * as Phaser from 'phaser';
-import type { CombatAnimationEvent, EnemyState, RunState } from '@isaac-spire/game';
+import {
+  DEFAULT_COMBAT_ROOM_LAYOUT, isCombatCellAvailable,
+  type CombatAnimationEvent, type EnemyState, type RunState,
+} from '@isaac-spire/game';
 
 interface BattleLabels {
   round: string;
@@ -11,6 +14,9 @@ interface BattleLabels {
   discardPhase: string;
   armorBlocked: string;
   shieldBlocked: string;
+  hpDamage: string;
+  noHeartDamage: string;
+  targetLock: string;
   enemies: Record<string, string>;
   cards: Record<string, string>;
 }
@@ -24,10 +30,12 @@ interface ActorVisual {
 }
 
 export class BattleScene extends Phaser.Scene {
-  private readonly gridLeft = 42;
-  private readonly gridTop = 48;
-  private readonly gridWidth = 876;
-  private readonly gridHeight = (876 / 17) * 9;
+  private gridLeft = 42;
+  private gridTop = 48;
+  private gridWidth = 876;
+  private gridHeight = 464;
+  private gridColumns = 17;
+  private gridRows = 9;
   private isaac?: ActorVisual;
   private enemies = new Map<string, ActorVisual>();
   private latestRun?: RunState;
@@ -95,6 +103,7 @@ export class BattleScene extends Phaser.Scene {
 
     const width = this.scale.width;
     const height = this.scale.height;
+    this.configureGrid(run);
     const palette = ['0x382c28', '0x302421', '0x23332f', '0x1f302c', '0x302736', '0x3a202b'][run.floorIndex] ?? '0x302421';
     this.cameras.main.setBackgroundColor(Number(palette));
 
@@ -105,19 +114,24 @@ export class BattleScene extends Phaser.Scene {
     room.strokeRoundedRect(24, 25, width - 48, height - 50, 22);
 
     const grid = this.add.graphics();
-    const cellWidth = this.gridWidth / 17;
-    const cellHeight = this.gridHeight / 9;
-    for (let row = 0; row < 9; row += 1) {
-      for (let column = 0; column < 17; column += 1) {
+    const cellWidth = this.gridWidth / this.gridColumns;
+    const cellHeight = this.gridHeight / this.gridRows;
+    grid.lineStyle(1, 0xc5a58e, 0.12);
+    for (let row = 0; row < this.gridRows; row += 1) {
+      for (let column = 0; column < this.gridColumns; column += 1) {
+        if (!isCombatCellAvailable(run.combat!, { x: column, y: row })) continue;
         grid.fillStyle((row + column) % 2 === 0 ? 0x59443d : 0x493833, 0.13);
         grid.fillRect(this.gridLeft + column * cellWidth, this.gridTop + row * cellHeight, cellWidth, cellHeight);
+        grid.strokeRect(this.gridLeft + column * cellWidth, this.gridTop + row * cellHeight, cellWidth, cellHeight);
       }
     }
-    grid.lineStyle(1, 0xc5a58e, 0.12);
-    for (let column = 0; column <= 17; column += 1) grid.lineBetween(this.gridLeft + column * cellWidth, this.gridTop, this.gridLeft + column * cellWidth, this.gridTop + this.gridHeight);
-    for (let row = 0; row <= 9; row += 1) grid.lineBetween(this.gridLeft, this.gridTop + row * cellHeight, this.gridLeft + this.gridWidth, this.gridTop + row * cellHeight);
-    const doorY = this.gridPoint(0, 4).y;
-    this.add.rectangle(26, doorY, 22, cellHeight * 1.5, 0x120f0e, 0.9).setStrokeStyle(2, 0xb28d72, 0.45);
+    const leftDoorRows = Array.from({ length: this.gridRows }, (_, row) => row)
+      .filter((row) => isCombatCellAvailable(run.combat!, { x: 0, y: row }));
+    const doorRow = leftDoorRows.sort((left, right) => Math.abs(left - this.gridRows / 2) - Math.abs(right - this.gridRows / 2))[0];
+    if (doorRow !== undefined) {
+      const doorY = this.gridPoint(0, doorRow).y;
+      this.add.rectangle(this.gridLeft - 11, doorY, 22, cellHeight * 1.35, 0x120f0e, 0.9).setStrokeStyle(2, 0xb28d72, 0.45);
+    }
 
     for (let i = 0; i < 22; i += 1) {
       const dust = this.add.circle(
@@ -131,14 +145,20 @@ export class BattleScene extends Phaser.Scene {
     const playerPoint = this.gridPoint(playerPosition.x, playerPosition.y);
     this.isaac = this.drawIsaac(playerPoint.x, playerPoint.y, run, labels);
     const allEnemies = run.combat!.enemies;
+    const highlightedEnemyId = this.registry.get('highlightedEnemyId') as string | undefined;
     allEnemies.forEach((enemy, index) => {
       if (enemy.hp <= 0) return;
       const position = enemy.position ?? { x: 15 - (index % 2), y: Math.min(8, 2 + index * 3) };
       const point = this.gridEntityPoint(position.x, position.y, enemy.footprintWidth, enemy.footprintHeight);
       const visual = this.drawEnemy(
         point.x, point.y, enemy,
-        labels?.enemies[enemy.instanceId] ?? enemy.name,
-        enemy.hp / enemy.maxHp, enemy.instanceId === run.combat?.selectedEnemyId,
+        labels?.enemies[enemy.instanceId] ?? enemy.name, enemy.hp / enemy.maxHp,
+        enemy.instanceId === run.combat?.selectedEnemyId,
+        enemy.instanceId === highlightedEnemyId,
+        allEnemies.filter((entry) => entry.hp > 0 && entry.id === enemy.id).length > 1
+          ? allEnemies.slice(0, index + 1).filter((entry) => entry.hp > 0 && entry.id === enemy.id).length
+          : undefined,
+        labels?.targetLock ?? 'TARGET',
       );
       this.enemies.set(enemy.instanceId, visual);
     });
@@ -155,11 +175,30 @@ export class BattleScene extends Phaser.Scene {
     return id === 'isaac' ? this.isaac : id ? this.enemies.get(id) : undefined;
   }
 
+  private configureGrid(run: RunState): void {
+    const layout = run.combat?.roomLayout ?? DEFAULT_COMBAT_ROOM_LAYOUT;
+    this.gridColumns = layout.width;
+    this.gridRows = layout.height;
+    const cellSize = Math.min(876 / layout.width, 464 / layout.height);
+    this.gridWidth = cellSize * layout.width;
+    this.gridHeight = cellSize * layout.height;
+    this.gridLeft = (960 - this.gridWidth) / 2;
+    this.gridTop = (560 - this.gridHeight) / 2;
+  }
+
   private gridPoint(x: number, y: number): { x: number; y: number } {
     return {
-      x: this.gridLeft + (x + 0.5) * (this.gridWidth / 17),
-      y: this.gridTop + (y + 0.5) * (this.gridHeight / 9),
+      x: this.gridLeft + (x + 0.5) * (this.gridWidth / this.gridColumns),
+      y: this.gridTop + (y + 0.5) * (this.gridHeight / this.gridRows),
     };
+  }
+
+  private floatingLabelPosition(actorY: number, offset: number): { y: number; drift: number } {
+    const safeTop = Math.max(92, this.gridTop + 42);
+    const safeBottom = Math.min(518, this.gridTop + this.gridHeight - 42);
+    const above = actorY - offset;
+    if (above >= safeTop) return { y: above, drift: -24 };
+    return { y: Math.min(safeBottom, actorY + offset), drift: 24 };
   }
 
   private gridEntityPoint(x: number, y: number, footprintWidth = 1, footprintHeight = 1): { x: number; y: number } {
@@ -194,6 +233,8 @@ export class BattleScene extends Phaser.Scene {
       case 'summon': await this.animateSummon(event); break;
       case 'idle': await this.animateIdle(event); break;
       case 'defeat': await this.animateDefeat(event); break;
+      case 'bomb-blast': await this.animateBombBlast(event); break;
+      case 'bomb-hit': await this.animateBombHit(event); break;
       case 'black-heart': await this.animateBlackHeart(); break;
     }
   }
@@ -284,7 +325,12 @@ export class BattleScene extends Phaser.Scene {
       await this.tween(projectile, { x: target.x - 10, y: target.y, duration: 260, ease: 'Quad.easeIn' });
       projectile.destroy();
     }
-    await this.impact(target, event.value ?? 0, 0xefa09a);
+    if ((event.armorValue ?? 0) > 0) await this.animateArmorBlock(target, event.armorValue ?? 0);
+    if ((event.secondaryValue ?? 0) > 0) await this.animateShieldLoss(target, event.secondaryValue ?? 0);
+    await this.impact(
+      target, event.value ?? 0, 0xefa09a,
+      event.secondaryValue ?? 0, event.armorValue ?? 0, event.rawValue,
+    );
     if ((event.poisonTurns ?? 0) > 0) {
       const ring = this.add.circle(target.x, target.y, 12, 0x7dbd63, 0.08).setStrokeStyle(3, 0x9ee57d, .8);
       this.tweens.add({ targets: ring, scale: 2.3, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
@@ -293,6 +339,79 @@ export class BattleScene extends Phaser.Scene {
       const frost = this.add.circle(target.x, target.y, 18, 0x69b9d0, .12).setStrokeStyle(2, 0x9de4ef, .72);
       this.tweens.add({ targets: frost, scale: 1.7, alpha: 0, duration: 620, onComplete: () => frost.destroy() });
     }
+  }
+
+  private async animateBombBlast(event: CombatAnimationEvent): Promise<void> {
+    if (event.toX === undefined || event.toY === undefined) return;
+    const source = this.actor('isaac');
+    const destination = this.gridPoint(event.toX, event.toY);
+    const start = source ?? { x: destination.x, y: destination.y };
+    const bomb = this.add.circle(start.x, start.y - 18, 12, 0x242021, 1)
+      .setStrokeStyle(3, 0x887673, 0.9).setDepth(72);
+    const fuse = this.add.line(start.x + 8, start.y - 29, 0, 8, 7, 0, 0xd8b774, 1)
+      .setLineWidth(3).setDepth(73);
+    const spark = this.add.circle(start.x + 14, start.y - 34, 4, 0xffc55d, 0.95).setDepth(74);
+    const thrown = [bomb, fuse, spark];
+    await this.tween(thrown, {
+      x: `+=${destination.x - start.x}`, y: `+=${destination.y - (start.y - 18)}`,
+      angle: 300, duration: 270, ease: 'Quad.easeOut',
+    });
+    await this.wait(90);
+    thrown.forEach((part) => part.destroy());
+
+    const cellWidth = this.gridWidth / this.gridColumns;
+    const cellHeight = this.gridHeight / this.gridRows;
+    const blastCells: Phaser.GameObjects.Rectangle[] = [];
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        const x = event.toX + offsetX;
+        const y = event.toY + offsetY;
+        if (!this.latestRun?.combat || !isCombatCellAvailable(this.latestRun.combat, { x, y })) continue;
+        const point = this.gridPoint(x, y);
+        blastCells.push(this.add.rectangle(point.x, point.y, cellWidth * .92, cellHeight * .92, 0xef6a38, .32)
+          .setStrokeStyle(3, 0xffc45e, .75).setDepth(65));
+      }
+    }
+    this.cameras.main.flash(130, 255, 125, 40, false);
+    this.cameras.main.shake(320, 0.018);
+    const core = this.add.circle(destination.x, destination.y, 18, 0xffd27a, .95).setDepth(75);
+    const fire = this.add.circle(destination.x, destination.y, 28, 0xe94e2f, .58)
+      .setStrokeStyle(7, 0xffa94a, .9).setDepth(74);
+    const smoke = Array.from({ length: 14 }, (_, index) => this.add.circle(
+      destination.x + Phaser.Math.Between(-10, 10), destination.y + Phaser.Math.Between(-10, 10),
+      5 + index % 5, index % 3 ? 0x5f4640 : 0x2d2929, .78,
+    ).setDepth(73));
+    smoke.forEach((mote) => this.tweens.add({
+      targets: mote,
+      x: mote.x + Phaser.Math.Between(-95, 95), y: mote.y + Phaser.Math.Between(-85, 85),
+      scale: 2.2, alpha: 0, duration: Phaser.Math.Between(420, 650), ease: 'Cubic.easeOut',
+      onComplete: () => mote.destroy(),
+    }));
+    this.tweens.add({ targets: blastCells, alpha: 0, scale: .86, duration: 520, onComplete: () => blastCells.forEach((cell) => cell.destroy()) });
+    await Promise.all([
+      this.tween(core, { scale: 6.5, alpha: 0, duration: 360, ease: 'Cubic.easeOut' }),
+      this.tween(fire, { scale: 3.8, alpha: 0, duration: 470, ease: 'Quad.easeOut' }),
+    ]);
+    core.destroy(); fire.destroy();
+  }
+
+  private async animateBombHit(event: CombatAnimationEvent): Promise<void> {
+    const target = this.actor(event.targetId);
+    if (!target) return;
+    const cells = Math.max(1, event.hitCount ?? 1);
+    const labelPosition = this.floatingLabelPosition(target.y, 88);
+    const label = this.add.text(target.x, labelPosition.y, `50 × ${cells}`, {
+      fontFamily: 'Arial, sans-serif', fontSize: '18px', fontStyle: 'bold', color: '#ffd07a',
+      stroke: '#4b1d12', strokeThickness: 5,
+    }).setOrigin(.5).setDepth(76);
+    this.tweens.add({ targets: label, y: label.y + labelPosition.drift, alpha: 0, duration: 560, ease: 'Quad.easeOut', onComplete: () => label.destroy() });
+    if ((event.armorValue ?? 0) > 0) await this.animateArmorBlock(target, event.armorValue ?? 0);
+    if ((event.secondaryValue ?? 0) > 0) await this.animateShieldLoss(target, event.secondaryValue ?? 0);
+    await this.impact(
+      target, event.value ?? 0, 0xff7648,
+      event.secondaryValue ?? 0, event.armorValue ?? 0, event.rawValue,
+    );
+    if ((event.value ?? 0) > 0) this.bloodDrop(target, event.value ?? 0);
   }
 
   private async animatePoison(event: CombatAnimationEvent): Promise<void> {
@@ -312,10 +431,11 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: source.parts, x: '-=16', duration: 180, yoyo: true, hold: 80, ease: 'Back.easeIn' });
     await this.wait(130);
     const shot = this.add.circle(source.x - 16, source.y, 8, 0xd45b54, 0.95).setStrokeStyle(3, 0xffb09d, 0.75);
-    const raw = this.add.text(source.x - 10, source.y - 75, `⚔ ${event.rawValue ?? 0}`, {
+    const rawPosition = this.floatingLabelPosition(source.y, 75);
+    const raw = this.add.text(source.x - 10, rawPosition.y, `⚔ ${event.rawValue ?? 0}`, {
       fontFamily: 'Arial, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffaea0', stroke: '#3d1715', strokeThickness: 4,
     }).setOrigin(0.5);
-    this.tweens.add({ targets: raw, y: raw.y - 18, alpha: 0, duration: 520, onComplete: () => raw.destroy() });
+    this.tweens.add({ targets: raw, y: raw.y + rawPosition.drift, alpha: 0, duration: 950, onComplete: () => raw.destroy() });
     await this.tween(shot, { x: target.x + 10, y: target.y, duration: 240, ease: 'Cubic.easeIn' });
     shot.destroy();
     if ((event.armorValue ?? 0) > 0) await this.animateArmorBlock(target, event.armorValue ?? 0);
@@ -331,25 +451,29 @@ export class BattleScene extends Phaser.Scene {
     const plate = this.add.text(target.x - 36, target.y - 10, '⛉', {
       fontFamily: 'Georgia, serif', fontSize: '40px', color: '#d9b66f', stroke: '#4f3a1e', strokeThickness: 6,
     }).setOrigin(0.5).setScale(0.45).setAngle(-12);
-    const label = this.add.text(target.x, target.y - 70, `${this.labels()?.armorBlocked ?? 'ARMOR'}  −${amount}`, {
+    const labelPosition = this.floatingLabelPosition(target.y, 70);
+    const label = this.add.text(target.x, labelPosition.y, `${this.labels()?.armorBlocked ?? 'ARMOR'}  −${amount}`, {
       fontFamily: 'Arial, sans-serif', fontSize: '14px', fontStyle: 'bold', color: '#f0ce86', stroke: '#34250f', strokeThickness: 4,
     }).setOrigin(0.5);
-    this.tweens.add({ targets: label, y: label.y - 20, alpha: 0, duration: 480, onComplete: () => label.destroy() });
-    await this.tween(plate, { scale: 1.15, angle: 8, duration: 150, ease: 'Back.easeOut', yoyo: true });
+    const labelTween = this.tween(label, { y: label.y + labelPosition.drift, alpha: 0, duration: 650, ease: 'Quad.easeOut' });
+    await Promise.all([labelTween, this.tween(plate, { scale: 1.15, angle: 8, duration: 210, ease: 'Back.easeOut', yoyo: true, hold: 80 })]);
+    label.destroy();
     plate.destroy();
   }
 
   private async animateShieldLoss(target: ActorVisual, amount: number): Promise<void> {
     const ring = this.add.circle(target.x, target.y, 56, 0x78d6e8, 0.08).setStrokeStyle(7, 0x9be8f2, 0.88);
-    const label = this.add.text(target.x + 42, target.y - 56, `${this.labels()?.shieldBlocked ?? 'SHIELD'}  −${amount}`, {
+    const labelPosition = this.floatingLabelPosition(target.y, 56);
+    const label = this.add.text(target.x + 42, labelPosition.y, `${this.labels()?.shieldBlocked ?? 'SHIELD'}  −${amount}`, {
       fontFamily: 'Arial, sans-serif', fontSize: '13px', fontStyle: 'bold', color: '#a9ecf4', stroke: '#173b43', strokeThickness: 4,
     }).setOrigin(0.5);
     for (let index = 0; index < 6; index += 1) {
       const shard = this.add.triangle(target.x, target.y, 0, 0, 7, 2, 2, 8, 0x8be1ed, 0.9);
       this.tweens.add({ targets: shard, x: target.x + Phaser.Math.Between(-75, 75), y: target.y + Phaser.Math.Between(-70, 70), alpha: 0, duration: 360, onComplete: () => shard.destroy() });
     }
-    this.tweens.add({ targets: label, y: label.y - 18, alpha: 0, duration: 470, onComplete: () => label.destroy() });
-    await this.tween(ring, { scale: 0.55, alpha: 0, duration: 260, ease: 'Cubic.easeIn' });
+    const labelTween = this.tween(label, { y: label.y + labelPosition.drift, alpha: 0, duration: 700, ease: 'Quad.easeOut' });
+    await Promise.all([labelTween, this.tween(ring, { scale: 0.55, alpha: 0, duration: 380, ease: 'Cubic.easeIn' })]);
+    label.destroy();
     ring.destroy();
   }
 
@@ -371,15 +495,21 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.shake(120, 0.008);
     const burst = this.add.circle(target.x, target.y, 22, color, 0.45).setStrokeStyle(4, color, 0.9);
     this.tweens.add({ targets: target.parts, x: '+=8', duration: 45, yoyo: true, repeat: 2 });
-    const damageLabel = rawValue === undefined
+    const detailed = rawValue !== undefined;
+    const damageLabel = !detailed
       ? value > 0 ? `-${value} HP` : shieldDamage > 0 ? `-${shieldDamage} ⬡` : 'MISS'
-      : `⚔ ${rawValue}  −  ⛉ ${armorDamage}  −  ⬡ ${shieldDamage}\n${value > 0 ? `−${value} HP` : 'NO HEART DAMAGE'}`;
-    const damage = this.add.text(target.x, target.y - 62, damageLabel, {
-      fontFamily: 'Arial, sans-serif', fontSize: rawValue === undefined ? '18px' : '15px', fontStyle: 'bold', color: value > 0 ? '#ffb4a9' : '#9ee4f2',
+      : `⚔ ${rawValue}  −  ⛉ ${armorDamage}  −  ⬡ ${shieldDamage}\n${value > 0 ? `${this.labels()?.hpDamage ?? 'HP DAMAGE'}  −${value}` : this.labels()?.noHeartDamage ?? 'NO HEART DAMAGE'}`;
+    const damagePosition = this.floatingLabelPosition(target.y, 62);
+    const damage = this.add.text(target.x, damagePosition.y, damageLabel, {
+      fontFamily: 'Arial, sans-serif', fontSize: detailed ? '17px' : '18px', fontStyle: 'bold', color: value > 0 ? '#ffb4a9' : '#9ee4f2',
       align: 'center', stroke: '#301313', strokeThickness: 3,
     }).setOrigin(0.5).setDepth(60);
-    this.tweens.add({ targets: damage, y: damage.y - 35, alpha: 0, duration: 520, ease: 'Quad.easeOut', onComplete: () => damage.destroy() });
-    await this.tween(burst, { scale: 2.3, alpha: 0, duration: 240, ease: 'Quad.easeOut' });
+    const calculationDuration = detailed ? 1300 : 850;
+    await Promise.all([
+      this.tween(damage, { y: damage.y + damagePosition.drift, alpha: 0, duration: calculationDuration, ease: 'Quad.easeOut' }),
+      this.tween(burst, { scale: 2.3, alpha: 0, duration: detailed ? 430 : 300, ease: 'Quad.easeOut' }),
+    ]);
+    damage.destroy();
     burst.destroy();
   }
 
@@ -387,10 +517,11 @@ export class BattleScene extends Phaser.Scene {
     const target = this.actor(event.targetId ?? event.sourceId);
     if (!target) return;
     const ring = this.add.circle(target.x, target.y, 48, 0x70c9df, 0.08).setStrokeStyle(6, 0x8de6f0, 0.9);
-    const label = this.add.text(target.x, target.y - 62, `+${event.value ?? 0} ⬡`, {
+    const labelPosition = this.floatingLabelPosition(target.y, 62);
+    const label = this.add.text(target.x, labelPosition.y, `+${event.value ?? 0} ⬡`, {
       fontFamily: 'Arial, sans-serif', fontSize: '15px', fontStyle: 'bold', color: '#a7edf4',
     }).setOrigin(0.5);
-    this.tweens.add({ targets: label, y: label.y - 22, alpha: 0, duration: 500, onComplete: () => label.destroy() });
+    this.tweens.add({ targets: label, y: label.y + labelPosition.drift, alpha: 0, duration: 500, onComplete: () => label.destroy() });
     await this.tween(ring, { scale: 1.35, alpha: 0, duration: 430, ease: 'Sine.easeOut' });
     ring.destroy();
   }
@@ -405,8 +536,9 @@ export class BattleScene extends Phaser.Scene {
       }).setOrigin(0.5);
       this.tweens.add({ targets: plus, y: plus.y - 45, alpha: 0, duration: 430 + index * 45, onComplete: () => plus.destroy() });
     }
-    const value = this.add.text(target.x, target.y - 64, `+${event.value ?? 0}`, { fontFamily: 'Arial, sans-serif', fontSize: '16px', color: '#a6f4bb' }).setOrigin(0.5);
-    this.tweens.add({ targets: value, y: value.y - 25, alpha: 0, duration: 520, onComplete: () => value.destroy() });
+    const valuePosition = this.floatingLabelPosition(target.y, 64);
+    const value = this.add.text(target.x, valuePosition.y, `+${event.value ?? 0}`, { fontFamily: 'Arial, sans-serif', fontSize: '16px', color: '#a6f4bb' }).setOrigin(0.5);
+    this.tweens.add({ targets: value, y: value.y + valuePosition.drift, alpha: 0, duration: 520, onComplete: () => value.destroy() });
     await this.tween(glow, { scale: 1.6, alpha: 0, duration: 430 });
     glow.destroy();
   }
@@ -527,18 +659,23 @@ export class BattleScene extends Phaser.Scene {
     return { parts: [shadow, body, label], x, y, footprintWidth: 1, footprintHeight: 1 };
   }
 
-  private drawEnemy(x: number, y: number, enemy: EnemyState, name: string, health: number, selected: boolean): ActorVisual {
-    const cellWidth = this.gridWidth / 17;
-    const cellHeight = this.gridHeight / 9;
+  private drawEnemy(
+    x: number, y: number, enemy: EnemyState, name: string, health: number,
+    selected: boolean, highlighted: boolean, identityNumber?: number, targetLock = 'TARGET',
+  ): ActorVisual {
+    const cellWidth = this.gridWidth / this.gridColumns;
+    const cellHeight = this.gridHeight / this.gridRows;
     const bodyWidth = Math.max(38, cellWidth * enemy.footprintWidth * 0.76);
     const bodyHeight = Math.max(38, cellHeight * enemy.footprintHeight * 0.72);
-    const glow = this.add.ellipse(x, y, bodyWidth * 1.13, bodyHeight * 1.13, selected ? 0xe8b76d : 0x8a5b57, selected ? 0.2 : 0.08);
-    const body = this.add.ellipse(x, y, bodyWidth, bodyHeight, selected ? 0xa46058 : 0x744c4b, 1);
-    body.setStrokeStyle(selected ? 3 : 1, selected ? 0xf3cb83 : 0xb78a7f, selected ? 0.8 : 0.35);
+    const emphasized = selected || highlighted;
+    const glow = this.add.ellipse(x, y, bodyWidth * 1.18, bodyHeight * 1.18, highlighted ? 0xf0c36f : selected ? 0xe8b76d : 0x8a5b57, highlighted ? 0.38 : selected ? 0.2 : 0.08);
+    const body = this.add.ellipse(x, y, bodyWidth, bodyHeight, emphasized ? 0xa46058 : 0x744c4b, 1);
+    body.setStrokeStyle(highlighted ? 5 : selected ? 3 : 1, highlighted ? 0xffdd8d : selected ? 0xf3cb83 : 0xb78a7f, highlighted ? 1 : selected ? 0.8 : 0.35);
     const symbolSize = Math.min(66, Math.max(22, Math.min(bodyWidth, bodyHeight) * 0.45));
     const symbol = this.add.text(x, y - 1, enemy.icon, { fontFamily: 'Georgia, serif', fontSize: `${symbolSize}px`, color: '#24191a' }).setOrigin(0.5).setResolution(2);
     const detailY = y + bodyHeight * 0.5 + 8;
-    const label = this.add.text(x, detailY, name, {
+    const displayName = identityNumber ? `${name}  #${identityNumber}` : name;
+    const label = this.add.text(x, detailY, displayName, {
       fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: enemy.boss ? '15px' : '11px', fontStyle: 'bold', color: '#f0d2ba',
       stroke: '#211615', strokeThickness: 3,
     }).setOrigin(0.5).setResolution(2);
@@ -546,9 +683,29 @@ export class BattleScene extends Phaser.Scene {
     const barWidth = Math.max(42, bodyWidth * 0.86);
     bar.fillStyle(0x1a1515, 0.9); bar.fillRoundedRect(x - barWidth / 2, detailY + 10, barWidth, 6, 3);
     bar.fillStyle(health > 0.35 ? 0xb45555 : 0xe07b65, 1); bar.fillRoundedRect(x - barWidth / 2, detailY + 10, barWidth * health, 6, 3);
+    const targetingParts: Phaser.GameObjects.GameObject[] = [];
+    if (highlighted) {
+      const reticle = this.add.graphics().setDepth(66);
+      const radius = Math.max(bodyWidth, bodyHeight) * .68 + 12;
+      reticle.lineStyle(3, 0xffd47e, .96);
+      reticle.strokeCircle(x, y, radius);
+      reticle.lineStyle(2, 0xffefb7, .82);
+      reticle.lineBetween(x - radius - 10, y, x - radius + 8, y);
+      reticle.lineBetween(x + radius - 8, y, x + radius + 10, y);
+      reticle.lineBetween(x, y - radius - 10, x, y - radius + 8);
+      reticle.lineBetween(x, y + radius - 8, x, y + radius + 10);
+      const lockPosition = this.floatingLabelPosition(y, radius + 22);
+      const lock = this.add.text(x, lockPosition.y, `${targetLock}${identityNumber ? `  #${identityNumber}` : ''}`, {
+        fontFamily: 'Arial, "Microsoft YaHei", sans-serif', fontSize: '13px', fontStyle: 'bold',
+        color: '#ffe3a3', stroke: '#3f2915', strokeThickness: 5, letterSpacing: 2,
+      }).setOrigin(.5).setDepth(67).setResolution(2);
+      targetingParts.push(reticle, lock);
+      this.tweens.add({ targets: reticle, alpha: { from: .48, to: 1 }, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      this.tweens.add({ targets: glow, alpha: { from: .28, to: .58 }, scale: { from: 1, to: 1.08 }, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
     this.tweens.add({ targets: [body, glow], scaleX: 1.04, scaleY: 0.97, duration: 850 + x, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     return {
-      parts: [glow, body, symbol, label, bar], x, y,
+      parts: [glow, body, symbol, label, bar, ...targetingParts], x, y,
       footprintWidth: enemy.footprintWidth, footprintHeight: enemy.footprintHeight,
     };
   }

@@ -42,6 +42,8 @@ export type CombatAnimationKind =
   | 'summon'
   | 'idle'
   | 'defeat'
+  | 'bomb-blast'
+  | 'bomb-hit'
   | 'black-heart';
 export type ItemKind = 'active' | 'passive';
 export type ChoiceKind = 'loot' | 'item' | 'shop' | 'deal' | 'upgrade' | 'sacrifice' | 'card';
@@ -156,7 +158,7 @@ export interface ItemDefinition {
   id: string;
   name: string;
   kind: ItemKind;
-  pool: Array<'treasure' | 'shop' | 'boss' | 'devil' | 'angel' | 'planetarium' | 'secret' | 'elite' | 'curse'>;
+  pool: Array<'treasure' | 'shop' | 'boss' | 'devil' | 'angel' | 'planetarium' | 'secret' | 'elite' | 'curse' | 'large-room'>;
   description: string;
   icon: string;
   quality: 1 | 2 | 3 | 4;
@@ -182,16 +184,32 @@ export interface MapNode {
   lane: number;
   depth: number;
   connections: string[];
+  /** Normalized route-board coordinates. Optional so pre-layout save files remain loadable. */
+  mapPosition?: { x: number; y: number };
   optional: boolean;
   anchorId?: string;
+  doorOpened?: boolean;
   visited: boolean;
   revealed: boolean;
+}
+
+export interface MapConnectionStyle {
+  startBend: number;
+  endBend: number;
+  tension: number;
+  dash: number;
+  gap: number;
+  duration: number;
+  delay: number;
+  opacity: number;
 }
 
 export interface FloorMap {
   floorIndex: number;
   nodes: MapNode[];
   currentNodeId: string;
+  /** Per-edge ink treatment, keyed as `sourceId->targetId`. */
+  connectionStyles?: Record<string, MapConnectionStyle>;
 }
 
 export interface EnemyDefinition {
@@ -252,6 +270,7 @@ export interface CombatAnimationEvent {
   secondaryValue?: number;
   rawValue?: number;
   armorValue?: number;
+  hitCount?: number;
   cardId?: string;
   fromX?: number;
   fromY?: number;
@@ -272,8 +291,20 @@ export interface CombatLogEntry {
   params?: Record<string, string | number>;
 }
 
+export type CombatRoomShape = 'standard' | 'wide' | 'tall' | 'large' | 'l-shaped';
+export type RoomMissingQuadrant = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+export interface CombatRoomLayout {
+  shape: CombatRoomShape;
+  width: number;
+  height: number;
+  unitCount: 1 | 2 | 3 | 4;
+  missingQuadrant?: RoomMissingQuadrant;
+}
+
 export interface CombatState {
   roomKind: 'combat' | 'elite' | 'boss';
+  roomLayout: CombatRoomLayout;
   deploymentPending?: boolean;
   round: number;
   vitality: number;
@@ -327,6 +358,7 @@ export interface ChoiceState {
   canSkip: boolean;
   next: 'map' | 'boss-gate' | 'floor-upgrade' | 'next-floor' | 'victory';
   dealType?: 'devil' | 'angel';
+  rewardContext?: 'large-room' | 'floor-start';
 }
 
 export interface UnlockNotice {
@@ -356,6 +388,8 @@ export interface RunState {
   unlocks: string[];
   unlockNotices: UnlockNotice[];
   lastReward: string[];
+  floorBombSearches: string[];
+  mapBombResult?: { currentNodeId: string; found: boolean; roomKind?: 'secret' | 'super-secret' };
   floorRedDamage: number;
   floorSecretVisits: string[];
   victory: boolean;

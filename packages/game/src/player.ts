@@ -81,9 +81,12 @@ export function equipItem(run: RunState, itemId: string): void {
   if (newlyEquipped && item.kind === 'passive') run.player.items.push(item.id);
   if (newlyEquipped && item.kind === 'passive' && !itemUsesCombatCard(item)) {
     for (const effect of item.effects ?? []) {
-      if (effect.stat === 'shopDiscount') {
-        run.player.stats.shopDiscount = Math.min(0.9, run.player.stats.shopDiscount + (effect.amount ?? 0));
-      }
+      if (!effect.stat) continue;
+      const stat = effect.stat;
+      const current = run.player.stats[stat];
+      const multiplied = effect.multiplier === undefined ? current : current * effect.multiplier;
+      const updated = multiplied + (effect.amount ?? 0);
+      run.player.stats[stat] = stat === 'shopDiscount' ? Math.min(0.9, updated) : updated;
     }
   }
   if (itemUsesCombatCard(item)) {

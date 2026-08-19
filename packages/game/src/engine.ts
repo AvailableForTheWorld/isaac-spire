@@ -5,17 +5,22 @@ import { availableNodeIds, createFloorMap, getMapNode, revealFromCurrent } from 
 import { addPocketHeart, createCard, createIsaac, equipItem, healRed, maxRedHp } from './player.js';
 import { hashSeed, nextRandom, pickOne, randomInt, shuffle, weightedPick } from './random.js';
 import type {
-  AttackFusionPreview, CardDefinition, CardInstance, ChoiceState, CombatAnimationEvent, CombatLogEntry, CombatState,
+  AttackFusionPreview, CardDefinition, CardInstance, ChoiceState, CombatAnimationEvent, CombatLogEntry, CombatRoomLayout, CombatState,
   EnemyAction, EnemyBehavior, EnemyDefinition, EnemyIntent, EnemyState, IntentKind,
   GridPosition, ItemDefinition, RewardOption, RoomKind, RunState,
 } from './types.js';
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-export const COMBAT_GRID_WIDTH = 17;
-export const COMBAT_GRID_HEIGHT = 9;
+export const STANDARD_ROOM_WIDTH = 17;
+export const STANDARD_ROOM_HEIGHT = 9;
+export const COMBAT_GRID_WIDTH = STANDARD_ROOM_WIDTH;
+export const COMBAT_GRID_HEIGHT = STANDARD_ROOM_HEIGHT;
 export const ISAAC_DOOR_POSITION: GridPosition = { x: 0, y: 4 };
-export const PLAYER_DEPLOYMENT_MAX_X = 8;
+
+export const DEFAULT_COMBAT_ROOM_LAYOUT: CombatRoomLayout = {
+  shape: 'standard', width: STANDARD_ROOM_WIDTH, height: STANDARD_ROOM_HEIGHT, unitCount: 1,
+};
 
 function gridDistance(left: GridPosition, right: GridPosition): number {
   return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
@@ -27,8 +32,26 @@ function isStraightLineInRange(origin: GridPosition, target: GridPosition, range
   return (xDistance === 0 || yDistance === 0) && xDistance + yDistance <= range;
 }
 
-function insideGrid(position: GridPosition): boolean {
-  return position.x >= 0 && position.x < COMBAT_GRID_WIDTH && position.y >= 0 && position.y < COMBAT_GRID_HEIGHT;
+function roomLayout(combat?: Pick<CombatState, 'roomLayout'>): CombatRoomLayout {
+  return combat?.roomLayout ?? DEFAULT_COMBAT_ROOM_LAYOUT;
+}
+
+export function isCombatCellAvailable(combat: Pick<CombatState, 'roomLayout'>, position: GridPosition): boolean {
+  const layout = roomLayout(combat);
+  if (position.x < 0 || position.x >= layout.width || position.y < 0 || position.y >= layout.height) return false;
+  if (layout.shape !== 'l-shaped' || !layout.missingQuadrant) return true;
+  const right = position.x >= STANDARD_ROOM_WIDTH;
+  const bottom = position.y >= STANDARD_ROOM_HEIGHT;
+  const quadrant = `${bottom ? 'bottom' : 'top'}-${right ? 'right' : 'left'}`;
+  return quadrant !== layout.missingQuadrant;
+}
+
+export function getCombatRoomCells(combat: Pick<CombatState, 'roomLayout'>): GridPosition[] {
+  const layout = roomLayout(combat);
+  return Array.from({ length: layout.width * layout.height }, (_, index) => ({
+    x: index % layout.width,
+    y: Math.floor(index / layout.width),
+  })).filter((position) => isCombatCellAvailable(combat, position));
 }
 
 function positionKey(position: GridPosition): string {
@@ -36,9 +59,11 @@ function positionKey(position: GridPosition): string {
 }
 
 function enemyFootprint(enemy: Pick<EnemyDefinition, 'footprintWidth' | 'footprintHeight'>): { width: number; height: number } {
+  const maxWidth = STANDARD_ROOM_WIDTH * 2;
+  const maxHeight = STANDARD_ROOM_HEIGHT * 2;
   return {
-    width: Math.max(1, Math.min(COMBAT_GRID_WIDTH, Math.round(enemy.footprintWidth ?? 1))),
-    height: Math.max(1, Math.min(COMBAT_GRID_HEIGHT, Math.round(enemy.footprintHeight ?? 1))),
+    width: Math.max(1, Math.min(maxWidth, Math.round(enemy.footprintWidth ?? 1))),
+    height: Math.max(1, Math.min(maxHeight, Math.round(enemy.footprintHeight ?? 1))),
   };
 }
 
@@ -57,41 +82,30 @@ export function getEnemyOccupiedCells(enemy: EnemyState, position = enemy.positi
   return footprintCellsAt(enemy, position);
 }
 
-function enemyPositionFits(enemy: EnemyState, position: GridPosition, blocked = new Set<string>()): boolean {
-  return footprintCellsAt(enemy, position).every((cell) => insideGrid(cell) && !blocked.has(positionKey(cell)));
+function enemyPositionFits(combat: CombatState, enemy: EnemyState, position: GridPosition, blocked = new Set<string>()): boolean {
+  return footprintCellsAt(enemy, position).every((cell) => isCombatCellAvailable(combat, cell) && !blocked.has(positionKey(cell)));
 }
 
 function fallbackEnemyPosition(
+  combat: CombatState,
   index: number,
-  boss = false,
-  footprintWidth = 1,
-  footprintHeight = 1,
+  enemy: EnemyState,
 ): GridPosition {
-  const x = Math.max(PLAYER_DEPLOYMENT_MAX_X + 1, COMBAT_GRID_WIDTH - footprintWidth - 1);
-  const maxY = Math.max(0, COMBAT_GRID_HEIGHT - footprintHeight);
-  if (boss) return { x, y: Math.floor(maxY / 2) };
-  const preferredRows = [1, Math.max(0, maxY - 1), Math.floor(maxY / 2), 0, maxY];
-  return { x, y: Math.max(0, Math.min(maxY, preferredRows[index % preferredRows.length] ?? 0)) };
+  const candidates = getCombatRoomCells(combat).filter((position) => enemyPositionFits(combat, enemy, position));
+  return candidates[index % Math.max(1, candidates.length)] ?? { ...ISAAC_DOOR_POSITION };
 }
 
-function findAvailableEnemyPosition(enemy: EnemyState, preferred: GridPosition, blocked: Set<string>): GridPosition {
-  const { width, height } = enemyFootprint(enemy);
-  const maxX = COMBAT_GRID_WIDTH - width;
-  const maxY = COMBAT_GRID_HEIGHT - height;
-  const candidates = Array.from({ length: (maxX - PLAYER_DEPLOYMENT_MAX_X) * (maxY + 1) }, (_, index) => ({
-    x: PLAYER_DEPLOYMENT_MAX_X + 1 + index % (maxX - PLAYER_DEPLOYMENT_MAX_X),
-    y: Math.floor(index / (maxX - PLAYER_DEPLOYMENT_MAX_X)),
-  })).sort((left, right) => (
-    Math.abs(left.x - maxX) - Math.abs(right.x - maxX)
-    || gridDistance(left, preferred) - gridDistance(right, preferred)
-  ));
-  return candidates.find((candidate) => enemyPositionFits(enemy, candidate, blocked))
-    ?? { x: Math.max(0, Math.min(maxX, preferred.x)), y: Math.max(0, Math.min(maxY, preferred.y)) };
+function findAvailableEnemyPosition(combat: CombatState, enemy: EnemyState, preferred: GridPosition, blocked: Set<string>): GridPosition {
+  const candidates = getCombatRoomCells(combat)
+    .filter((candidate) => enemyPositionFits(combat, enemy, candidate, blocked))
+    .sort((left, right) => gridDistance(left, preferred) - gridDistance(right, preferred));
+  return candidates[0] ?? fallbackEnemyPosition(combat, 0, enemy);
 }
 
 function ensureCombatGrid(run: RunState): void {
   const combat = run.combat;
   if (!combat) return;
+  combat.roomLayout ??= { ...DEFAULT_COMBAT_ROOM_LAYOUT };
   const stats = run.player.stats;
   stats.baseDamage ??= 6;
   stats.damageMultiplier ??= 1;
@@ -129,20 +143,19 @@ function ensureCombatGrid(run: RunState): void {
       ? 'diagonal-jump'
       : 'cardinal';
     enemy.alerted ??= false;
-    const { width, height } = enemyFootprint(enemy);
-    const preferred = enemy.position ?? fallbackEnemyPosition(index, enemy.boss, width, height);
-    const clamped = {
-      x: Math.max(0, Math.min(COMBAT_GRID_WIDTH - width, preferred.x)),
-      y: Math.max(0, Math.min(COMBAT_GRID_HEIGHT - height, preferred.y)),
-    };
-    enemy.position = enemy.hp > 0 && !enemyPositionFits(enemy, clamped, occupied)
-      ? findAvailableEnemyPosition(enemy, clamped, occupied)
-      : clamped;
+    const preferred = enemy.position ?? fallbackEnemyPosition(combat, index, enemy);
+    enemy.position = enemy.hp > 0 && !enemyPositionFits(combat, enemy, preferred, occupied)
+      ? findAvailableEnemyPosition(combat, enemy, preferred, occupied)
+      : preferred;
     if (enemy.hp > 0) getEnemyOccupiedCells(enemy).forEach((cell) => occupied.add(positionKey(cell)));
   });
+  if (!isCombatCellAvailable(combat, combat.playerPosition) || occupied.has(positionKey(combat.playerPosition))) {
+    combat.playerPosition = getCombatRoomCells(combat).find((position) => !occupied.has(positionKey(position)))
+      ?? { ...ISAAC_DOOR_POSITION };
+  }
 }
 
-function reachablePositions(start: GridPosition, maxSteps: number, blocked: Set<string>): GridPosition[] {
+function reachablePositions(combat: CombatState, start: GridPosition, maxSteps: number, blocked: Set<string>): GridPosition[] {
   const queue: Array<{ position: GridPosition; steps: number }> = [{ position: start, steps: 0 }];
   const visited = new Set<string>([positionKey(start)]);
   const reachable: GridPosition[] = [];
@@ -156,7 +169,7 @@ function reachablePositions(start: GridPosition, maxSteps: number, blocked: Set<
     ];
     for (const position of neighbors) {
       const key = positionKey(position);
-      if (!insideGrid(position) || blocked.has(key) || visited.has(key)) continue;
+      if (!isCombatCellAvailable(combat, position) || blocked.has(key) || visited.has(key)) continue;
       visited.add(key);
       queue.push({ position, steps: current.steps + 1 });
     }
@@ -197,7 +210,7 @@ export function getReachablePlayerCells(run: RunState): GridPosition[] {
     .filter((enemy) => enemy.hp > 0)
     .flatMap((enemy) => getEnemyOccupiedCells(enemy))
     .map(positionKey));
-  return reachablePositions(playerPosition, getPlayerMovementSpeed(run), blocked);
+  return reachablePositions(run.combat, playerPosition, getPlayerMovementSpeed(run), blocked);
 }
 
 export function getPlayerDeploymentCells(run: RunState): GridPosition[] {
@@ -207,10 +220,7 @@ export function getPlayerDeploymentCells(run: RunState): GridPosition[] {
     .filter((enemy) => enemy.hp > 0)
     .flatMap((enemy) => getEnemyOccupiedCells(enemy))
     .map(positionKey));
-  return Array.from({ length: (PLAYER_DEPLOYMENT_MAX_X + 1) * COMBAT_GRID_HEIGHT }, (_, index) => ({
-    x: index % (PLAYER_DEPLOYMENT_MAX_X + 1),
-    y: Math.floor(index / (PLAYER_DEPLOYMENT_MAX_X + 1)),
-  })).filter((position) => !occupied.has(positionKey(position)));
+  return getCombatRoomCells(combat).filter((position) => !occupied.has(positionKey(position)));
 }
 
 export function isEnemyInPlayerRange(run: RunState, enemyId: string): boolean {
@@ -306,27 +316,52 @@ export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLO
     updatedAt: createdAt,
     phase: 'map',
     floorIndex: 0,
-    floorMap: createFloorMap(0),
+    floorMap: createFloorMap(0, cleanSeed),
     player: undefined as unknown as RunState['player'],
     clearedRooms: 0,
     score: 0,
     devilChance: 0.35,
     angelFavor: 0,
     tookDevilDeal: false,
-    unlocks: [...new Set([...DEFAULT_UNLOCKS.filter((id) => id === 'd6'), ...unlockedItemIds])],
+    unlocks: [...new Set([...DEFAULT_UNLOCKS, ...unlockedItemIds])],
     unlockNotices: [],
     lastReward: [],
+    floorBombSearches: [],
     floorRedDamage: 0,
     floorSecretVisits: [],
     victory: false,
   } satisfies RunState;
   run.player = createIsaac(run);
+  makeFloorStartChoice(run);
   return run;
 }
 
 export function getAvailableNodes(run: RunState): string[] {
   if (run.phase !== 'map') return [];
   return availableNodeIds(run.floorMap);
+}
+
+export function useMapBomb(state: RunState): RunState {
+  const run = clone(state);
+  if (run.phase !== 'map') throw new Error('A bomb can only search for doors from the map');
+  if (run.player.bombs < 1) throw new Error('No bombs available');
+  run.floorBombSearches ??= [];
+  const current = getMapNode(run.floorMap, run.floorMap.currentNodeId);
+  if (run.floorBombSearches.includes(current.id)) throw new Error('This room has already been searched');
+  run.player.bombs -= 1;
+  run.floorBombSearches.push(current.id);
+  const hiddenRoom = run.floorMap.nodes.find((node) =>
+    node.optional && node.anchorId === current.id && !node.visited && !node.doorOpened);
+  if (hiddenRoom) {
+    hiddenRoom.revealed = true;
+    hiddenRoom.doorOpened = true;
+  }
+  run.mapBombResult = {
+    currentNodeId: current.id,
+    found: Boolean(hiddenRoom),
+    roomKind: hiddenRoom?.kind === 'super-secret' ? 'super-secret' : hiddenRoom ? 'secret' : undefined,
+  };
+  return touch(run);
 }
 
 export function getCard(run: RunState, instanceId: string): CardInstance | undefined {
@@ -457,6 +492,39 @@ function resourceOption(
   return { id: makeId('option', run), type: 'resource', resource, amount, label, description, icon, price };
 }
 
+function floorStartItemOption(run: RunState, predicate: (item: ItemDefinition) => boolean): RewardOption | undefined {
+  const candidates = Object.values(ITEMS).filter((item) =>
+    run.unlocks.includes(item.id) && !run.player.items.includes(item.id) && predicate(item));
+  const item = weightedUnique(run, candidates, 1, (entry) => ITEM_QUALITY_WEIGHTS[entry.quality])[0];
+  return item ? {
+    id: makeId('floor-item', run), type: 'item', itemId: item.id,
+    label: item.name, description: item.description, icon: item.icon,
+  } : undefined;
+}
+
+function makeFloorStartChoice(run: RunState): void {
+  const combatItem = floorStartItemOption(run, itemUsesCombatCard);
+  const permanentItem = floorStartItemOption(run, (item) =>
+    item.kind === 'passive' && item.combatCard === false && item.pool.includes('large-room'));
+  const resource = pickOne(run, ['coins', 'bombs', 'keys'] as const);
+  const resourceAmount = resource === 'coins'
+    ? randomInt(run, 6 + run.floorIndex, 9 + run.floorIndex)
+    : randomInt(run, 2, run.floorIndex >= 3 ? 3 : 2);
+  const resourceRewards = {
+    coins: resourceOption(run, 'coins', resourceAmount, 'Coin cache', 'Take the loose change.', '¢'),
+    bombs: resourceOption(run, 'bombs', resourceAmount, 'Bomb bundle', 'Bombs for future hidden doors.', '●'),
+    keys: resourceOption(run, 'keys', resourceAmount, 'Key ring', 'Keys for locked rewards.', '⚿'),
+  } satisfies Record<typeof resource, RewardOption>;
+  const options = shuffle(run, [combatItem, permanentItem, resourceRewards[resource]]
+    .filter((option): option is RewardOption => option !== undefined));
+  run.lastReward = [];
+  setChoice(run, {
+    kind: 'loot', title: 'Floor provisions',
+    subtitle: 'Choose one: a reusable item card, a permanent stat item, or an asset pack.',
+    options, canSkip: false, next: 'map', rewardContext: 'floor-start',
+  });
+}
+
 function applyResource(run: RunState, resource: NonNullable<RewardOption['resource']>, amount: number): string {
   switch (resource) {
     case 'coins': run.player.coins += amount; return `${amount}¢`;
@@ -550,14 +618,15 @@ export function enterRoom(state: RunState, nodeId: string): RunState {
   if (!availableNodeIds(run.floorMap).includes(nodeId)) throw new Error('That room is not connected to the current route');
   const node = getMapNode(run.floorMap, nodeId);
   if (node.visited) throw new Error('That room has already been cleared');
-  if ((node.kind === 'secret' || node.kind === 'super-secret')) {
-    if (run.player.bombs < 1) throw new Error('A bomb is required to open this room');
-    run.player.bombs -= 1;
+  if ((node.kind === 'shop' || node.kind === 'treasure') && run.floorIndex > 0) {
+    if (run.player.keys < 1) throw new Error('A key is required to open this room');
+    run.player.keys -= 1;
   }
   node.visited = true;
   if (!node.optional) run.floorMap.currentNodeId = node.id;
   run.currentRoomId = node.id;
   run.lastReward = [];
+  run.mapBombResult = undefined;
 
   if (node.kind === 'combat' || node.kind === 'elite' || node.kind === 'boss') {
     beginCombat(run, node.kind);
@@ -684,6 +753,7 @@ function ensureEnemyBehavior(enemy: EnemyState): void {
 
 export function hydrateRunState(state: RunState): RunState {
   const run = clone(state);
+  run.floorBombSearches ??= [];
   const legacyCardIds: Record<string, string> = {
     'isaacs-tears': 'basic-attack',
     'wide-tears': 'sweeping-attack',
@@ -798,7 +868,7 @@ function rollIntent(run: RunState, enemy: EnemyState): EnemyIntent {
   return makeIntent(actions);
 }
 
-function makeEnemy(run: RunState, definition: EnemyDefinition, index: number): EnemyState {
+function makeEnemy(run: RunState, definition: EnemyDefinition, index: number, initializeIntent = true): EnemyState {
   const scale = 1 + run.floorIndex * 0.08;
   const enemy: EnemyState = {
     ...definition,
@@ -818,11 +888,111 @@ function makeEnemy(run: RunState, definition: EnemyDefinition, index: number): E
     reactionCooldown: 0,
     turnsSinceAttack: 0,
     alerted: false,
-    position: fallbackEnemyPosition(index, definition.boss, definition.footprintWidth, definition.footprintHeight),
+    position: { ...ISAAC_DOOR_POSITION },
     intent: { kind: 'idle', value: 0, label: 'Watching' },
   };
-  enemy.intent = rollIntent(run, enemy);
+  if (initializeIntent) enemy.intent = rollIntent(run, enemy);
   return enemy;
+}
+
+function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']): CombatRoomLayout {
+  const progression = [
+    // The first two floors are the build-up phase: most fights stay compact so
+    // weak opening decks do not spend several turns only crossing empty space.
+    { standard: 90, wide: 5, tall: 3, large: 1, lShape: 1 },
+    { standard: 78, wide: 10, tall: 7, large: 3, lShape: 2 },
+    { standard: 60, wide: 17, tall: 13, large: 6, lShape: 4 },
+    { standard: 44, wide: 20, tall: 16, large: 11, lShape: 9 },
+    { standard: 28, wide: 20, tall: 16, large: 20, lShape: 16 },
+    { standard: 22, wide: 18, tall: 14, large: 26, lShape: 20 },
+  ][Math.min(FLOORS.length - 1, Math.max(0, run.floorIndex))]!;
+  const weights = { ...progression };
+  if (roomKind === 'elite') {
+    weights.standard *= 0.82;
+    weights.large *= 1.25;
+    weights.lShape *= 1.2;
+  } else if (roomKind === 'boss') {
+    const bossGrowth = run.floorIndex / Math.max(1, FLOORS.length - 1);
+    weights.standard *= 0.72 - bossGrowth * 0.18;
+    weights.wide *= 1.1;
+    weights.tall *= 1.05;
+    weights.large *= 1.7 + bossGrowth * 0.5;
+    weights.lShape *= 1.45 + bossGrowth * 0.35;
+  }
+  const layout = weightedPick(run, [
+    {
+      value: { shape: 'standard', width: STANDARD_ROOM_WIDTH, height: STANDARD_ROOM_HEIGHT, unitCount: 1 } as CombatRoomLayout,
+      weight: weights.standard,
+    },
+    {
+      value: { shape: 'wide', width: STANDARD_ROOM_WIDTH * 2, height: STANDARD_ROOM_HEIGHT, unitCount: 2 } as CombatRoomLayout,
+      weight: weights.wide,
+    },
+    {
+      value: { shape: 'tall', width: STANDARD_ROOM_WIDTH, height: STANDARD_ROOM_HEIGHT * 2, unitCount: 2 } as CombatRoomLayout,
+      weight: weights.tall,
+    },
+    {
+      value: { shape: 'large', width: STANDARD_ROOM_WIDTH * 2, height: STANDARD_ROOM_HEIGHT * 2, unitCount: 4 } as CombatRoomLayout,
+      weight: weights.large,
+    },
+    {
+      value: { shape: 'l-shaped', width: STANDARD_ROOM_WIDTH * 2, height: STANDARD_ROOM_HEIGHT * 2, unitCount: 3 } as CombatRoomLayout,
+      weight: weights.lShape,
+    },
+  ]);
+  const generated = { ...layout };
+  if (generated.shape === 'l-shaped') {
+    generated.missingQuadrant = pickOne(run, ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const);
+  }
+  return generated;
+}
+
+function roomEnemyCapacity(layout: CombatRoomLayout): number {
+  const cellCount = layout.width * layout.height
+    - (layout.shape === 'l-shaped' ? STANDARD_ROOM_WIDTH * STANDARD_ROOM_HEIGHT : 0);
+  return Math.max(3, Math.floor(cellCount / 50));
+}
+
+function encounterDefinitions(run: RunState, roomKind: CombatState['roomKind'], layout: CombatRoomLayout): EnemyDefinition[] {
+  const pool = enemyPoolForFloor(run.floorIndex);
+  const capacity = roomEnemyCapacity(layout);
+  if (roomKind === 'boss') {
+    const supportLimit = layout.unitCount >= 3 ? Math.min(2, Math.floor(run.floorIndex / 2)) : 0;
+    const supportCount = supportLimit > 0 ? randomInt(run, 0, supportLimit) : 0;
+    return [bossForFloor(run.floorIndex), ...Array.from({ length: supportCount }, () => pickOne(run, pool))];
+  }
+  if (roomKind === 'elite') {
+    const minimumSupport = layout.unitCount === 1 ? (run.floorIndex >= 2 ? 1 : 0) : Math.max(1, layout.unitCount - 1);
+    const maximumSupport = Math.max(minimumSupport, Math.min(capacity - 1, Math.ceil(capacity * 0.65)));
+    const supportCount = randomInt(run, minimumSupport, maximumSupport);
+    return [eliteForFloor(run.floorIndex), ...Array.from({ length: supportCount }, () => pickOne(run, pool))];
+  }
+  const minimum = Math.max(2, Math.ceil(capacity * 0.6));
+  const count = randomInt(run, minimum, capacity);
+  return Array.from({ length: count }, () => pickOne(run, pool));
+}
+
+function positionEnemiesRandomly(run: RunState, combat: CombatState): void {
+  const entryPosition = [{ x: 0, y: 4 }, { x: 0, y: 13 }]
+    .find((position) => isCombatCellAvailable(combat, position))
+    ?? getCombatRoomCells(combat)[0]
+    ?? { ...ISAAC_DOOR_POSITION };
+  const occupied = new Set<string>([positionKey(entryPosition)]);
+  const placementOrder = [...combat.enemies].sort((left, right) => (
+    right.footprintWidth * right.footprintHeight - left.footprintWidth * left.footprintHeight
+  ));
+  for (const enemy of placementOrder) {
+    const candidates = getCombatRoomCells(combat)
+      .filter((position) => enemyPositionFits(combat, enemy, position, occupied));
+    if (!candidates.length) throw new Error(`Room layout cannot fit enemy ${enemy.id}`);
+    enemy.position = pickOne(run, candidates);
+    getEnemyOccupiedCells(enemy).forEach((cell) => occupied.add(positionKey(cell)));
+  }
+  occupied.delete(positionKey(entryPosition));
+  const deploymentCells = getCombatRoomCells(combat).filter((position) => !occupied.has(positionKey(position)));
+  if (!deploymentCells.length) throw new Error('Room layout has no free deployment cell');
+  combat.playerPosition = entryPosition;
 }
 
 function drawToHand(run: RunState, combat: CombatState, target = run.player.stats.drawCount): void {
@@ -838,21 +1008,13 @@ function drawToHand(run: RunState, combat: CombatState, target = run.player.stat
 }
 
 function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void {
-  let definitions: EnemyDefinition[];
-  if (roomKind === 'boss') {
-    definitions = [bossForFloor(run.floorIndex)];
-  } else if (roomKind === 'elite') {
-    definitions = [eliteForFloor(run.floorIndex)];
-    if (run.floorIndex >= 2) definitions.push(pickOne(run, enemyPoolForFloor(run.floorIndex)));
-  } else {
-    const pool = enemyPoolForFloor(run.floorIndex);
-    const count = randomInt(run, 2, Math.min(3, 2 + Math.floor(run.floorIndex / 2)));
-    definitions = Array.from({ length: count }, () => pickOne(run, pool));
-  }
+  const generatedLayout = createCombatRoomLayout(run, roomKind);
+  const definitions = encounterDefinitions(run, roomKind, generatedLayout);
   const skills = run.player.deck.filter((card) => CARDS[card.definitionId]?.type === 'skill').map((card) => card.instanceId);
   const others = run.player.deck.filter((card) => CARDS[card.definitionId]?.type !== 'skill').map((card) => card.instanceId);
   const combat: CombatState = {
     roomKind,
+    roomLayout: generatedLayout,
     deploymentPending: true,
     round: 1,
     vitality: run.player.stats.maxVitality,
@@ -878,7 +1040,10 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
     animationEvents: [],
     damageTakenThisFloor: 0,
   };
-  combat.enemies = definitions.map((definition, index) => makeEnemy(run, definition, index));
+  run.combat = combat;
+  combat.enemies = definitions.map((definition, index) => makeEnemy(run, definition, index, false));
+  positionEnemiesRandomly(run, combat);
+  combat.enemies.forEach((enemy) => { enemy.intent = rollIntent(run, enemy); });
   if (!combat.enemies.some((enemy) => enemy.intent.actions?.some((entry) => entry.kind === 'attack'))) {
     const attacker = combat.enemies.at(-1);
     if (attacker) attacker.intent = makeIntent(attacker.boss
@@ -889,7 +1054,6 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
   pushLog(combat, `Round 1 — ${combat.enemies.map((enemy) => enemy.name).join(', ')} entered the room.`, 'special', 'enter', {
     enemies: combat.enemies.map((enemy) => enemy.id).join('|'),
   });
-  run.combat = combat;
   run.choice = undefined;
   run.phase = 'combat';
 }
@@ -935,7 +1099,7 @@ function knockbackEnemy(combat: CombatState, enemy: EnemyState, distance: number
   let destination = { ...enemy.position };
   for (let step = 0; step < distance; step += 1) {
     const candidate = { x: destination.x + stepX, y: destination.y + stepY };
-    if (!enemyPositionFits(enemy, candidate, occupied)) break;
+    if (!enemyPositionFits(combat, enemy, candidate, occupied)) break;
     destination = candidate;
   }
   if (destination.x === enemy.position.x && destination.y === enemy.position.y) return;
@@ -988,16 +1152,25 @@ function playAttack(
   for (const target of targets) {
     target.alerted = true;
     const wasAlive = target.hp > 0;
+    const hpBefore = target.hp;
+    const shieldBefore = target.shield;
     let targetTotal = 0;
+    let rawTotal = 0;
     for (let hit = 0; hit < hits; hit += 1) {
       const critical = nextRandom(run) < run.player.stats.critChance + combat.playerCritChanceBuff;
-      const dealt = hurtEnemy(target, base * (critical ? 2 : 1), armorPierce);
+      const rawHit = base * (critical ? 2 : 1);
+      rawTotal += Math.round(rawHit);
+      const dealt = hurtEnemy(target, rawHit, armorPierce);
       total += dealt;
       targetTotal += dealt;
     }
+    const hpDamage = hpBefore - target.hp;
+    const shieldDamage = shieldBefore - target.shield;
     pushAnimation(combat, {
       kind: 'player-attack', sourceId: 'isaac', targetId: target.instanceId,
-      value: targetTotal, secondaryValue: hits, attackMode, projectileScale: modifier.projectileScale,
+      value: hpDamage, secondaryValue: shieldDamage, rawValue: rawTotal,
+      armorValue: Math.max(0, rawTotal - targetTotal), hitCount: hits,
+      attackMode, projectileScale: modifier.projectileScale,
       poisonTurns: modifier.poisonTurns, slowTurns: modifier.slowTurns,
     });
     if (target.hp > 0 && modifier.poisonTurns > 0) {
@@ -1278,6 +1451,55 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
   return touch(run);
 }
 
+export function useCombatBomb(state: RunState, x: number, y: number): RunState {
+  const run = clone(state);
+  if (run.phase !== 'combat' || !run.combat) throw new Error('Not in combat');
+  if (run.combat.deploymentPending) throw new Error('Confirm deployment before using a bomb');
+  if (run.player.bombs < 1) throw new Error('No bombs available');
+  const center = { x, y };
+  if (!isCombatCellAvailable(run.combat, center)) throw new Error('That grid cell cannot hold a bomb');
+  run.player.bombs -= 1;
+  run.combat.selectedEnemyId = undefined;
+  const blastCells = new Set<string>();
+  for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      const cell = { x: x + offsetX, y: y + offsetY };
+      if (isCombatCellAvailable(run.combat, cell)) blastCells.add(positionKey(cell));
+    }
+  }
+  pushAnimation(run.combat, { kind: 'bomb-blast', sourceId: 'isaac', toX: x, toY: y, value: 50 });
+  let totalDamage = 0;
+  let hitEnemies = 0;
+  for (const enemy of run.combat.enemies.filter((entry) => entry.hp > 0)) {
+    const coveredCells = getEnemyOccupiedCells(enemy).filter((cell) => blastCells.has(positionKey(cell)));
+    if (!coveredCells.length) continue;
+    hitEnemies += 1;
+    const wasAlive = enemy.hp > 0;
+    const hpBefore = enemy.hp;
+    const shieldBefore = enemy.shield;
+    let afterArmorTotal = 0;
+    for (const _cell of coveredCells) afterArmorTotal += hurtEnemy(enemy, 50);
+    const hpDamage = hpBefore - enemy.hp;
+    const shieldDamage = shieldBefore - enemy.shield;
+    const durabilityDamage = hpDamage + shieldDamage;
+    const rawDamage = coveredCells.length * 50;
+    totalDamage += durabilityDamage;
+    pushAnimation(run.combat, {
+      kind: 'bomb-hit', sourceId: 'isaac', targetId: enemy.instanceId,
+      value: hpDamage, secondaryValue: shieldDamage, rawValue: rawDamage,
+      armorValue: Math.max(0, rawDamage - afterArmorTotal), hitCount: coveredCells.length,
+    });
+    if (wasAlive && enemy.hp <= 0) {
+      pushAnimation(run.combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+    }
+  }
+  pushLog(run.combat, `Bomb hit ${hitEnemies} enemies for ${totalDamage} damage at (${x}, ${y}).`, 'special', 'bombBlast', {
+    enemies: hitEnemies, damage: totalDamage, x, y,
+  });
+  if (allEnemiesDefeated(run.combat)) finishCombat(run);
+  return touch(run);
+}
+
 export function playCard(state: RunState, instanceId: string, targetId?: string): RunState {
   if (getCardDefinition(state, instanceId)?.type === 'attack') {
     return playFusedAttack(state, instanceId, [], targetId);
@@ -1490,7 +1712,7 @@ function reachableEnemyPositions(combat: CombatState, enemy: EnemyState): GridPo
     for (const direction of directions) {
       const candidate = { x: current.position.x + direction.x, y: current.position.y + direction.y };
       const key = positionKey(candidate);
-      if (visited.has(key) || !enemyPositionFits(enemy, candidate, blocked)) continue;
+      if (visited.has(key) || !enemyPositionFits(combat, enemy, candidate, blocked)) continue;
       visited.add(key);
       queue.push({ position: candidate, steps: current.steps + 1 });
     }
@@ -1796,6 +2018,15 @@ function finishCombat(run: RunState): void {
       kind: 'item', title: 'Champion defeated', subtitle: `Room drop: ${loot}. Choose one elite item.`,
       options: itemOptions(run, 'elite', 3), canSkip: false, next: 'map',
     });
+  } else if (combat.roomLayout.unitCount >= 3 && nextRandom(run) < Math.min(
+    0.6,
+    (combat.roomLayout.shape === 'large' ? 0.38 : 0.28) + run.floorIndex * 0.02 + run.player.stats.luck * 0.02,
+  )) {
+    setChoice(run, {
+      kind: 'item', title: 'Large room treasure',
+      subtitle: `Room drop: ${loot}. Choose one permanent stat item; it never enters the combat deck.`,
+      options: itemOptions(run, 'large-room', 3), canSkip: true, next: 'map', rewardContext: 'large-room',
+    });
   } else {
     setChoice(run, {
       kind: 'card', title: 'Room cleared', subtitle: `Room drop: ${loot}. Add one card, or skip.`,
@@ -1822,14 +2053,17 @@ function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade'
 function advanceFloor(run: RunState): void {
   if (run.floorRedDamage === 0) unlock(run, 'holy-mantle');
   run.floorIndex += 1;
-  run.floorMap = createFloorMap(run.floorIndex);
+  run.floorMap = createFloorMap(run.floorIndex, run.seed);
   run.floorRedDamage = 0;
   run.floorSecretVisits = [];
+  run.floorBombSearches = [];
+  run.mapBombResult = undefined;
   run.choice = undefined;
   run.combat = undefined;
   run.currentRoomId = undefined;
   run.phase = 'map';
   revealMap(run);
+  makeFloorStartChoice(run);
 }
 
 function finishVictory(run: RunState): void {

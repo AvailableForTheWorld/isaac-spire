@@ -4,8 +4,8 @@ import {
   CARDS, DEFAULT_PROFILE, FLOORS, ITEMS, abandonRun, canPlayCard, canPlayFusedAttack, chooseOption, confirmPlayerDeployment, createRun,
   discardCard, endTurn, enterRoom, finishDiscard, getAvailableNodes, getCardDefinition,
   getAttackFusionMaterialIds, getAttackFusionPreview, getEnemyMovementSpeed, getPlayerAttackRange, getPlayerMovementSpeed, hydrateRunState,
-  isEnemyInPlayerRange, isPlayerInEnemyVision, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice,
-  type CardInstance, type CombatAnimationEvent, type EnemyIntent, type MapNode, type PersistedRun, type ProfileState, type RewardOption,
+  isEnemyInPlayerRange, isPlayerInEnemyVision, itemUsesCombatCard, movePlayer, placePlayerForDeployment, playCard, playFusedAttack, selectEnemy, skipChoice, useCombatBomb, useMapBomb,
+  type CardInstance, type CombatAnimationEvent, type EnemyIntent, type MapConnectionStyle, type MapNode, type PersistedRun, type ProfileState, type RewardOption,
   type RoomKind, type RunState,
 } from '@isaac-spire/game';
 import { loadProfile, loadRecentRuns, saveRun } from './api';
@@ -126,6 +126,7 @@ function HeartMeter({ run, shield, armor }: { run: RunState; shield?: number; ar
 }
 
 function nodePoint(node: MapNode): { x: number; y: number } {
+  if (node.mapPosition) return node.mapPosition;
   const optionalOffset = node.kind === 'secret' ? -0.34 : node.kind === 'super-secret' ? 0.34 : 0;
   const laneDrift = ['entrance', 'boss'].includes(node.kind)
     ? 0
@@ -133,19 +134,43 @@ function nodePoint(node: MapNode): { x: number; y: number } {
   return { x: 20 + (node.lane + optionalOffset) * 30 + laneDrift, y: 5 + node.depth * 12.6 };
 }
 
-function routeCurve(from: { x: number; y: number }, to: { x: number; y: number }, key: string): string {
+function fallbackConnectionStyle(key: string): MapConnectionStyle {
   const direction = [...key].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 2 ? 1 : -1;
-  const verticalDistance = to.y - from.y;
-  const bend = Math.abs(to.x - from.x) < 2 ? direction * 4.2 : (to.x - from.x) * 0.18;
-  return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y + verticalDistance * 0.34}, ${to.x - bend} ${to.y - verticalDistance * 0.34}, ${to.x} ${to.y}`;
+  return {
+    startBend: direction * 4.2, endBend: direction * -2.8, tension: 0.34,
+    dash: 2, gap: 2, duration: 16, delay: -4, opacity: 1,
+  };
 }
 
-function RouteMap({ run, onEnter }: { run: RunState; onEnter: (id: string) => void }) {
+function routeCurve(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  style: MapConnectionStyle,
+): string {
+  const horizontalDistance = to.x - from.x;
+  const verticalDistance = to.y - from.y;
+  const firstControlX = from.x + horizontalDistance * 0.22 + style.startBend;
+  const secondControlX = to.x - horizontalDistance * 0.22 + style.endBend;
+  return `M ${from.x} ${from.y} C ${firstControlX} ${from.y + verticalDistance * style.tension}, ${secondControlX} ${to.y - verticalDistance * style.tension}, ${to.x} ${to.y}`;
+}
+
+function routeInkStyle(style: MapConnectionStyle): React.CSSProperties {
+  return {
+    '--route-dash': `${style.dash} ${style.gap}`,
+    '--route-duration': `${style.duration}s`,
+    '--route-delay': `${style.delay}s`,
+    '--route-opacity': style.opacity,
+  } as React.CSSProperties;
+}
+
+function RouteMap({ run, onEnter, onBombSearch }: { run: RunState; onEnter: (id: string) => void; onBombSearch: () => void }) {
   const { t } = useTranslation();
   const [enteringNode, setEnteringNode] = useState<string>();
   const available = useMemo(() => new Set(getAvailableNodes(run)), [run]);
   const current = run.floorMap.nodes.find((node) => node.id === run.floorMap.currentNodeId);
-  const visibleNodes = run.floorMap.nodes.filter((node) => node.revealed || node.optional);
+  const visibleNodes = run.floorMap.nodes.filter((node) => node.revealed || !node.optional);
+  const currentSearched = Boolean(current && run.floorBombSearches?.includes(current.id));
+  const bombResult = run.mapBombResult?.currentNodeId === current?.id ? run.mapBombResult : undefined;
   return (
     <main className="map-layout">
       <section className="map-copy">
@@ -156,6 +181,14 @@ function RouteMap({ run, onEnter }: { run: RunState; onEnter: (id: string) => vo
           <span>{t('map.current')}</span>
           <strong>{current ? roomName(t, current.kind) : '?'}</strong>
         </div>
+        <div className="map-bomb-search">
+          <button disabled={run.player.bombs < 1 || currentSearched} onClick={onBombSearch}>
+            <b>●</b><span>{t(currentSearched ? 'map.wallSearched' : 'map.searchWall')}</span><small>{t('map.searchWallCost')}</small>
+          </button>
+          {bombResult && <p className={bombResult.found ? 'found' : 'empty'}>{bombResult.found
+            ? t('map.secretFound', { room: roomName(t, bombResult.roomKind ?? 'secret') })
+            : t('map.noSecretFound')}</p>}
+        </div>
         <HeartMeter run={run} />
         <div className="floor-progress" aria-label={t('map.progress')}>
           {FLOORS.map((floor) => <i key={floor.index} className={floor.index < run.floorIndex ? 'done' : floor.index === run.floorIndex ? 'active' : ''} title={floorName(t, floor.index)} />)}
@@ -163,52 +196,59 @@ function RouteMap({ run, onEnter }: { run: RunState; onEnter: (id: string) => vo
         <p className="map-note">{t('map.note')}</p>
       </section>
       <section className={`route-board ${enteringNode ? 'route-entering' : ''}`} style={{ '--floor-color': FLOORS[run.floorIndex]?.palette } as React.CSSProperties}>
-        <div className="route-labels"><span>{t('map.left')}</span><span>{t('map.center')}</span><span>{t('map.right')}</span></div>
-        <svg className="route-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          {run.floorMap.nodes.filter((node) => !node.optional).flatMap((node) => node.connections.map((targetId) => {
-            const target = run.floorMap.nodes.find((entry) => entry.id === targetId);
-            if (!target) return null;
-            const from = nodePoint(node); const to = nodePoint(target);
-            const active = node.visited && (target.visited || available.has(target.id));
-            const key = `${node.id}-${target.id}`;
-            return <path key={key} d={routeCurve(from, to, key)} className={active ? 'active' : ''} />;
-          }))}
-          {run.floorMap.nodes.filter((node) => node.optional).map((node) => {
-            const anchor = run.floorMap.nodes.find((entry) => entry.id === node.anchorId);
-            if (!anchor || !node.revealed) return null;
-            const from = nodePoint(anchor); const to = nodePoint(node);
-            const key = `optional-${node.id}`;
-            return <path key={key} d={routeCurve(from, to, key)} className="secret-line" />;
+        <div className="route-canvas">
+          <svg className="route-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            {run.floorMap.nodes.filter((node) => !node.optional).flatMap((node) => node.connections.map((targetId) => {
+              const target = run.floorMap.nodes.find((entry) => entry.id === targetId);
+              if (!target) return null;
+              const from = nodePoint(node); const to = nodePoint(target);
+              const active = node.visited && (target.visited || available.has(target.id));
+              const key = `${node.id}->${target.id}`;
+              const style = run.floorMap.connectionStyles?.[key] ?? fallbackConnectionStyle(key);
+              return <path key={key} d={routeCurve(from, to, style)} style={routeInkStyle(style)} className={active ? 'active' : ''} />;
+            }))}
+            {run.floorMap.nodes.filter((node) => node.optional).map((node) => {
+              const anchor = run.floorMap.nodes.find((entry) => entry.id === node.anchorId);
+              if (!anchor || !node.revealed) return null;
+              const from = nodePoint(anchor); const to = nodePoint(node);
+              const key = `${anchor.id}->${node.id}`;
+              const style = run.floorMap.connectionStyles?.[key] ?? fallbackConnectionStyle(key);
+              return <path key={key} d={routeCurve(from, to, style)} style={routeInkStyle(style)} className="secret-line" />;
+            })}
+          </svg>
+          {visibleNodes.map((node) => {
+            const point = nodePoint(node);
+            const meta = ROOM_META[node.kind];
+            const canEnter = available.has(node.id);
+            const sealedSecret = node.optional && !node.doorOpened;
+            const needsKey = run.floorIndex > 0 && (node.kind === 'shop' || node.kind === 'treasure');
+            const noKey = canEnter && needsKey && run.player.keys < 1;
+            const hidden = node.optional && !node.revealed;
+            return (
+              <button
+                key={node.id}
+                className={`map-node ${node.kind} ${node.visited ? 'visited' : ''} ${canEnter ? 'available' : ''} ${hidden ? 'hidden' : ''} ${enteringNode === node.id ? 'choosing' : ''}`}
+                style={{ left: `${point.x}%`, top: `${point.y}%` }}
+                disabled={!canEnter || noKey}
+                onClick={() => {
+                  if (enteringNode) return;
+                  setEnteringNode(node.id);
+                  window.setTimeout(() => onEnter(node.id), 420);
+                }}
+                title={hidden ? t('map.hidden') : `${roomName(t, node.kind)}：${roomHint(t, node.kind)}${sealedSecret ? ` ${t('map.needBomb')}` : ''}${needsKey ? ` ${t('map.needKey')}` : ''}`}
+                aria-label={hidden ? t('map.hiddenLabel') : roomName(t, node.kind)}
+              >
+                <span>{hidden ? '?' : meta.icon}</span>
+                {!hidden && <small>{roomName(t, node.kind)}</small>}
+                {sealedSecret && <em>{t('map.sealed')}</em>}
+                {noKey && <em>{t('map.noKey')}</em>}
+                {canEnter && needsKey && !noKey && <em className="key-cost">⚿ 1</em>}
+              </button>
+            );
           })}
-        </svg>
-        {visibleNodes.map((node) => {
-          const point = nodePoint(node);
-          const meta = ROOM_META[node.kind];
-          const canEnter = available.has(node.id);
-          const noBomb = node.optional && run.player.bombs < 1;
-          const hidden = node.optional && !node.revealed;
-          return (
-            <button
-              key={node.id}
-              className={`map-node ${node.kind} ${node.visited ? 'visited' : ''} ${canEnter ? 'available' : ''} ${hidden ? 'hidden' : ''} ${enteringNode === node.id ? 'choosing' : ''}`}
-              style={{ left: `${point.x}%`, top: `${point.y}%` }}
-              disabled={!canEnter || noBomb}
-              onClick={() => {
-                if (enteringNode) return;
-                setEnteringNode(node.id);
-                window.setTimeout(() => onEnter(node.id), 420);
-              }}
-              title={hidden ? t('map.hidden') : `${roomName(t, node.kind)}：${roomHint(t, node.kind)}${noBomb ? ` ${t('map.needBomb')}` : ''}`}
-              aria-label={hidden ? t('map.hiddenLabel') : roomName(t, node.kind)}
-            >
-              <span>{hidden ? '?' : meta.icon}</span>
-              {!hidden && <small>{roomName(t, node.kind)}</small>}
-              {canEnter && noBomb && <em>{t('map.noBomb')}</em>}
-            </button>
-          );
-        })}
-        <div className="route-depth-label top">{t('map.thisFloor')}</div>
-        <div className="route-depth-label bottom">{t('map.bossDoor')}</div>
+          <div className="route-depth-label top">{t('map.thisFloor')}</div>
+          <div className="route-depth-label bottom">{t('map.bossDoor')}</div>
+        </div>
       </section>
     </main>
   );
@@ -394,6 +434,56 @@ function FusionAttackModal({ run, attackInstanceId, selectedItemIds, onToggle, o
   </div>;
 }
 
+interface ConfirmationItem {
+  icon: string;
+  name: string;
+  note: string;
+}
+
+function ConfirmationPanel({ eyebrow, title, message, items, confirmLabel, onConfirm, onCancel }: {
+  eyebrow: string;
+  title: string;
+  message: string;
+  items: ConfirmationItem[];
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const confirmButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    confirmButton.current?.focus();
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', closeWithEscape);
+    return () => window.removeEventListener('keydown', closeWithEscape);
+  }, [onCancel]);
+  return <div
+    className="confirmation-backdrop"
+    role="presentation"
+    onPointerDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
+  >
+    <section className="confirmation-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message">
+      <header><span>{eyebrow}</span><button onClick={onCancel} aria-label={t('confirmation.close')}>×</button></header>
+      <div className="confirmation-copy">
+        <b aria-hidden="true">!</b>
+        <div><h2 id="confirmation-title">{title}</h2><p id="confirmation-message">{message}</p></div>
+      </div>
+      <div className={`confirmation-items ${items.length === 1 ? 'single' : ''}`}>
+        {items.map((item, index) => <div key={`${item.name}-${index}`}>
+          <b>{item.icon}</b><span><small>{item.note}</small><strong>{item.name}</strong></span>
+        </div>)}
+        {items.length === 2 && <i aria-hidden="true">→</i>}
+      </div>
+      <footer>
+        <button className="text-button" onClick={onCancel}>{t('confirmation.cancel')}</button>
+        <button ref={confirmButton} className="primary-button confirmation-submit" onClick={onConfirm}>{confirmLabel}<span>→</span></button>
+      </footer>
+    </section>
+  </div>;
+}
+
 type TargetingGeometry = {
   width: number;
   height: number;
@@ -482,8 +572,8 @@ const COMBAT_ANIMATION_DURATIONS: Record<CombatAnimationEvent['kind'], number> =
   'enemy-phase': 850,
   'round-start': 850,
   move: 520,
-  'player-attack': 650,
-  'enemy-attack': 1150,
+  'player-attack': 3100,
+  'enemy-attack': 3100,
   shield: 520,
   heal: 520,
   poison: 520,
@@ -492,6 +582,8 @@ const COMBAT_ANIMATION_DURATIONS: Record<CombatAnimationEvent['kind'], number> =
   summon: 720,
   idle: 420,
   defeat: 650,
+  'bomb-blast': 900,
+  'bomb-hit': 3100,
   'black-heart': 560,
 };
 
@@ -509,6 +601,8 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
   const [fusionItemIds, setFusionItemIds] = useState<string[]>([]);
   const [pendingFusionItemIds, setPendingFusionItemIds] = useState<string[]>([]);
   const [hoveredTargetId, setHoveredTargetId] = useState<string>();
+  const [bombTargeting, setBombTargeting] = useState(false);
+  const [pendingActiveDiscard, setPendingActiveDiscard] = useState<{ type: 'single'; instanceId: string } | { type: 'all' }>();
   const combat = run.combat!;
   const deploymentPending = Boolean(combat.deploymentPending);
   const lastAnimationSequence = useRef(combat.animationSequence);
@@ -519,6 +613,9 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
   const targetingDefinition = targetingCard ? CARDS[targetingCard.definitionId] : undefined;
   const hoveredTarget = hoveredTargetId ? combat.enemies.find((enemy) => enemy.instanceId === hoveredTargetId) : undefined;
   const discardable = handCards;
+  const cardsToDiscard = Math.max(0, handCards.length - run.player.stats.maxRetain);
+  const activeItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
+  const activeSkillCardId = activeItem?.skillCardId;
   useEffect(() => {
     const events = combat.animationEvents.filter((event) => event.sequence > lastAnimationSequence.current);
     lastAnimationSequence.current = combat.animationSequence;
@@ -564,6 +661,17 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
       window.removeEventListener('pointerdown', cancelTargetingOutsideTarget, true);
     };
   }, [targetingCardId]);
+  useEffect(() => {
+    if (discardMode || deploymentPending || run.player.bombs < 1) setBombTargeting(false);
+  }, [deploymentPending, discardMode, run.player.bombs]);
+  useEffect(() => {
+    if (!bombTargeting) return;
+    const cancelBombWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setBombTargeting(false);
+    };
+    window.addEventListener('keydown', cancelBombWithKeyboard);
+    return () => window.removeEventListener('keydown', cancelBombWithKeyboard);
+  }, [bombTargeting]);
   const animateCardAction = (instanceId: string, action: (state: RunState) => RunState) => {
     if (animatingCardId || animationLocked) return;
     setAnimatingCardId(instanceId);
@@ -572,14 +680,23 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
       setAnimatingCardId(undefined);
     }, 220);
   };
-  const discardAll = () => commit((state) => {
-    let next = state;
-    const ids = [...(next.combat?.hand ?? [])];
-    for (const id of ids) next = discardCard(next, id);
-    return next;
-  });
+  const discardAllCards = () => {
+    commit((state) => {
+      let next = state;
+      const ids = [...(next.combat?.hand ?? [])];
+      for (const id of ids) next = discardCard(next, id);
+      return next;
+    });
+  };
+  const discardAll = () => {
+    if (activeSkillCardId && handCards.some((card) => card.definitionId === activeSkillCardId)) {
+      setPendingActiveDiscard({ type: 'all' });
+      return;
+    }
+    discardAllCards();
+  };
   return (
-    <main className={`combat-page ${targetingCardId ? 'targeting-active' : ''}`}>
+    <main className={`combat-page ${targetingCardId ? 'targeting-active' : ''} ${bombTargeting ? 'bomb-targeting-active' : ''}`}>
       <section className="combat-arena-layout">
         <aside className="combat-side-hud">
           <div className="combat-heading">
@@ -606,9 +723,15 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
           <Suspense fallback={<div className="phaser-stage stage-loading">{t('combat.preparing')}</div>}>
             <PhaserStage
               run={run}
-              movementDisabled={animationLocked || discardMode || deploymentPending}
+              highlightedEnemyId={targetingCardId ? hoveredTargetId : undefined}
+              bombTargeting={bombTargeting}
+              movementDisabled={animationLocked || discardMode || deploymentPending || bombTargeting}
               onMove={(x, y) => commit((state) => movePlayer(state, x, y))}
               onDeploy={(x, y) => commit((state) => placePlayerForDeployment(state, x, y))}
+              onBomb={(x, y) => {
+                setBombTargeting(false);
+                commit((state) => useCombatBomb(state, x, y));
+              }}
             />
           </Suspense>
           {deploymentPending && <div className="deployment-panel" role="status">
@@ -621,8 +744,12 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
           {targetingCardId && <div className="targeting-instruction">
             <span>↗</span><div><strong>{t('combat.targetGuideTitle')}</strong><small>{t('combat.targetGuideHint')}</small></div>
           </div>}
-          <div className={`enemy-strip ${targetingCardId ? 'targeting' : ''}`}>
-        {combat.enemies.map((enemy) => {
+          {bombTargeting && <div className="targeting-instruction bomb-targeting-instruction">
+            <span>●</span><div><strong>{t('combat.bombTargetTitle')}</strong><small>{t('combat.bombTargetHint')}</small></div>
+            <button className="target-cancel" onClick={() => setBombTargeting(false)}>{t('combat.cancelBomb')}</button>
+          </div>}
+          <div className={`enemy-strip ${targetingCardId ? 'targeting' : ''} ${combat.enemies.filter((enemy) => enemy.hp > 0).length > 3 ? 'crowded' : ''}`}>
+        {combat.enemies.map((enemy, enemyIndex) => {
           const intendedActions = enemy.intent.actions?.length
             ? enemy.intent.actions
             : [{ kind: enemy.intent.kind, value: enemy.intent.value }];
@@ -642,6 +769,11 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
           const inRange = isEnemyInPlayerRange(run, enemy.instanceId);
           const seesPlayer = isPlayerInEnemyVision(run, enemy.instanceId);
           const enemyMoveSpeed = getEnemyMovementSpeed(enemy);
+          const duplicateEnemies = combat.enemies.filter((entry) => entry.hp > 0 && entry.id === enemy.id);
+          const duplicateIndex = combat.enemies
+            .slice(0, enemyIndex + 1)
+            .filter((entry) => entry.hp > 0 && entry.id === enemy.id).length;
+          const identityNumber = duplicateEnemies.length > 1 ? duplicateIndex : undefined;
           const targetable = Boolean(targetingCardId && (targetingDefinition?.type === 'attack'
             ? pendingFusionItemIds.length
               ? canPlayFusedAttack(run, targetingCardId, pendingFusionItemIds, enemy.instanceId).ok
@@ -650,10 +782,12 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
           return <button
             key={enemy.instanceId}
             data-enemy-instance-id={enemy.instanceId}
-            disabled={deploymentPending || enemy.hp <= 0 || animationLocked || Boolean(targetingCardId && !targetable)}
+            disabled={deploymentPending || bombTargeting || enemy.hp <= 0 || animationLocked || Boolean(targetingCardId && !targetable)}
             className={`enemy-panel ${selected?.instanceId === enemy.instanceId ? 'selected' : ''} ${targetable ? 'targetable' : ''} ${hoveredTargetId === enemy.instanceId ? 'aimed' : ''} ${enemy.hp <= 0 ? 'dead' : ''} ${inRange ? 'in-range' : 'out-of-range'}`}
             onPointerEnter={() => { if (targetable) setHoveredTargetId(enemy.instanceId); }}
             onPointerLeave={() => setHoveredTargetId((current) => current === enemy.instanceId ? undefined : current)}
+            onFocus={() => { if (targetable) setHoveredTargetId(enemy.instanceId); }}
+            onBlur={() => setHoveredTargetId((current) => current === enemy.instanceId ? undefined : current)}
             onClick={() => {
               if (targetingCardId) {
                 const cardId = targetingCardId;
@@ -681,7 +815,7 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
                 </span>)}
               </span>
             </span>
-            <strong>{enemyName(t, enemy)}</strong>
+            <strong>{enemyName(t, enemy)}{identityNumber && <b className="enemy-identity">#{identityNumber}</b>}</strong>
             <span>{enemy.hp}/{enemy.maxHp} {t('combat.hp')} · {enemy.armor} {t('combat.armor')} {enemy.shield ? `· ${enemy.shield} ${t('combat.shield')}` : ''}</span>
             <span className="enemy-grid-stats">⌖ ({enemy.position?.x ?? 15},{enemy.position?.y ?? 4}) · {enemy.footprintWidth}×{enemy.footprintHeight} · ◎ {enemy.attackRange ?? 1} · ◉ {t('combat.vision', { value: enemy.visionRange })} · ↝ {enemyMoveSpeed}</span>
             <span className={`enemy-awareness ${enemy.alerted || seesPlayer ? 'alerted' : 'wandering'}`}>{enemy.alerted ? t('combat.enemyAlerted') : seesPlayer ? t('combat.enemyWatching') : t('combat.enemyWandering')} · {inRange ? t('combat.inRange') : t('combat.outOfRange')}</span>
@@ -718,7 +852,7 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
               index={index}
               animating={animatingCardId === instance.instanceId}
               targeting={targetingCardId === instance.instanceId}
-              locked={deploymentPending || Boolean(animatingCardId) || animationLocked}
+              locked={deploymentPending || bombTargeting || Boolean(animatingCardId) || animationLocked}
               onPlay={() => {
                 const definition = CARDS[instance.definitionId];
                 if (definition?.type === 'attack') {
@@ -747,18 +881,45 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
                 setTargetingCardId(undefined);
                 animateCardAction(instance.instanceId, (state) => playCard(state, instance.instanceId));
               }}
-              onDiscard={() => animateCardAction(instance.instanceId, (state) => discardCard(state, instance.instanceId))}
+              onDiscard={() => {
+                if (instance.definitionId === activeSkillCardId) {
+                  setPendingActiveDiscard({ type: 'single', instanceId: instance.instanceId });
+                  return;
+                }
+                animateCardAction(instance.instanceId, (state) => discardCard(state, instance.instanceId));
+              }}
             />
           ))}
         </div>
-        <div className="turn-actions">
+        <div className={`turn-actions ${discardMode ? 'discard-actions' : ''}`}>
           {discardMode ? (
             <>
+              <div className={`discard-phase-callout ${cardsToDiscard === 0 ? 'ready' : 'waiting'}`} role="status" aria-live="polite">
+                <span aria-hidden="true">{cardsToDiscard === 0 ? '!' : cardsToDiscard}</span>
+                <div>
+                  <strong>{cardsToDiscard === 0 ? t('combat.discardReadyTitle') : t('combat.discardNeededTitle', { count: cardsToDiscard })}</strong>
+                  <small>{cardsToDiscard === 0
+                    ? t('combat.discardReadyHint')
+                    : t('combat.discardNeededHint', { count: run.player.stats.maxRetain })}</small>
+                </div>
+              </div>
               <button className="text-button" disabled={!discardable.length || animationLocked} onClick={discardAll}>{t('combat.discardAll')}</button>
-              <button className="primary-button" disabled={animationLocked || handCards.length > run.player.stats.maxRetain} onClick={() => commit(finishDiscard)}>{t('combat.faceEnemy')} <span>→</span></button>
+              <button className="primary-button enemy-phase-button" disabled={animationLocked || cardsToDiscard > 0} onClick={() => commit(finishDiscard)}>{t('combat.faceEnemy')} <span>→</span></button>
             </>
           ) : (
-            <button className="primary-button danger-button" disabled={deploymentPending || animationLocked || Boolean(targetingCardId)} onClick={() => commit(endTurn)}>{t('combat.endTurn')} <span>→</span></button>
+            <>
+              <button
+                className={`resource-action bomb-action ${bombTargeting ? 'active' : ''}`}
+                disabled={deploymentPending || animationLocked || Boolean(targetingCardId) || run.player.bombs < 1}
+                onClick={() => {
+                  setTargetingCardId(undefined);
+                  setPendingFusionItemIds([]);
+                  setHoveredTargetId(undefined);
+                  setBombTargeting((current) => !current);
+                }}
+              ><span>●</span>{t('combat.useBomb')} <b>×{run.player.bombs}</b></button>
+              <button className="primary-button danger-button" disabled={deploymentPending || animationLocked || Boolean(targetingCardId) || bombTargeting} onClick={() => commit(endTurn)}>{t('combat.endTurn')} <span>→</span></button>
+            </>
           )}
         </div>
       </section>
@@ -788,6 +949,20 @@ function CombatView({ run, commit }: { run: RunState; commit: (action: (state: R
           }
         }}
       />}
+      {pendingActiveDiscard && activeItem && <ConfirmationPanel
+        eyebrow={t('confirmation.irreversible')}
+        title={t('confirmation.discardActiveTitle')}
+        message={t('combat.confirmActiveDiscard', { item: itemName(t, activeItem.id) })}
+        items={[{ icon: activeItem.icon, name: itemName(t, activeItem.id), note: t('confirmation.currentActive') }]}
+        confirmLabel={t(pendingActiveDiscard.type === 'all' ? 'confirmation.discardAll' : 'confirmation.discardActive')}
+        onCancel={() => setPendingActiveDiscard(undefined)}
+        onConfirm={() => {
+          const pending = pendingActiveDiscard;
+          setPendingActiveDiscard(undefined);
+          if (pending.type === 'all') discardAllCards();
+          else animateCardAction(pending.instanceId, (state) => discardCard(state, pending.instanceId));
+        }}
+      />}
     </main>
   );
 }
@@ -804,8 +979,9 @@ function ChoiceCard({ option, run, dealType, onChoose }: { option: RewardOption;
       <b>{option.icon}</b>
       <strong>{optionLabel(t, option, choice)}</strong>
       <p>{optionDescription(t, option, choice)}</p>
-      {option.type === 'item' && option.itemId && <small>{t(`itemKinds.${ITEMS[option.itemId]?.kind}`)} · {t('choice.quality', { quality: ITEMS[option.itemId]?.quality })}{ITEMS[option.itemId]?.kind === 'passive' ? ` · ${t('choice.addsItemCard')}` : ''}</small>}
+      {option.type === 'item' && option.itemId && <small>{t(`itemKinds.${ITEMS[option.itemId]?.kind}`)} · {t('choice.quality', { quality: ITEMS[option.itemId]?.quality })}{ITEMS[option.itemId]?.kind === 'passive' ? ` · ${t(itemUsesCombatCard(ITEMS[option.itemId]!) ? 'choice.addsItemCard' : 'choice.permanentItem')}` : ''}</small>}
       {option.type === 'card' && offeredCard && <small>{t('choice.cardLabel', { type: cardTypeName(t, offeredCard.type) })}{offeredCardItem ? ` · ${t('choice.quality', { quality: offeredCardItem.quality })}` : ''}</small>}
+      {choice.rewardContext === 'floor-start' && option.type === 'resource' && <small>{t('choice.assetPack')}</small>}
       {option.sold && <em>{t('choice.sold')}</em>}
       {unaffordable && !option.sold && <em>{dealType === 'devil' && run.player.redContainers <= 1 ? t('choice.needContainers') : t('choice.notEnoughCoins')}</em>}
     </button>
@@ -860,6 +1036,7 @@ function ChoiceView({ run, commit, revealRoomReward = false }: {
 }) {
   const { t } = useTranslation();
   const [choosingId, setChoosingId] = useState<string>();
+  const [pendingActiveChoice, setPendingActiveChoice] = useState<RewardOption>();
   const choice = run.choice!;
   const [revealingReward, setRevealingReward] = useState(Boolean(revealRoomReward || (run.combat && run.lastReward.length)));
   useEffect(() => {
@@ -867,6 +1044,25 @@ function ChoiceView({ run, commit, revealRoomReward = false }: {
     const timer = window.setTimeout(() => setRevealingReward(false), 1900);
     return () => window.clearTimeout(timer);
   }, [revealingReward]);
+  const beginChoice = (option: RewardOption) => {
+    if (choosingId) return;
+    setChoosingId(option.id);
+    window.setTimeout(() => {
+      commit((state) => chooseOption(state, option.id));
+      setChoosingId(undefined);
+    }, 340);
+  };
+  const requestChoice = (option: RewardOption) => {
+    if (choosingId) return;
+    const offeredItem = option.itemId ? ITEMS[option.itemId] : undefined;
+    if (offeredItem?.kind === 'active' && run.player.activeItemId) {
+      setPendingActiveChoice(option);
+      return;
+    }
+    beginChoice(option);
+  };
+  const currentActiveItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
+  const pendingReplacement = pendingActiveChoice?.itemId ? ITEMS[pendingActiveChoice.itemId] : undefined;
   return (
     <main className={`choice-page ${choice.dealType ?? choice.kind}`}>
       {revealingReward && <RoomRewardReveal run={run} />}
@@ -878,17 +1074,26 @@ function ChoiceView({ run, commit, revealRoomReward = false }: {
         {run.lastReward.length > 0 && <div className="drop-notice">{t('choice.roomDrop', { rewards: rewardsText(t, run) })}</div>}
       </section>
       <section className="choice-grid">
-        {choice.options.map((option) => <div className={choosingId === option.id ? 'choice-selecting' : ''} key={option.id}><ChoiceCard option={option} run={run} dealType={choice.dealType} onChoose={() => {
-          if (choosingId) return;
-          setChoosingId(option.id);
-          window.setTimeout(() => {
-            commit((state) => chooseOption(state, option.id));
-            setChoosingId(undefined);
-          }, 340);
-        }} /></div>)}
+        {choice.options.map((option) => <div className={choosingId === option.id ? 'choice-selecting' : ''} key={option.id}><ChoiceCard option={option} run={run} dealType={choice.dealType} onChoose={() => requestChoice(option)} /></div>)}
       </section>
       {choice.canSkip && <button className="text-button choice-skip" onClick={() => commit(skipChoice)}>{t('choice.leaveEmpty')} <span>→</span></button>}
       {choice.kind === 'shop' && <div className="shop-purse">{t('choice.shopPurse')} <strong>{run.player.coins}¢</strong></div>}
+      {pendingActiveChoice && currentActiveItem && pendingReplacement && <ConfirmationPanel
+        eyebrow={t('confirmation.inventoryChange')}
+        title={t('confirmation.replaceActiveTitle')}
+        message={t('choice.replaceActiveConfirm', { current: itemName(t, currentActiveItem.id), next: itemName(t, pendingReplacement.id) })}
+        items={[
+          { icon: currentActiveItem.icon, name: itemName(t, currentActiveItem.id), note: t('confirmation.currentActive') },
+          { icon: pendingReplacement.icon, name: itemName(t, pendingReplacement.id), note: t('confirmation.newActive') },
+        ]}
+        confirmLabel={t('confirmation.replaceActive')}
+        onCancel={() => setPendingActiveChoice(undefined)}
+        onConfirm={() => {
+          const option = pendingActiveChoice;
+          setPendingActiveChoice(undefined);
+          beginChoice(option);
+        }}
+      />}
     </main>
   );
 }
@@ -1085,7 +1290,7 @@ export function App() {
       <Header run={run} onAbandon={onAbandon} />
       {notice && <button className="toast" onClick={() => setNotice('')}>{notice}<span>×</span></button>}
       {!showingCombatClear && run.unlockNotices.length > 0 && run.phase !== 'victory' && <div className="unlock-toast">{t('result.newUnlock', { message: unlockText(t, run.unlockNotices.at(-1)!.itemId) })}</div>}
-      {run.phase === 'map' && <RouteMap run={run} onEnter={(id) => commit((state) => enterRoom(state, id))} />}
+      {run.phase === 'map' && <RouteMap run={run} onEnter={(id) => commit((state) => enterRoom(state, id))} onBombSearch={() => commit(useMapBomb)} />}
       {(run.phase === 'combat' || run.phase === 'discard' || showingCombatClear) && run.combat && <CombatView run={run} commit={commit} />}
       {showingCombatClear && combatClearTransition && <RoomClearTransition key={combatClearTransition.id} delayMs={combatClearTransition.delayMs} />}
       {run.phase === 'choice' && run.choice && !showingCombatClear && <ChoiceView run={run} commit={commit} revealRoomReward={Boolean(roomRewardRevealId)} />}
