@@ -2,33 +2,34 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   FLOORS,
+  RoomKind,
   getAvailableNodes,
   type MapConnectionStyle,
   type MapNode,
-  type RoomKind,
   type RunState,
 } from '@isaac-spire/game';
 import { HeartMeter } from '../../components/game/HeartMeter';
 import { floorName, floorSubtitle, roomHint, roomName } from '../../localize';
 
 const ROOM_META: Record<RoomKind, { icon: string }> = {
-  entrance: { icon: '↓' },
-  combat: { icon: '⚔' },
-  elite: { icon: '♛' },
-  shop: { icon: '¢' },
-  treasure: { icon: '▣' },
-  curse: { icon: '☠' },
-  sacrifice: { icon: '♱' },
-  secret: { icon: '✦' },
-  'super-secret': { icon: '✺' },
-  planetarium: { icon: '☾' },
-  boss: { icon: '♚' },
+  [RoomKind.Entrance]: { icon: '↓' },
+  [RoomKind.Combat]: { icon: '⚔' },
+  [RoomKind.Elite]: { icon: '♛' },
+  [RoomKind.Shop]: { icon: '¢' },
+  [RoomKind.Treasure]: { icon: '▣' },
+  [RoomKind.Curse]: { icon: '☠' },
+  [RoomKind.Sacrifice]: { icon: '♱' },
+  [RoomKind.Secret]: { icon: '✦' },
+  [RoomKind.SuperSecret]: { icon: '✺' },
+  [RoomKind.Planetarium]: { icon: '☾' },
+  [RoomKind.Boss]: { icon: '♚' },
 };
 
 function nodePoint(node: MapNode): { x: number; y: number } {
   if (node.mapPosition) return node.mapPosition;
-  const optionalOffset = node.kind === 'secret' ? -0.34 : node.kind === 'super-secret' ? 0.34 : 0;
-  const laneDrift = ['entrance', 'boss'].includes(node.kind)
+  const optionalOffset =
+    node.kind === RoomKind.Secret ? -0.34 : node.kind === RoomKind.SuperSecret ? 0.34 : 0;
+  const laneDrift = [RoomKind.Entrance, RoomKind.Boss].includes(node.kind)
     ? 0
     : (((Math.round(node.depth * 10) + node.lane * 7) % 3) - 1) * 1.7;
   return { x: 20 + (node.lane + optionalOffset) * 30 + laneDrift, y: 5 + node.depth * 12.6 };
@@ -104,7 +105,7 @@ export function RouteMap({
           {bombResult && (
             <p className={bombResult.found ? 'found' : 'empty'}>
               {bombResult.found
-                ? t('map.secretFound', { room: roomName(t, bombResult.roomKind ?? 'secret') })
+                ? t('map.secretFound', { room: roomName(t, bombResult.roomKind ?? RoomKind.Secret) })
                 : t('map.noSecretFound')}
             </p>
           )}
@@ -174,7 +175,8 @@ export function RouteMap({
             const meta = ROOM_META[node.kind];
             const canEnter = available.has(node.id);
             const sealedSecret = node.optional && !node.doorOpened;
-            const needsKey = run.floorIndex > 0 && (node.kind === 'shop' || node.kind === 'treasure');
+            const needsKey =
+              run.floorIndex > 0 && (node.kind === RoomKind.Shop || node.kind === RoomKind.Treasure);
             const noKey = canEnter && needsKey && run.player.keys < 1;
             const hidden = node.optional && !node.revealed;
             return (

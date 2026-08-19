@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import {
   CARDS,
+  CardType,
   ITEMS,
   canPlayFusedAttack,
   getAttackFusionMaterialIds,
@@ -34,7 +35,7 @@ export function FusionAttackModal({
     .map((card) => ({ card, definition: CARDS[card.definitionId] }))
     .filter(
       ({ definition }) =>
-        definition?.type === 'item' && Boolean(definition.itemId && ITEMS[definition.itemId]?.fusion),
+        definition?.type === CardType.Item && Boolean(definition.itemId && ITEMS[definition.itemId]?.fusion),
     );
   const preview = getAttackFusionPreview(run, attackInstanceId, selectedItemIds);
   const playable = canPlayFusedAttack(run, attackInstanceId, selectedItemIds);

@@ -10,3 +10,4 @@ export * from './combat/events.js';
 export * from './content/registry.js';
 export * from './content/catalog.js';
 export * from './state/migrations.js';
+export * from './rewards/room-rewards.js';

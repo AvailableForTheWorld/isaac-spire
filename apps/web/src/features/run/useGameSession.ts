@@ -2,22 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   DEFAULT_PROFILE,
+  RunPhase,
   createRun,
   hydrateRunState,
   type ProfileState,
   type RunState,
 } from '@isaac-spire/game';
 import { errorText } from '../../localize';
-import { combatAnimationDuration } from '../combat/animationTiming';
 import { clearLocalRun, readLocalRun, writeLocalRun } from './localRunRepository';
 import { loadLatestActiveRun, loadProfile, saveRun } from './runApi';
 
 export type RunCommand = (state: RunState) => RunState;
-
-interface CombatClearTransition {
-  id: string;
-  delayMs: number;
-}
 
 export function useGameSession() {
   const { t, i18n } = useTranslation();
@@ -26,8 +21,6 @@ export function useGameSession() {
   const [remoteRun, setRemoteRun] = useState<RunState | null>(null);
   const [localRun, setLocalRun] = useState<RunState | null>(() => readLocalRun());
   const [notice, setNotice] = useState('');
-  const [combatClearTransition, setCombatClearTransition] = useState<CombatClearTransition>();
-  const [roomRewardRevealId, setRoomRewardRevealId] = useState<string>();
   const saveTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -52,43 +45,12 @@ export function useGameSession() {
     return () => window.clearTimeout(saveTimer.current);
   }, [run]);
 
-  useEffect(() => {
-    if (!combatClearTransition) return;
-    const timer = window.setTimeout(() => {
-      setRoomRewardRevealId(combatClearTransition.id);
-      setCombatClearTransition(undefined);
-    }, combatClearTransition.delayMs + 1250);
-    return () => window.clearTimeout(timer);
-  }, [combatClearTransition]);
-
-  useEffect(() => {
-    if (!roomRewardRevealId) return;
-    const timer = window.setTimeout(() => setRoomRewardRevealId(undefined), 2100);
-    return () => window.clearTimeout(timer);
-  }, [roomRewardRevealId]);
-
   const commit = useCallback(
     (command: RunCommand) => {
       setRun((current) => {
         if (!current) return current;
         try {
           const next = command(current);
-          const clearedCombat =
-            ['combat', 'discard'].includes(current.phase) &&
-            next.phase === 'choice' &&
-            Boolean(next.combat?.enemies.length) &&
-            next.combat!.enemies.every((enemy) => enemy.hp <= 0);
-          if (clearedCombat && next.combat) {
-            const previousSequence = current.combat?.animationSequence ?? 0;
-            const finishingEvents = next.combat.animationEvents.filter(
-              (event) => event.sequence > previousSequence,
-            );
-            setCombatClearTransition({
-              id: `${next.currentRoomId ?? next.combat.roomKind}:${next.combat.animationSequence}`,
-              delayMs: Math.max(850, combatAnimationDuration(finishingEvents) + 100),
-            });
-            setRoomRewardRevealId(undefined);
-          }
           setNotice('');
           return next;
         } catch (error) {
@@ -103,8 +65,6 @@ export function useGameSession() {
   const start = useCallback(
     (seed: string) => {
       const next = createRun(seed, profile.unlockedItemIds);
-      setCombatClearTransition(undefined);
-      setRoomRewardRevealId(undefined);
       setRun(next);
       setNotice('');
       void saveRun(next, true);
@@ -118,9 +78,7 @@ export function useGameSession() {
   }, []);
 
   const goHome = useCallback(() => {
-    if (run && ['victory', 'defeat'].includes(run.phase)) clearLocalRun();
-    setCombatClearTransition(undefined);
-    setRoomRewardRevealId(undefined);
+    if (run && [RunPhase.Victory, RunPhase.Defeat].includes(run.phase)) clearLocalRun();
     setRun(null);
     setLocalRun(readLocalRun());
     refreshSessionIndex();
@@ -132,8 +90,6 @@ export function useGameSession() {
     localRun,
     remoteRun,
     notice,
-    combatClearTransition,
-    roomRewardRevealId,
     commit,
     start,
     resume,

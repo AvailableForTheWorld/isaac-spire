@@ -1,28 +1,16 @@
-import type { AttackMode, GridPosition } from './player.js';
-
-export type IntentKind = 'attack' | 'shield' | 'curse' | 'heal' | 'prepare' | 'summon' | 'idle';
-export type EnemyBehavior = 'swarm' | 'hunter' | 'hexer' | 'tank' | 'boss';
-export type EnemyMovementPattern = 'cardinal' | 'diagonal-jump';
-export type CombatAnimationKind =
-  | 'card-play'
-  | 'card-discard'
-  | 'discard-phase'
-  | 'enemy-phase'
-  | 'round-start'
-  | 'move'
-  | 'player-attack'
-  | 'enemy-attack'
-  | 'shield'
-  | 'heal'
-  | 'poison'
-  | 'curse'
-  | 'prepare'
-  | 'summon'
-  | 'idle'
-  | 'defeat'
-  | 'bomb-blast'
-  | 'bomb-hit'
-  | 'black-heart';
+import type {
+  AttackMode,
+  CombatAnimationKind,
+  CombatLogTone,
+  CombatMovementStyle,
+  CombatRoomShape,
+  EnemyBehavior,
+  EnemyMovementPattern,
+  IntentKind,
+  RoomKind,
+  RoomMissingQuadrant,
+} from './enums.js';
+import type { GridPosition } from './player.js';
 
 export interface EnemyDefinition {
   id: string;
@@ -91,19 +79,16 @@ export interface CombatAnimationEvent {
   projectileScale?: number;
   poisonTurns?: number;
   slowTurns?: number;
-  movementStyle?: 'walk' | 'jump' | 'wander';
+  movementStyle?: CombatMovementStyle;
 }
 
 export interface CombatLogEntry {
   id: string;
-  tone: 'normal' | 'good' | 'danger' | 'special';
+  tone: CombatLogTone;
   message: string;
   messageKey?: string;
   params?: Record<string, string | number>;
 }
-
-export type CombatRoomShape = 'standard' | 'wide' | 'tall' | 'large' | 'l-shaped';
-export type RoomMissingQuadrant = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 export interface CombatRoomLayout {
   shape: CombatRoomShape;
@@ -114,7 +99,7 @@ export interface CombatRoomLayout {
 }
 
 export interface CombatState {
-  roomKind: 'combat' | 'elite' | 'boss';
+  roomKind: RoomKind.Combat | RoomKind.Elite | RoomKind.Boss;
   roomLayout: CombatRoomLayout;
   deploymentPending?: boolean;
   round: number;

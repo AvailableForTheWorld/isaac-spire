@@ -2,6 +2,8 @@ import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common'
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   DEFAULT_PROFILE,
+  RunPhase,
+  RunStatus,
   type PersistedRun,
   type ProfileState,
   type RunState,
@@ -66,7 +68,12 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
       const profile = { ...structuredClone(DEFAULT_PROFILE), ...(await this.repository.getProfile()) };
       result = {
         id: snapshot.id,
-        status: snapshot.phase === 'victory' ? 'won' : snapshot.phase === 'defeat' ? 'lost' : 'active',
+        status:
+          snapshot.phase === RunPhase.Victory
+            ? RunStatus.Won
+            : snapshot.phase === RunPhase.Defeat
+              ? RunStatus.Lost
+              : RunStatus.Active,
         snapshot,
         createdAt: previous?.createdAt ?? snapshot.createdAt ?? timestamp,
         updatedAt: timestamp,
@@ -117,8 +124,8 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
   ): void {
     profile.unlockedItemIds = [...new Set([...profile.unlockedItemIds, ...snapshot.unlocks])];
     profile.discoveredItemIds = [...new Set([...profile.discoveredItemIds, ...snapshot.player.items])];
-    if (status === 'won' && previousStatus !== 'won') profile.wins += 1;
-    if (status === 'lost' && previousStatus !== 'lost') profile.losses += 1;
+    if (status === RunStatus.Won && previousStatus !== RunStatus.Won) profile.wins += 1;
+    if (status === RunStatus.Lost && previousStatus !== RunStatus.Lost) profile.losses += 1;
     profile.bestScore = Math.max(profile.bestScore, snapshot.score);
   }
 }

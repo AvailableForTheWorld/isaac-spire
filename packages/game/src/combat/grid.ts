@@ -1,4 +1,5 @@
 import type { CombatRoomLayout, CombatState, EnemyDefinition, EnemyState, GridPosition } from '../types.js';
+import { CombatRoomShape, EnemyMovementPattern } from '../types.js';
 
 export const STANDARD_ROOM_WIDTH = 17;
 export const STANDARD_ROOM_HEIGHT = 9;
@@ -7,7 +8,7 @@ export const COMBAT_GRID_HEIGHT = STANDARD_ROOM_HEIGHT;
 export const ISAAC_DOOR_POSITION: GridPosition = { x: 0, y: 4 };
 
 export const DEFAULT_COMBAT_ROOM_LAYOUT: CombatRoomLayout = {
-  shape: 'standard',
+  shape: CombatRoomShape.Standard,
   width: STANDARD_ROOM_WIDTH,
   height: STANDARD_ROOM_HEIGHT,
   unitCount: 1,
@@ -34,7 +35,7 @@ export function isCombatCellAvailable(
   const layout = roomLayout(combat);
   if (position.x < 0 || position.x >= layout.width || position.y < 0 || position.y >= layout.height)
     return false;
-  if (layout.shape !== 'l-shaped' || !layout.missingQuadrant) return true;
+  if (layout.shape !== CombatRoomShape.LShaped || !layout.missingQuadrant) return true;
   const right = position.x >= STANDARD_ROOM_WIDTH;
   const bottom = position.y >= STANDARD_ROOM_HEIGHT;
   const quadrant = `${bottom ? 'bottom' : 'top'}-${right ? 'right' : 'left'}`;
@@ -166,7 +167,7 @@ export function enemyCanAttackPosition(
   position: GridPosition,
   anchor = enemy.position,
 ): boolean {
-  if (enemy.movementPattern === 'diagonal-jump') {
+  if (enemy.movementPattern === EnemyMovementPattern.DiagonalJump) {
     return enemyChebyshevDistanceToPosition(enemy, position, anchor) <= enemy.attackRange;
   }
   return footprintCellsAt(enemy, anchor).some((cell) =>

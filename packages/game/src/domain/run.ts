@@ -1,22 +1,33 @@
 import type { CombatState } from './combat.js';
+import type {
+  ChoiceAction,
+  ChoiceKind,
+  ChoiceNext,
+  DealType,
+  ResourceKind,
+  RewardContext,
+  RewardOptionType,
+  RewardPool,
+  RoomKind,
+  RunPhase,
+  RunStatus,
+  UpgradeKind,
+} from './enums.js';
 import type { FloorMap } from './map.js';
 import type { PlayerState } from './player.js';
 
-export type RunPhase = 'map' | 'combat' | 'discard' | 'choice' | 'victory' | 'defeat';
-export type ChoiceKind = 'loot' | 'item' | 'shop' | 'deal' | 'upgrade' | 'sacrifice' | 'card';
-
 export interface RewardOption {
   id: string;
-  type: 'resource' | 'item' | 'card' | 'upgrade' | 'action';
+  type: RewardOptionType;
   label: string;
   description: string;
   icon: string;
   itemId?: string;
   cardId?: string;
-  resource?: 'coins' | 'bombs' | 'keys' | 'red-heart' | 'soul-heart' | 'black-heart';
+  resource?: ResourceKind;
   amount?: number;
-  upgrade?: 'damage' | 'heart' | 'armor' | 'vitality' | 'speed' | 'skill';
-  action?: 'enter-deal' | 'skip-deal' | 'leave' | 'sacrifice';
+  upgrade?: UpgradeKind;
+  action?: ChoiceAction;
   price?: number;
   sold?: boolean;
 }
@@ -27,9 +38,11 @@ export interface ChoiceState {
   subtitle: string;
   options: RewardOption[];
   canSkip: boolean;
-  next: 'map' | 'boss-gate' | 'floor-upgrade' | 'next-floor' | 'victory';
-  dealType?: 'devil' | 'angel';
-  rewardContext?: 'large-room' | 'floor-start';
+  next: ChoiceNext;
+  dealType?: DealType;
+  rewardContext?: RewardContext;
+  rewardPool?: RewardPool;
+  requiresRewardConfirmation?: boolean;
 }
 
 export interface UnlockNotice {
@@ -60,9 +73,13 @@ export interface RunState {
   unlockNotices: UnlockNotice[];
   lastReward: string[];
   floorBombSearches: string[];
-  mapBombResult?: { currentNodeId: string; found: boolean; roomKind?: 'secret' | 'super-secret' };
+  mapBombResult?: {
+    currentNodeId: string;
+    found: boolean;
+    roomKind?: RoomKind.Secret | RoomKind.SuperSecret;
+  };
   floorRedDamage: number;
-  floorSecretVisits: string[];
+  floorSecretVisits: Array<RoomKind.Secret | RoomKind.SuperSecret>;
   victory: boolean;
 }
 
@@ -77,7 +94,7 @@ export interface ProfileState {
 
 export interface PersistedRun {
   id: string;
-  status: 'active' | 'won' | 'lost';
+  status: RunStatus;
   snapshot: RunState;
   createdAt: string;
   updatedAt: string;

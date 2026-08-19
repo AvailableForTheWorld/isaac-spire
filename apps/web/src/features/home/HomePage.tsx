@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ITEMS, type ProfileState, type RunState } from '@isaac-spire/game';
+import { ITEMS, RunPhase, type ProfileState, type RunState } from '@isaac-spire/game';
 import { LanguageToggle } from '../../components/game/LanguageToggle';
 
 function shortSeed(): string {
@@ -24,7 +24,9 @@ export function HomePage({
   const { t } = useTranslation();
   const [seed, setSeed] = useState(shortSeed());
   const resumable =
-    localRun && !['victory', 'defeat'].includes(localRun.phase) ? localRun : (remoteRun ?? undefined);
+    localRun && ![RunPhase.Victory, RunPhase.Defeat].includes(localRun.phase)
+      ? localRun
+      : (remoteRun ?? undefined);
   return (
     <main className="home-page">
       <div className="home-grain" />

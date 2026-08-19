@@ -1,10 +1,11 @@
 import { hashSeed, nextRandom, randomInt, shuffle } from './random.js';
-import type { FloorMap, MapConnectionStyle, MapNode, RoomKind } from './types.js';
+import type { FloorMap, MapConnectionStyle, MapNode } from './types.js';
+import { RoomKind } from './types.js';
 
 const BRANCH_ROOMS: RoomKind[][] = [
-  ['combat', 'treasure', 'elite', 'shop', 'curse', 'combat'],
-  ['combat', 'shop', 'combat', 'treasure', 'sacrifice', 'elite'],
-  ['combat', 'treasure', 'combat', 'shop', 'planetarium', 'combat'],
+  [RoomKind.Combat, RoomKind.Treasure, RoomKind.Elite, RoomKind.Shop, RoomKind.Curse, RoomKind.Combat],
+  [RoomKind.Combat, RoomKind.Shop, RoomKind.Combat, RoomKind.Treasure, RoomKind.Sacrifice, RoomKind.Elite],
+  [RoomKind.Combat, RoomKind.Treasure, RoomKind.Combat, RoomKind.Shop, RoomKind.Planetarium, RoomKind.Combat],
 ];
 
 const ROUTE_PATTERNS = [
@@ -40,10 +41,10 @@ function randomPatternIndex(state: RouteRandom): number {
 
 function mainNodePosition(routeSeed: string, node: MapNode): { x: number; y: number } {
   const state = presentationRandom(routeSeed, `node:${node.id}`);
-  if (node.kind === 'entrance') {
+  if (node.kind === RoomKind.Entrance) {
     return { x: rounded(randomBetween(state, 46, 54)), y: rounded(randomBetween(state, 4.8, 6.4)) };
   }
-  if (node.kind === 'boss') {
+  if (node.kind === RoomKind.Boss) {
     return { x: rounded(randomBetween(state, 43, 57)), y: rounded(randomBetween(state, 87.8, 89.4)) };
   }
   const laneCenter = [19, 50, 81][node.lane] ?? 50;
@@ -88,7 +89,7 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
   const topologyRandom: RouteRandom = { rngState: hashSeed(`${routeSeed}:topology`) };
   const entrance: MapNode = {
     id: `f${floorIndex}-entrance`,
-    kind: 'entrance',
+    kind: RoomKind.Entrance,
     lane: 1,
     depth: 0,
     connections: [],
@@ -115,7 +116,7 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
 
   const boss: MapNode = {
     id: `f${floorIndex}-boss`,
-    kind: 'boss',
+    kind: RoomKind.Boss,
     lane: 1,
     depth: 7,
     connections: [],
@@ -188,7 +189,7 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
     const superAnchor = `f${floorIndex}-l${lane}-d6`;
     nodes.push({
       id: `f${floorIndex}-l${lane}-secret`,
-      kind: 'secret',
+      kind: RoomKind.Secret,
       lane,
       depth: 3.35,
       connections: [],
@@ -200,7 +201,7 @@ export function createFloorMap(floorIndex: number, runSeed = 'ISAAC'): FloorMap 
     });
     nodes.push({
       id: `f${floorIndex}-l${lane}-super`,
-      kind: 'super-secret',
+      kind: RoomKind.SuperSecret,
       lane,
       depth: 5.65,
       connections: [],

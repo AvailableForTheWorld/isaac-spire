@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { gzipSync } from 'node:zlib';
 import {
   DEFAULT_PROFILE,
+  RunStatus,
   type PersistedRun,
   type ProfileState,
   type RunState,
@@ -58,7 +59,7 @@ export class SqliteRunRepository extends RunRepository {
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
-        status TEXT NOT NULL CHECK (status IN ('active', 'won', 'lost')),
+        status TEXT NOT NULL CHECK (status IN ('${RunStatus.Active}', '${RunStatus.Won}', '${RunStatus.Lost}')),
         seed TEXT NOT NULL,
         floor_index INTEGER NOT NULL,
         score INTEGER NOT NULL,
@@ -87,7 +88,7 @@ export class SqliteRunRepository extends RunRepository {
       .prepare(
         `
       SELECT id, status, seed, floor_index, score, created_at, updated_at
-      FROM runs ORDER BY updated_at DESC LIMIT ?
+      FROM runs ORDER BY updated_at DESC, rowid DESC LIMIT ?
     `,
       )
       .all(limit) as unknown as Array<Omit<RunRow, 'snapshot'>>;
@@ -105,10 +106,10 @@ export class SqliteRunRepository extends RunRepository {
     const row = this.db
       .prepare(
         `
-      SELECT * FROM runs WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1
+      SELECT * FROM runs WHERE status = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1
     `,
       )
-      .get() as RunRow | undefined;
+      .get(RunStatus.Active) as RunRow | undefined;
     return row ? this.toPersistedRun(row) : undefined;
   }
 
@@ -133,24 +134,24 @@ export class SqliteRunRepository extends RunRepository {
         .prepare(
           `
       DELETE FROM runs
-      WHERE status <> 'active'
+      WHERE status <> ?
         AND id NOT IN (
-          SELECT id FROM runs WHERE status <> 'active' ORDER BY updated_at DESC LIMIT ?
+          SELECT id FROM runs WHERE status <> ? ORDER BY updated_at DESC, rowid DESC LIMIT ?
         )
     `,
         )
-        .run(policy.maxCompletedRuns);
+        .run(RunStatus.Active, RunStatus.Active, policy.maxCompletedRuns);
       this.db
         .prepare(
           `
       DELETE FROM runs
-      WHERE status = 'active'
+      WHERE status = ?
         AND id NOT IN (
-          SELECT id FROM runs WHERE status = 'active' ORDER BY updated_at DESC LIMIT ?
+          SELECT id FROM runs WHERE status = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?
         )
     `,
         )
-        .run(policy.maxActiveRuns);
+        .run(RunStatus.Active, RunStatus.Active, policy.maxActiveRuns);
     });
     this.db.exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum; PRAGMA optimize;');
     return this.stats();
@@ -162,13 +163,13 @@ export class SqliteRunRepository extends RunRepository {
       .prepare(
         `
       SELECT COUNT(*) AS run_count,
-        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS active_count,
         COALESCE(SUM(length(snapshot)), 0) AS compressed_bytes,
         COALESCE(SUM(uncompressed_bytes), 0) AS uncompressed_bytes
       FROM runs
     `,
       )
-      .get() as {
+      .get(RunStatus.Active) as {
       run_count: number;
       active_count: number;
       compressed_bytes: number;

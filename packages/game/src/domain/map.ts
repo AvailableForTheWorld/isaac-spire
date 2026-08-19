@@ -1,15 +1,4 @@
-export type RoomKind =
-  | 'entrance'
-  | 'combat'
-  | 'elite'
-  | 'shop'
-  | 'treasure'
-  | 'curse'
-  | 'sacrifice'
-  | 'secret'
-  | 'super-secret'
-  | 'planetarium'
-  | 'boss';
+import type { RoomKind } from './enums.js';
 
 export interface MapNode {
   id: string;

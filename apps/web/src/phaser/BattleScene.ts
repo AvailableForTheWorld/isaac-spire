@@ -1,5 +1,8 @@
 import * as Phaser from 'phaser';
 import {
+  AttackMode,
+  CombatAnimationKind,
+  CombatMovementStyle,
   DEFAULT_COMBAT_ROOM_LAYOUT,
   isCombatCellAvailable,
   type CombatAnimationEvent,
@@ -274,64 +277,64 @@ export class BattleScene extends Phaser.Scene {
 
   private async animateEvent(event: CombatAnimationEvent): Promise<void> {
     switch (event.kind) {
-      case 'card-play':
+      case CombatAnimationKind.CardPlay:
         await this.animateCard(event, false);
         break;
-      case 'card-discard':
+      case CombatAnimationKind.CardDiscard:
         await this.animateCard(event, true);
         break;
-      case 'discard-phase':
+      case CombatAnimationKind.DiscardPhase:
         await this.animatePhaseBanner(this.labels()?.discardPhase ?? 'DISCARD PHASE', 0xc67a64);
         break;
-      case 'enemy-phase':
+      case CombatAnimationKind.EnemyPhase:
         await this.animatePhaseBanner(this.labels()?.enemyTurn ?? 'ENEMY TURN', 0xd75e57);
         break;
-      case 'round-start':
+      case CombatAnimationKind.RoundStart:
         await this.animatePhaseBanner(
           `${this.labels()?.playerTurn ?? 'PLAYER TURN'}  ·  ${event.value ?? ''}`,
           0xe3bc72,
         );
         break;
-      case 'move':
+      case CombatAnimationKind.Move:
         await this.animateMove(event);
         break;
-      case 'player-attack':
+      case CombatAnimationKind.PlayerAttack:
         await this.animatePlayerAttack(event);
         break;
-      case 'enemy-attack':
+      case CombatAnimationKind.EnemyAttack:
         await this.animateEnemyAttack(event);
         break;
-      case 'shield':
+      case CombatAnimationKind.Shield:
         await this.animateShield(event);
         break;
-      case 'heal':
+      case CombatAnimationKind.Heal:
         await this.animateHeal(event);
         break;
-      case 'poison':
+      case CombatAnimationKind.Poison:
         await this.animatePoison(event);
         break;
-      case 'curse':
+      case CombatAnimationKind.Curse:
         await this.animateCurse(event);
         break;
-      case 'prepare':
+      case CombatAnimationKind.Prepare:
         await this.animatePrepare(event);
         break;
-      case 'summon':
+      case CombatAnimationKind.Summon:
         await this.animateSummon(event);
         break;
-      case 'idle':
+      case CombatAnimationKind.Idle:
         await this.animateIdle(event);
         break;
-      case 'defeat':
+      case CombatAnimationKind.Defeat:
         await this.animateDefeat(event);
         break;
-      case 'bomb-blast':
+      case CombatAnimationKind.BombBlast:
         await this.animateBombBlast(event);
         break;
-      case 'bomb-hit':
+      case CombatAnimationKind.BombHit:
         await this.animateBombHit(event);
         break;
-      case 'black-heart':
+      case CombatAnimationKind.BlackHeart:
         await this.animateBlackHeart();
         break;
     }
@@ -429,12 +432,16 @@ export class BattleScene extends Phaser.Scene {
     );
     const deltaX = destination.x - actor.x;
     const deltaY = destination.y - actor.y;
-    const jumping = event.movementStyle === 'jump';
+    const jumping = event.movementStyle === CombatMovementStyle.Jump;
     const trail = this.add.circle(
       actor.x,
       actor.y,
       jumping ? 24 : 15,
-      event.sourceId === 'isaac' ? 0x7ed9e8 : event.movementStyle === 'wander' ? 0xd0a56c : 0xc07067,
+      event.sourceId === 'isaac'
+        ? 0x7ed9e8
+        : event.movementStyle === CombatMovementStyle.Wander
+          ? 0xd0a56c
+          : 0xc07067,
       0.24,
     );
     this.tweens.add({
@@ -461,8 +468,8 @@ export class BattleScene extends Phaser.Scene {
       await this.tween(actor.parts, {
         x: `+=${deltaX}`,
         y: `+=${deltaY}`,
-        duration: event.movementStyle === 'wander' ? 520 : 410,
-        ease: event.movementStyle === 'wander' ? 'Sine.easeInOut' : 'Cubic.easeInOut',
+        duration: event.movementStyle === CombatMovementStyle.Wander ? 520 : 410,
+        ease: event.movementStyle === CombatMovementStyle.Wander ? 'Sine.easeInOut' : 'Cubic.easeInOut',
       });
     }
     actor.x = destination.x;
@@ -476,7 +483,7 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: source.parts, x: '+=8', duration: 100, yoyo: true, ease: 'Quad.easeOut' });
 
     const projectileScale = Math.max(0.7, event.projectileScale ?? 1);
-    if (event.attackMode === 'brimstone') {
+    if (event.attackMode === AttackMode.Brimstone) {
       const beam = this.add.graphics();
       beam.lineStyle(12 * projectileScale, 0xb82135, 0.22);
       beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
@@ -488,7 +495,7 @@ export class BattleScene extends Phaser.Scene {
       const projectileColor =
         (event.poisonTurns ?? 0) > 0 ? 0x8bd36f : (event.slowTurns ?? 0) > 0 ? 0x70cbe4 : 0x93dff3;
       const projectile =
-        event.attackMode === 'knife'
+        event.attackMode === AttackMode.Knife
           ? this.add
               .text(source.x + 16, source.y, '◆', {
                 fontFamily: 'Georgia, serif',
@@ -496,15 +503,19 @@ export class BattleScene extends Phaser.Scene {
                 color: '#e7d7cc',
               })
               .setOrigin(0.5)
-          : event.attackMode === 'tech-x'
+          : event.attackMode === AttackMode.TechX
             ? this.add
                 .circle(source.x + 16, source.y, 12 * projectileScale, projectileColor, 0.12)
                 .setStrokeStyle(4, projectileColor, 0.95)
             : this.add
                 .circle(source.x + 16, source.y, 7 * projectileScale, projectileColor, 0.95)
                 .setStrokeStyle(2, 0xd8f8ff, 0.8);
-      if (event.attackMode === 'knife') projectile.setScale(projectileScale);
-      this.tweens.add({ targets: projectile, angle: event.attackMode === 'knife' ? 360 : 0, duration: 250 });
+      if (event.attackMode === AttackMode.Knife) projectile.setScale(projectileScale);
+      this.tweens.add({
+        targets: projectile,
+        angle: event.attackMode === AttackMode.Knife ? 360 : 0,
+        duration: 250,
+      });
       await this.tween(projectile, { x: target.x - 10, y: target.y, duration: 260, ease: 'Quad.easeIn' });
       projectile.destroy();
     }

@@ -41,7 +41,33 @@ import {
   rollEnemyIntent as rollIntent,
 } from './combat/enemy-ai.js';
 import { pushCombatAnimation as pushAnimation, pushCombatLog as pushLog } from './combat/events.js';
+import { rewardQualityWeight } from './rewards/room-rewards.js';
 import { migrateRunSnapshot } from './state/migrations.js';
+import {
+  AttackMode,
+  CardTarget,
+  CardType,
+  ChoiceAction,
+  ChoiceKind,
+  ChoiceNext,
+  CombatAnimationKind,
+  CombatLogTone,
+  CombatMovementStyle,
+  CombatRoomShape,
+  DealType,
+  EnemyMovementPattern,
+  HeartKind,
+  IntentKind,
+  ItemKind,
+  ResourceKind,
+  RewardContext,
+  RewardOptionType,
+  RewardPool,
+  RoomKind,
+  RoomMissingQuadrant,
+  RunPhase,
+  UpgradeKind,
+} from './types.js';
 
 export {
   COMBAT_GRID_HEIGHT,
@@ -68,7 +94,6 @@ import type {
   GridPosition,
   ItemDefinition,
   RewardOption,
-  RoomKind,
   RunState,
 } from './types.js';
 
@@ -94,7 +119,7 @@ function ensureCombatGrid(run: RunState): void {
   stats.shopDiscount ??= 0;
   stats.movementSpeed ??= 3;
   stats.attackRange ??= 5;
-  stats.attackMode ??= 'basic';
+  stats.attackMode ??= AttackMode.Basic;
   combat.playerPosition ??= { ...ISAAC_DOOR_POSITION };
   combat.deploymentPending ??= false;
   combat.playerDamageMultiplier ??= 1;
@@ -104,6 +129,8 @@ function ensureCombatGrid(run: RunState): void {
   combat.playerMovementBuff ??= 0;
   combat.attackMeter ??= 0;
   combat.usedPassiveItems ??= [];
+  combat.animationSequence ??= 0;
+  combat.animationEvents ??= [];
   const occupied = new Set<string>();
   combat.enemies.forEach((enemy, index) => {
     enemy.movementSpeed ??= enemy.boss ? 2 : 3;
@@ -131,8 +158,8 @@ function ensureCombatGrid(run: RunState): void {
       enemy.id === 'monstro' ||
       enemy.id === 'fatty' ||
       enemy.id === 'cage'
-        ? 'diagonal-jump'
-        : 'cardinal';
+        ? EnemyMovementPattern.DiagonalJump
+        : EnemyMovementPattern.Cardinal;
     enemy.alerted ??= false;
     const preferred = enemy.position ?? fallbackEnemyPosition(combat, index, enemy);
     enemy.position =
@@ -182,7 +209,7 @@ function isPositionInPlayerAttackRangeWithFusion(
 }
 
 export function getReachablePlayerCells(run: RunState): GridPosition[] {
-  if (run.phase !== 'combat' || !run.combat || run.combat.vitality < 1) return [];
+  if (run.phase !== RunPhase.Combat || !run.combat || run.combat.vitality < 1) return [];
   const playerPosition = run.combat.playerPosition ?? ISAAC_DOOR_POSITION;
   const blocked = new Set(
     run.combat.enemies
@@ -195,7 +222,7 @@ export function getReachablePlayerCells(run: RunState): GridPosition[] {
 
 export function getPlayerDeploymentCells(run: RunState): GridPosition[] {
   const combat = run.combat;
-  if (run.phase !== 'combat' || !combat?.deploymentPending) return [];
+  if (run.phase !== RunPhase.Combat || !combat?.deploymentPending) return [];
   const occupied = new Set(
     combat.enemies
       .filter((enemy) => enemy.hp > 0)
@@ -249,7 +276,7 @@ export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLO
     version: 1,
     createdAt,
     updatedAt: createdAt,
-    phase: 'map',
+    phase: RunPhase.Map,
     floorIndex: 0,
     floorMap: createFloorMap(0, cleanSeed),
     player: undefined as unknown as RunState['player'],
@@ -272,13 +299,13 @@ export function createRun(seed = `${Date.now()}`, unlockedItemIds = DEFAULT_UNLO
 }
 
 export function getAvailableNodes(run: RunState): string[] {
-  if (run.phase !== 'map') return [];
+  if (run.phase !== RunPhase.Map) return [];
   return availableNodeIds(run.floorMap);
 }
 
 export function useMapBomb(state: RunState): RunState {
   const run = clone(state);
-  if (run.phase !== 'map') throw new Error('A bomb can only search for doors from the map');
+  if (run.phase !== RunPhase.Map) throw new Error('A bomb can only search for doors from the map');
   if (run.player.bombs < 1) throw new Error('No bombs available');
   run.floorBombSearches ??= [];
   const current = getMapNode(run.floorMap, run.floorMap.currentNodeId);
@@ -295,7 +322,12 @@ export function useMapBomb(state: RunState): RunState {
   run.mapBombResult = {
     currentNodeId: current.id,
     found: Boolean(hiddenRoom),
-    roomKind: hiddenRoom?.kind === 'super-secret' ? 'super-secret' : hiddenRoom ? 'secret' : undefined,
+    roomKind:
+      hiddenRoom?.kind === RoomKind.SuperSecret
+        ? RoomKind.SuperSecret
+        : hiddenRoom
+          ? RoomKind.Secret
+          : undefined,
   };
   return touch(run);
 }
@@ -311,11 +343,11 @@ export function getCardDefinition(run: RunState, instanceId: string): CardDefini
 
 export function getAttackFusionMaterialIds(run: RunState, attackInstanceId: string): string[] {
   const attack = getCardDefinition(run, attackInstanceId);
-  if (!run.combat || attack?.type !== 'attack') return [];
+  if (!run.combat || attack?.type !== CardType.Attack) return [];
   return run.combat.hand.filter((instanceId) => {
     if (instanceId === attackInstanceId) return false;
     const card = getCardDefinition(run, instanceId);
-    return Boolean(card?.type === 'item' && card.itemId && ITEMS[card.itemId]?.fusion);
+    return Boolean(card?.type === CardType.Item && card.itemId && ITEMS[card.itemId]?.fusion);
   });
 }
 
@@ -325,7 +357,7 @@ export function getAttackFusionPreview(
   itemInstanceIds: readonly string[],
 ): AttackFusionPreview | undefined {
   const attack = getCardDefinition(run, attackInstanceId);
-  if (!attack || attack.type !== 'attack') return undefined;
+  if (!attack || attack.type !== CardType.Attack) return undefined;
   const preview: AttackFusionPreview = {
     totalCost: attack.cost,
     damageMultiplier: 1,
@@ -339,7 +371,7 @@ export function getAttackFusionPreview(
   };
   for (const instanceId of [...new Set(itemInstanceIds)]) {
     const card = getCardDefinition(run, instanceId);
-    const item = card?.type === 'item' && card.itemId ? ITEMS[card.itemId] : undefined;
+    const item = card?.type === CardType.Item && card.itemId ? ITEMS[card.itemId] : undefined;
     if (!card || !item?.fusion) continue;
     preview.damageMultiplier *= item.fusion.damageMultiplier ?? 1;
     preview.flatDamage += item.fusion.flatDamage ?? 0;
@@ -354,7 +386,7 @@ export function getAttackFusionPreview(
   return preview;
 }
 
-function unlockedPool(run: RunState, pool: ItemDefinition['pool'][number]): ItemDefinition[] {
+function unlockedPool(run: RunState, pool: RewardPool): ItemDefinition[] {
   const eligible = Object.values(ITEMS).filter(
     (item) =>
       run.unlocks.includes(item.id) && item.pool.includes(pool) && !run.player.items.includes(item.id),
@@ -362,8 +394,6 @@ function unlockedPool(run: RunState, pool: ItemDefinition['pool'][number]): Item
   if (eligible.length) return eligible;
   return Object.values(ITEMS).filter((item) => run.unlocks.includes(item.id) && item.pool.includes(pool));
 }
-
-const ITEM_QUALITY_WEIGHTS: Record<ItemDefinition['quality'], number> = { 1: 12, 2: 7, 3: 3, 4: 1 };
 
 function weightedUnique<T>(
   run: RunState,
@@ -384,23 +414,18 @@ function weightedUnique<T>(
   return selected;
 }
 
-function pickUniqueItems(
-  run: RunState,
-  pool: ItemDefinition['pool'][number],
-  count: number,
-): ItemDefinition[] {
-  return weightedUnique(run, unlockedPool(run, pool), count, (item) => ITEM_QUALITY_WEIGHTS[item.quality]);
+function pickUniqueItems(run: RunState, pool: RewardPool, count: number): ItemDefinition[] {
+  const candidates = unlockedPool(run, pool);
+  const weightedCandidates = candidates.filter((item) => rewardQualityWeight(pool, item.quality) > 0);
+  return weightedUnique(run, weightedCandidates.length ? weightedCandidates : candidates, count, (item) =>
+    Math.max(1, rewardQualityWeight(pool, item.quality)),
+  );
 }
 
-function itemOptions(
-  run: RunState,
-  pool: ItemDefinition['pool'][number],
-  count: number,
-  price?: number,
-): RewardOption[] {
+function itemOptions(run: RunState, pool: RewardPool, count: number, price?: number): RewardOption[] {
   return pickUniqueItems(run, pool, count).map((item) => ({
     id: makeId('option', run),
-    type: 'item',
+    type: RewardOptionType.Item,
     itemId: item.id,
     label: item.name,
     description: item.description,
@@ -409,13 +434,19 @@ function itemOptions(
   }));
 }
 
-function cardOptions(run: RunState, count: number, price?: number): RewardOption[] {
-  const pool = Object.values(CARDS).filter(
-    (card) => !['skill', 'curse'].includes(card.type) && card.id !== 'basic-attack',
+function cardOptions(run: RunState, rewardPool: RewardPool, count: number, price?: number): RewardOption[] {
+  const candidates = Object.values(CARDS).filter(
+    (card) =>
+      ![CardType.Skill, CardType.Curse].includes(card.type) &&
+      card.id !== 'basic-attack' &&
+      card.rewardPools.includes(rewardPool),
   );
-  return weightedUnique(run, pool, count, cardRewardWeight).map((card) => ({
+  const weightedPool = candidates.filter((card) => rewardQualityWeight(rewardPool, card.quality) > 0);
+  return weightedUnique(run, weightedPool.length ? weightedPool : candidates, count, (card) =>
+    cardRewardWeight(card, rewardPool),
+  ).map((card) => ({
     id: makeId('option', run),
-    type: 'card',
+    type: RewardOptionType.Card,
     cardId: card.id,
     label: card.name,
     description: card.description,
@@ -424,14 +455,17 @@ function cardOptions(run: RunState, count: number, price?: number): RewardOption
   }));
 }
 
-function cardRewardWeight(card: CardDefinition): number {
-  const item = card.itemId ? ITEMS[card.itemId] : undefined;
-  return item ? ITEM_QUALITY_WEIGHTS[item.quality] : (card.rewardWeight ?? 8);
+function cardRewardWeight(card: CardDefinition, pool: RewardPool): number {
+  return Math.max(1, rewardQualityWeight(pool, card.quality)) * (card.rewardWeight ?? 1);
 }
 
 function setChoice(run: RunState, choice: ChoiceState): void {
-  run.phase = 'choice';
+  run.phase = RunPhase.Choice;
   run.choice = choice;
+}
+
+function setRoomRewardChoice(run: RunState, choice: Omit<ChoiceState, 'canSkip'>): void {
+  setChoice(run, { ...choice, canSkip: true });
 }
 
 function revealMap(run: RunState): void {
@@ -439,7 +473,7 @@ function revealMap(run: RunState): void {
 }
 
 function returnToMap(run: RunState): void {
-  run.phase = 'map';
+  run.phase = RunPhase.Map;
   run.combat = undefined;
   run.choice = undefined;
   run.currentRoomId = undefined;
@@ -455,7 +489,16 @@ function resourceOption(
   icon: string,
   price?: number,
 ): RewardOption {
-  return { id: makeId('option', run), type: 'resource', resource, amount, label, description, icon, price };
+  return {
+    id: makeId('option', run),
+    type: RewardOptionType.Resource,
+    resource,
+    amount,
+    label,
+    description,
+    icon,
+    price,
+  };
 }
 
 function floorStartItemOption(
@@ -465,11 +508,13 @@ function floorStartItemOption(
   const candidates = Object.values(ITEMS).filter(
     (item) => run.unlocks.includes(item.id) && !run.player.items.includes(item.id) && predicate(item),
   );
-  const item = weightedUnique(run, candidates, 1, (entry) => ITEM_QUALITY_WEIGHTS[entry.quality])[0];
+  const item = weightedUnique(run, candidates, 1, (entry) =>
+    Math.max(1, rewardQualityWeight(RewardPool.FloorStart, entry.quality)),
+  )[0];
   return item
     ? {
         id: makeId('floor-item', run),
-        type: 'item',
+        type: RewardOptionType.Item,
         itemId: item.id,
         label: item.name,
         description: item.description,
@@ -482,17 +527,39 @@ function makeFloorStartChoice(run: RunState): void {
   const combatItem = floorStartItemOption(run, itemUsesCombatCard);
   const permanentItem = floorStartItemOption(
     run,
-    (item) => item.kind === 'passive' && item.combatCard === false && item.pool.includes('large-room'),
+    (item) =>
+      item.kind === ItemKind.Passive && item.combatCard === false && item.pool.includes(RewardPool.LargeRoom),
   );
-  const resource = pickOne(run, ['coins', 'bombs', 'keys'] as const);
+  const resource = pickOne(run, [ResourceKind.Coins, ResourceKind.Bombs, ResourceKind.Keys] as const);
   const resourceAmount =
-    resource === 'coins'
+    resource === ResourceKind.Coins
       ? randomInt(run, 6 + run.floorIndex, 9 + run.floorIndex)
       : randomInt(run, 2, run.floorIndex >= 3 ? 3 : 2);
   const resourceRewards = {
-    coins: resourceOption(run, 'coins', resourceAmount, 'Coin cache', 'Take the loose change.', '¢'),
-    bombs: resourceOption(run, 'bombs', resourceAmount, 'Bomb bundle', 'Bombs for future hidden doors.', '●'),
-    keys: resourceOption(run, 'keys', resourceAmount, 'Key ring', 'Keys for locked rewards.', '⚿'),
+    [ResourceKind.Coins]: resourceOption(
+      run,
+      ResourceKind.Coins,
+      resourceAmount,
+      'Coin cache',
+      'Take the loose change.',
+      '¢',
+    ),
+    [ResourceKind.Bombs]: resourceOption(
+      run,
+      ResourceKind.Bombs,
+      resourceAmount,
+      'Bomb bundle',
+      'Bombs for future hidden doors.',
+      '●',
+    ),
+    [ResourceKind.Keys]: resourceOption(
+      run,
+      ResourceKind.Keys,
+      resourceAmount,
+      'Key ring',
+      'Keys for locked rewards.',
+      '⚿',
+    ),
   } satisfies Record<typeof resource, RewardOption>;
   const options = shuffle(
     run,
@@ -502,13 +569,14 @@ function makeFloorStartChoice(run: RunState): void {
   );
   run.lastReward = [];
   setChoice(run, {
-    kind: 'loot',
+    kind: ChoiceKind.Loot,
     title: 'Floor provisions',
     subtitle: 'Choose one: a reusable item card, a permanent stat item, or an asset pack.',
     options,
     canSkip: false,
-    next: 'map',
-    rewardContext: 'floor-start',
+    next: ChoiceNext.Map,
+    rewardContext: RewardContext.FloorStart,
+    rewardPool: RewardPool.FloorStart,
   });
 }
 
@@ -518,24 +586,24 @@ function applyResource(
   amount: number,
 ): string {
   switch (resource) {
-    case 'coins':
+    case ResourceKind.Coins:
       run.player.coins += amount;
       return `${amount}¢`;
-    case 'bombs':
+    case ResourceKind.Bombs:
       run.player.bombs += amount;
       return `${amount} bomb${amount === 1 ? '' : 's'}`;
-    case 'keys':
+    case ResourceKind.Keys:
       run.player.keys += amount;
       return `${amount} key${amount === 1 ? '' : 's'}`;
-    case 'red-heart': {
+    case ResourceKind.RedHeart: {
       const healed = healRed(run.player, run.player.stats.heartSize * amount);
       return `${healed} red-heart HP`;
     }
-    case 'soul-heart':
-      addPocketHeart(run, 'soul', amount);
+    case ResourceKind.SoulHeart:
+      addPocketHeart(run, HeartKind.Soul, amount);
       return `${amount} soul heart${amount === 1 ? '' : 's'}`;
-    case 'black-heart':
-      addPocketHeart(run, 'black', amount);
+    case ResourceKind.BlackHeart:
+      addPocketHeart(run, HeartKind.Black, amount);
       return `${amount} black heart${amount === 1 ? '' : 's'}`;
   }
 }
@@ -553,7 +621,7 @@ function unlock(run: RunState, itemId: string): void {
 
 function checkProgressUnlocks(run: RunState): void {
   if (run.player.coins >= 15) unlock(run, 'steam-sale');
-  if (run.floorSecretVisits.includes('secret') && run.floorSecretVisits.includes('super-secret'))
+  if (run.floorSecretVisits.includes(RoomKind.Secret) && run.floorSecretVisits.includes(RoomKind.SuperSecret))
     unlock(run, 'blue-map');
   if (run.angelFavor >= 2) unlock(run, 'sacred-heart');
 }
@@ -561,27 +629,30 @@ function checkProgressUnlocks(run: RunState): void {
 function roomChoice(
   run: RunState,
   kind: ChoiceState['kind'],
+  rewardPool: RewardPool,
   title: string,
   subtitle: string,
   options: RewardOption[],
-  canSkip = true,
 ): void {
-  setChoice(run, { kind, title, subtitle, options, canSkip, next: 'map' });
+  setRoomRewardChoice(run, { kind, title, subtitle, options, next: ChoiceNext.Map, rewardPool });
 }
 
 function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
   switch (kind) {
-    case 'shop': {
+    case RoomKind.Shop: {
       const discount = 1 - run.player.stats.shopDiscount;
       const options = [
-        ...itemOptions(run, 'shop', 3).map((option, index) => ({
+        ...itemOptions(run, RewardPool.Shop, 3).map((option, index) => ({
           ...option,
           price: Math.max(3, Math.round((15 + index * 3) * discount)),
         })),
-        ...cardOptions(run, 2).map((option) => ({ ...option, price: Math.max(2, Math.round(7 * discount)) })),
+        ...cardOptions(run, RewardPool.Shop, 2).map((option) => ({
+          ...option,
+          price: Math.max(2, Math.round(7 * discount)),
+        })),
         resourceOption(
           run,
-          'red-heart',
+          ResourceKind.RedHeart,
           1,
           'Full Red Heart',
           'Recover one heart container.',
@@ -590,107 +661,128 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
         ),
         {
           id: makeId('leave', run),
-          type: 'action',
-          action: 'leave',
+          type: RewardOptionType.Action,
+          action: ChoiceAction.Leave,
           label: 'Leave shop',
           description: 'Keep your coins and return to the route.',
           icon: '↩',
         } satisfies RewardOption,
       ];
-      roomChoice(run, 'shop', 'Shop', `${run.player.coins}¢ in your pocket`, options, true);
+      roomChoice(
+        run,
+        ChoiceKind.Shop,
+        RewardPool.Shop,
+        'Shop',
+        `${run.player.coins}¢ in your pocket`,
+        options,
+      );
       break;
     }
-    case 'treasure':
+    case RoomKind.Treasure:
       roomChoice(
         run,
-        'item',
+        ChoiceKind.Item,
+        RewardPool.Treasure,
         'Treasure Room',
         'Choose one item. Active items replace the one you hold.',
-        itemOptions(run, 'treasure', 3),
-        false,
+        itemOptions(run, RewardPool.Treasure, 3),
       );
       break;
-    case 'planetarium':
+    case RoomKind.Planetarium:
       roomChoice(
         run,
-        'item',
+        ChoiceKind.Item,
+        RewardPool.Planetarium,
         'Planetarium',
         'The heavens offer one impossible instrument.',
-        itemOptions(run, 'planetarium', 3),
-        false,
+        itemOptions(run, RewardPool.Planetarium, 3),
       );
       break;
-    case 'curse': {
+    case RoomKind.Curse: {
       const payment = Math.min(15, Math.max(0, run.player.redHp - 1));
       run.player.redHp -= payment;
       run.floorRedDamage += payment;
       roomChoice(
         run,
-        'item',
+        ChoiceKind.Item,
+        RewardPool.Curse,
         'Curse Room',
         `The spikes took ${payment} HP. Choose what waited inside.`,
-        itemOptions(run, 'devil', 2),
-        true,
+        itemOptions(run, RewardPool.Curse, 2),
       );
       break;
     }
-    case 'sacrifice':
+    case RoomKind.Sacrifice:
       roomChoice(
         run,
-        'sacrifice',
+        ChoiceKind.Sacrifice,
+        RewardPool.Sacrifice,
         'Sacrifice Room',
         'Offer 15 red-heart HP for a soul heart and a Tarot card.',
         [
           {
             id: makeId('sacrifice', run),
-            type: 'action',
-            action: 'sacrifice',
+            type: RewardOptionType.Action,
+            action: ChoiceAction.Sacrifice,
             label: 'Step on the spikes',
             description: 'Lose 15 red HP; gain a soul heart and a Tarot card.',
             icon: '♱',
           },
           {
             id: makeId('leave', run),
-            type: 'action',
-            action: 'leave',
+            type: RewardOptionType.Action,
+            action: ChoiceAction.Leave,
             label: 'Walk away',
             description: 'Return to the map unharmed.',
             icon: '↩',
           },
         ],
-        true,
       );
       break;
-    case 'secret':
-      run.floorSecretVisits.push('secret');
+    case RoomKind.Secret:
+      run.floorSecretVisits.push(RoomKind.Secret);
       checkProgressUnlocks(run);
       roomChoice(
         run,
-        'loot',
+        ChoiceKind.Loot,
+        RewardPool.Secret,
         'Secret Room',
         'A hollow wall concealed a small cache.',
         [
-          resourceOption(run, 'coins', randomInt(run, 5, 10), 'Coin cache', 'Take the loose change.', '¢'),
-          resourceOption(run, 'bombs', 2, 'Bomb bundle', 'Two bombs for future hidden doors.', '●'),
-          ...itemOptions(run, 'secret', 1),
+          resourceOption(
+            run,
+            ResourceKind.Coins,
+            randomInt(run, 5, 10),
+            'Coin cache',
+            'Take the loose change.',
+            '¢',
+          ),
+          resourceOption(
+            run,
+            ResourceKind.Bombs,
+            2,
+            'Bomb bundle',
+            'Two bombs for future hidden doors.',
+            '●',
+          ),
+          ...itemOptions(run, RewardPool.Secret, 1),
         ],
-        false,
       );
       break;
-    case 'super-secret':
-      run.floorSecretVisits.push('super-secret');
+    case RoomKind.SuperSecret:
+      run.floorSecretVisits.push(RoomKind.SuperSecret);
       checkProgressUnlocks(run);
       roomChoice(
         run,
-        'loot',
+        ChoiceKind.Loot,
+        RewardPool.SuperSecret,
         'Super Secret Room',
         'Something precious has been waiting here.',
         [
-          resourceOption(run, 'soul-heart', 1, 'Soul Heart', 'Add a 30 HP soul heart.', '♡'),
-          resourceOption(run, 'black-heart', 1, 'Black Heart', 'Explodes when emptied.', '🖤'),
-          ...itemOptions(run, 'secret', 1),
+          resourceOption(run, ResourceKind.SoulHeart, 1, 'Soul Heart', 'Add a 30 HP soul heart.', '♡'),
+          resourceOption(run, ResourceKind.BlackHeart, 1, 'Black Heart', 'Explodes when emptied.', '🖤'),
+          ...itemOptions(run, RewardPool.SuperSecret, 1),
         ],
-        false,
       );
       break;
     default:
@@ -700,12 +792,12 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
 
 export function enterRoom(state: RunState, nodeId: string): RunState {
   const run = clone(state);
-  if (run.phase !== 'map') throw new Error('A room can only be entered from the map');
+  if (run.phase !== RunPhase.Map) throw new Error('A room can only be entered from the map');
   if (!availableNodeIds(run.floorMap).includes(nodeId))
     throw new Error('That room is not connected to the current route');
   const node = getMapNode(run.floorMap, nodeId);
   if (node.visited) throw new Error('That room has already been cleared');
-  if ((node.kind === 'shop' || node.kind === 'treasure') && run.floorIndex > 0) {
+  if ((node.kind === RoomKind.Shop || node.kind === RoomKind.Treasure) && run.floorIndex > 0) {
     if (run.player.keys < 1) throw new Error('A key is required to open this room');
     run.player.keys -= 1;
   }
@@ -715,7 +807,7 @@ export function enterRoom(state: RunState, nodeId: string): RunState {
   run.lastReward = [];
   run.mapBombResult = undefined;
 
-  if (node.kind === 'combat' || node.kind === 'elite' || node.kind === 'boss') {
+  if (node.kind === RoomKind.Combat || node.kind === RoomKind.Elite || node.kind === RoomKind.Boss) {
     beginCombat(run, node.kind);
   } else {
     resolveNonCombatRoom(run, node.kind);
@@ -756,7 +848,7 @@ function makeEnemy(
     turnsSinceAttack: 0,
     alerted: false,
     position: { ...ISAAC_DOOR_POSITION },
-    intent: { kind: 'idle', value: 0, label: 'Watching' },
+    intent: { kind: IntentKind.Idle, value: 0, label: 'Watching' },
   };
   if (initializeIntent) enemy.intent = rollIntent(run, enemy);
   return enemy;
@@ -774,11 +866,11 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     { standard: 22, wide: 18, tall: 14, large: 26, lShape: 20 },
   ][Math.min(FLOORS.length - 1, Math.max(0, run.floorIndex))]!;
   const weights = { ...progression };
-  if (roomKind === 'elite') {
+  if (roomKind === RoomKind.Elite) {
     weights.standard *= 0.82;
     weights.large *= 1.25;
     weights.lShape *= 1.2;
-  } else if (roomKind === 'boss') {
+  } else if (roomKind === RoomKind.Boss) {
     const bossGrowth = run.floorIndex / Math.max(1, FLOORS.length - 1);
     weights.standard *= 0.72 - bossGrowth * 0.18;
     weights.wide *= 1.1;
@@ -789,7 +881,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
   const layout = weightedPick(run, [
     {
       value: {
-        shape: 'standard',
+        shape: CombatRoomShape.Standard,
         width: STANDARD_ROOM_WIDTH,
         height: STANDARD_ROOM_HEIGHT,
         unitCount: 1,
@@ -798,7 +890,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     },
     {
       value: {
-        shape: 'wide',
+        shape: CombatRoomShape.Wide,
         width: STANDARD_ROOM_WIDTH * 2,
         height: STANDARD_ROOM_HEIGHT,
         unitCount: 2,
@@ -807,7 +899,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     },
     {
       value: {
-        shape: 'tall',
+        shape: CombatRoomShape.Tall,
         width: STANDARD_ROOM_WIDTH,
         height: STANDARD_ROOM_HEIGHT * 2,
         unitCount: 2,
@@ -816,7 +908,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     },
     {
       value: {
-        shape: 'large',
+        shape: CombatRoomShape.Large,
         width: STANDARD_ROOM_WIDTH * 2,
         height: STANDARD_ROOM_HEIGHT * 2,
         unitCount: 4,
@@ -825,7 +917,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     },
     {
       value: {
-        shape: 'l-shaped',
+        shape: CombatRoomShape.LShaped,
         width: STANDARD_ROOM_WIDTH * 2,
         height: STANDARD_ROOM_HEIGHT * 2,
         unitCount: 3,
@@ -834,12 +926,12 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
     },
   ]);
   const generated = { ...layout };
-  if (generated.shape === 'l-shaped') {
+  if (generated.shape === CombatRoomShape.LShaped) {
     generated.missingQuadrant = pickOne(run, [
-      'top-left',
-      'top-right',
-      'bottom-left',
-      'bottom-right',
+      RoomMissingQuadrant.TopLeft,
+      RoomMissingQuadrant.TopRight,
+      RoomMissingQuadrant.BottomLeft,
+      RoomMissingQuadrant.BottomRight,
     ] as const);
   }
   return generated;
@@ -848,7 +940,7 @@ function createCombatRoomLayout(run: RunState, roomKind: CombatState['roomKind']
 function roomEnemyCapacity(layout: CombatRoomLayout): number {
   const cellCount =
     layout.width * layout.height -
-    (layout.shape === 'l-shaped' ? STANDARD_ROOM_WIDTH * STANDARD_ROOM_HEIGHT : 0);
+    (layout.shape === CombatRoomShape.LShaped ? STANDARD_ROOM_WIDTH * STANDARD_ROOM_HEIGHT : 0);
   return Math.max(3, Math.floor(cellCount / 50));
 }
 
@@ -859,12 +951,12 @@ function encounterDefinitions(
 ): EnemyDefinition[] {
   const pool = enemyPoolForFloor(run.floorIndex);
   const capacity = roomEnemyCapacity(layout);
-  if (roomKind === 'boss') {
+  if (roomKind === RoomKind.Boss) {
     const supportLimit = layout.unitCount >= 3 ? Math.min(2, Math.floor(run.floorIndex / 2)) : 0;
     const supportCount = supportLimit > 0 ? randomInt(run, 0, supportLimit) : 0;
     return [bossForFloor(run.floorIndex), ...Array.from({ length: supportCount }, () => pickOne(run, pool))];
   }
-  if (roomKind === 'elite') {
+  if (roomKind === RoomKind.Elite) {
     const minimumSupport =
       layout.unitCount === 1 ? (run.floorIndex >= 2 ? 1 : 0) : Math.max(1, layout.unitCount - 1);
     const maximumSupport = Math.max(minimumSupport, Math.min(capacity - 1, Math.ceil(capacity * 0.65)));
@@ -915,14 +1007,14 @@ function drawToHand(run: RunState, combat: CombatState, target = run.player.stat
   }
 }
 
-function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void {
+function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite | RoomKind.Boss): void {
   const generatedLayout = createCombatRoomLayout(run, roomKind);
   const definitions = encounterDefinitions(run, roomKind, generatedLayout);
   const skills = run.player.deck
-    .filter((card) => CARDS[card.definitionId]?.type === 'skill')
+    .filter((card) => CARDS[card.definitionId]?.type === CardType.Skill)
     .map((card) => card.instanceId);
   const others = run.player.deck
-    .filter((card) => CARDS[card.definitionId]?.type !== 'skill')
+    .filter((card) => CARDS[card.definitionId]?.type !== CardType.Skill)
     .map((card) => card.instanceId);
   const combat: CombatState = {
     roomKind,
@@ -958,27 +1050,32 @@ function beginCombat(run: RunState, roomKind: 'combat' | 'elite' | 'boss'): void
   combat.enemies.forEach((enemy) => {
     enemy.intent = rollIntent(run, enemy);
   });
-  if (!combat.enemies.some((enemy) => enemy.intent.actions?.some((entry) => entry.kind === 'attack'))) {
+  if (
+    !combat.enemies.some((enemy) => enemy.intent.actions?.some((entry) => entry.kind === IntentKind.Attack))
+  ) {
     const attacker = combat.enemies.at(-1);
     if (attacker)
       attacker.intent = makeIntent(
         attacker.boss
-          ? [action('attack', attackValue(attacker)), action('attack', attackValue(attacker, 0.7))]
-          : [action('attack', attackValue(attacker))],
+          ? [
+              action(IntentKind.Attack, attackValue(attacker)),
+              action(IntentKind.Attack, attackValue(attacker, 0.7)),
+            ]
+          : [action(IntentKind.Attack, attackValue(attacker))],
       );
   }
   drawToHand(run, combat);
   pushLog(
     combat,
     `Round 1 — ${combat.enemies.map((enemy) => enemy.name).join(', ')} entered the room.`,
-    'special',
+    CombatLogTone.Special,
     'enter',
     {
       enemies: combat.enemies.map((enemy) => enemy.id).join('|'),
     },
   );
   run.choice = undefined;
-  run.phase = 'combat';
+  run.phase = RunPhase.Combat;
 }
 
 function selectedTarget(combat: CombatState, requestedId?: string): EnemyState | undefined {
@@ -1041,7 +1138,7 @@ function knockbackEnemy(combat: CombatState, enemy: EnemyState, distance: number
   const from = { ...enemy.position };
   enemy.position = destination;
   pushAnimation(combat, {
-    kind: 'move',
+    kind: CombatAnimationKind.Move,
     sourceId: enemy.instanceId,
     targetId: enemy.instanceId,
     fromX: from.x,
@@ -1079,21 +1176,21 @@ function playAttack(
       isPositionInPlayerAttackRangeWithFusion(run, cell, modifier.curvedShots),
     );
   let targets =
-    card.target === 'all-enemies'
+    card.target === CardTarget.AllEnemies
       ? combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy))
       : [selectedTarget(combat, targetId)].filter((enemy): enemy is EnemyState => Boolean(enemy));
   let multiplier = 1;
   let armorPierce = 0;
   const attackMode = modifier.attackMode ?? combat.attackModeOverride ?? run.player.stats.attackMode;
-  if (attackMode === 'knife') {
+  if (attackMode === AttackMode.Knife) {
     multiplier = 1.6;
     armorPierce = 3;
   }
-  if (attackMode === 'brimstone') {
+  if (attackMode === AttackMode.Brimstone) {
     targets = combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy));
     multiplier = 0.85;
   }
-  if (attackMode === 'tech-x') {
+  if (attackMode === AttackMode.TechX) {
     targets = combat.enemies.filter((enemy) => enemy.hp > 0 && inRange(enemy));
     targets.forEach((enemy) => {
       enemy.shield = Math.max(0, enemy.shield - 3);
@@ -1125,7 +1222,7 @@ function playAttack(
     const hpDamage = hpBefore - target.hp;
     const shieldDamage = shieldBefore - target.shield;
     pushAnimation(combat, {
-      kind: 'player-attack',
+      kind: CombatAnimationKind.PlayerAttack,
       sourceId: 'isaac',
       targetId: target.instanceId,
       value: hpDamage,
@@ -1146,18 +1243,22 @@ function playAttack(
       target.slowedTurns = Math.max(target.slowedTurns, modifier.slowTurns);
     if (target.hp > 0) knockbackEnemy(combat, target, modifier.knockback);
     if (wasAlive && target.hp <= 0)
-      pushAnimation(combat, { kind: 'defeat', sourceId: target.instanceId, targetId: target.instanceId });
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Defeat,
+        sourceId: target.instanceId,
+        targetId: target.instanceId,
+      });
   }
-  const mode = attackMode === 'basic' ? '' : ` ${attackMode}`;
+  const mode = attackMode === AttackMode.Basic ? '' : ` ${attackMode}`;
   pushLog(
     combat,
     `${card.name} dealt ${total}${mode} damage${echoHits ? ` with ${echoHits} echo hit` : ''}.`,
-    'good',
+    CombatLogTone.Good,
     'attack',
     {
       cardId: card.id,
       damage: total,
-      mode: attackMode === 'basic' ? '' : attackMode,
+      mode: attackMode === AttackMode.Basic ? '' : attackMode,
       echoCount: echoHits,
     },
   );
@@ -1165,7 +1266,7 @@ function playAttack(
     pushLog(
       combat,
       `Fusion attack used ${fusedItemCount} item cards for this attack only at ×${modifier.damageMultiplier.toFixed(2)} power.`,
-      'special',
+      CombatLogTone.Special,
       'fusionAttack',
       {
         count: fusedItemCount,
@@ -1188,27 +1289,32 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
         .filter((card): card is CardInstance => Boolean(card));
       const pool = Object.values(CARDS).filter(
         (card) =>
-          !['skill', 'curse'].includes(card.type) &&
-          (card.type !== 'item' || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
+          ![CardType.Skill, CardType.Curse].includes(card.type) &&
+          (card.type !== CardType.Item || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
       );
       for (const rerolledCard of rerolled) {
         const candidates = pool.filter((card) => card.id !== rerolledCard.definitionId);
         if (!candidates.length) continue;
         rerolledCard.definitionId = weightedPick(
           run,
-          candidates.map((card) => ({ value: card, weight: cardRewardWeight(card) })),
+          candidates.map((card) => ({ value: card, weight: cardRewardWeight(card, RewardPool.Dice) })),
         ).id;
         rerolledCard.upgraded = false;
       }
-      pushLog(combat, `The D6 rerolled ${rerolled.length} cards.`, 'special', 'reroll', {
+      pushLog(combat, `The D6 rerolled ${rerolled.length} cards.`, CombatLogTone.Special, 'reroll', {
         count: rerolled.length,
       });
       break;
     }
     case 'skill-yum-heart': {
       const healed = healRed(run.player, 15);
-      pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
-      pushLog(combat, `Yum Heart recovered ${healed} HP.`, 'good', 'heal', {
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Heal,
+        sourceId: 'isaac',
+        targetId: 'isaac',
+        value: healed,
+      });
+      pushLog(combat, `Yum Heart recovered ${healed} HP.`, CombatLogTone.Good, 'heal', {
         sourceCardId: instance.definitionId,
         amount: healed,
       });
@@ -1216,13 +1322,23 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
     }
     case 'skill-belial':
       combat.playerDamageBuff += 1;
-      pushAnimation(combat, { kind: 'prepare', sourceId: 'isaac', targetId: 'isaac', value: 1 });
-      pushLog(combat, 'Book of Belial granted +1 room damage.', 'special', 'belial');
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Prepare,
+        sourceId: 'isaac',
+        targetId: 'isaac',
+        value: 1,
+      });
+      pushLog(combat, 'Book of Belial granted +1 room damage.', CombatLogTone.Special, 'belial');
       break;
     case 'skill-shadows':
       combat.playerShield += 12;
-      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 12 });
-      pushLog(combat, 'Book of Shadows granted 12 shield.', 'good', 'shadows');
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Shield,
+        sourceId: 'isaac',
+        targetId: 'isaac',
+        value: 12,
+      });
+      pushLog(combat, 'Book of Shadows granted 12 shield.', CombatLogTone.Good, 'shadows');
       break;
     case 'skill-tammy': {
       const damage =
@@ -1235,29 +1351,38 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
           const wasAlive = enemy.hp > 0;
           const dealt = hurtEnemy(enemy, damage);
           pushAnimation(combat, {
-            kind: 'player-attack',
+            kind: CombatAnimationKind.PlayerAttack,
             sourceId: 'isaac',
             targetId: enemy.instanceId,
             value: dealt,
-            attackMode: 'basic',
+            attackMode: AttackMode.Basic,
           });
           if (wasAlive && enemy.hp <= 0)
-            pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+            pushAnimation(combat, {
+              kind: CombatAnimationKind.Defeat,
+              sourceId: enemy.instanceId,
+              targetId: enemy.instanceId,
+            });
         });
       pushLog(
         combat,
         `Tammy's Head burst for ${Math.round(damage)} damage to all enemies.`,
-        'good',
+        CombatLogTone.Good,
         'tammy',
         { damage: Math.round(damage) },
       );
       break;
     }
     case 'skill-nail':
-      addPocketHeart(run, 'black');
+      addPocketHeart(run, HeartKind.Black);
       combat.playerArmorBuff += 1;
-      pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: 1 });
-      pushLog(combat, 'The Nail granted a black heart and +1 room armor.', 'special', 'nail');
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Shield,
+        sourceId: 'isaac',
+        targetId: 'isaac',
+        value: 1,
+      });
+      pushLog(combat, 'The Nail granted a black heart and +1 room armor.', CombatLogTone.Special, 'nail');
       break;
     case 'skill-hourglass':
       combat.enemies
@@ -1265,19 +1390,24 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance): 
         .forEach((enemy) => {
           ensureEnemyBehavior(enemy);
           enemy.staggeredTurns = Math.max(1, enemy.staggeredTurns ?? 0);
-          pushAnimation(combat, { kind: 'curse', sourceId: 'isaac', targetId: enemy.instanceId, value: 1 });
+          pushAnimation(combat, {
+            kind: CombatAnimationKind.Curse,
+            sourceId: 'isaac',
+            targetId: enemy.instanceId,
+            value: 1,
+          });
         });
-      pushLog(combat, 'Time folds. Every enemy loses its next action.', 'special', 'hourglass');
+      pushLog(combat, 'Time folds. Every enemy loses its next action.', CombatLogTone.Special, 'hourglass');
       break;
     default:
-      pushLog(combat, 'The active item fizzled.', 'normal', 'fizzled');
+      pushLog(combat, 'The active item fizzled.', CombatLogTone.Normal, 'fizzled');
   }
   combat.cooldowns[instance.instanceId] = skillChargeRounds(run, instance);
 }
 
 function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefinition): void {
   const item = card.itemId ? ITEMS[card.itemId] : undefined;
-  if (!item || item.kind !== 'passive') return;
+  if (!item || item.kind !== ItemKind.Passive) return;
   if (!combat.usedPassiveItems.includes(item.id)) combat.usedPassiveItems.push(item.id);
   let shieldGained = 0;
   let healed = 0;
@@ -1301,12 +1431,24 @@ function playPassiveItemCard(run: RunState, combat: CombatState, card: CardDefin
   }
   if (shieldGained > 0) {
     combat.playerShield += shieldGained;
-    pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: shieldGained });
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Shield,
+      sourceId: 'isaac',
+      targetId: 'isaac',
+      value: shieldGained,
+    });
   }
   if (healed > 0)
-    pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Heal,
+      sourceId: 'isaac',
+      targetId: 'isaac',
+      value: healed,
+    });
   if (item.effects?.some((effect) => effect.revealAll || effect.revealSecrets)) revealMap(run);
-  pushLog(combat, `${item.name} activated from the deck.`, 'special', 'passiveUsed', { itemId: item.id });
+  pushLog(combat, `${item.name} activated from the deck.`, CombatLogTone.Special, 'passiveUsed', {
+    itemId: item.id,
+  });
 }
 
 function allEnemiesDefeated(combat: CombatState): boolean {
@@ -1319,17 +1461,17 @@ export function canPlayFusedAttack(
   itemInstanceIds: readonly string[],
   targetId?: string,
 ): { ok: boolean; reason?: string } {
-  if (run.phase !== 'combat' || !run.combat) return { ok: false, reason: 'Not in combat' };
+  if (run.phase !== RunPhase.Combat || !run.combat) return { ok: false, reason: 'Not in combat' };
   if (!run.combat.hand.includes(attackInstanceId)) return { ok: false, reason: 'Card is not in hand' };
   const attack = getCardDefinition(run, attackInstanceId);
-  if (!attack || attack.type !== 'attack') return { ok: false, reason: 'Choose an attack card' };
+  if (!attack || attack.type !== CardType.Attack) return { ok: false, reason: 'Choose an attack card' };
   if (new Set(itemInstanceIds).size !== itemInstanceIds.length)
     return { ok: false, reason: 'The same item card cannot be fused twice' };
   for (const instanceId of itemInstanceIds) {
     if (instanceId === attackInstanceId || !run.combat.hand.includes(instanceId))
       return { ok: false, reason: 'Fusion card is not in hand' };
     const card = getCardDefinition(run, instanceId);
-    const item = card?.type === 'item' && card.itemId ? ITEMS[card.itemId] : undefined;
+    const item = card?.type === CardType.Item && card.itemId ? ITEMS[card.itemId] : undefined;
     if (!item?.fusion) return { ok: false, reason: 'That item card cannot enhance an attack' };
   }
   const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
@@ -1355,17 +1497,17 @@ export function canPlayCard(
   instanceId: string,
   targetId?: string,
 ): { ok: boolean; reason?: string } {
-  if (run.phase !== 'combat' || !run.combat) return { ok: false, reason: 'Not in combat' };
+  if (run.phase !== RunPhase.Combat || !run.combat) return { ok: false, reason: 'Not in combat' };
   if (!run.combat.hand.includes(instanceId)) return { ok: false, reason: 'Card is not in hand' };
   const instance = getCard(run, instanceId);
   const card = instance ? CARDS[instance.definitionId] : undefined;
   if (!instance || !card) return { ok: false, reason: 'Unknown card' };
-  if (card.type === 'curse') return { ok: false, reason: 'Curse cards are unplayable' };
+  if (card.type === CardType.Curse) return { ok: false, reason: 'Curse cards are unplayable' };
   if (run.combat.vitality < card.cost) return { ok: false, reason: 'Not enough vitality' };
-  if (card.type === 'skill' && (run.combat.cooldowns[instanceId] ?? 0) > 0)
+  if (card.type === CardType.Skill && (run.combat.cooldowns[instanceId] ?? 0) > 0)
     return { ok: false, reason: 'Active item is recharging' };
-  if (card.type === 'attack' || card.type === 'hex') {
-    if (card.target === 'all-enemies') {
+  if (card.type === CardType.Attack || card.type === CardType.Hex) {
+    if (card.target === CardTarget.AllEnemies) {
       const hasTargetInRange = run.combat.enemies.some(
         (enemy) => enemy.hp > 0 && isEnemyInPlayerRange(run, enemy.instanceId),
       );
@@ -1394,7 +1536,8 @@ export function playFusedAttack(
   const playable = canPlayFusedAttack(state, attackInstanceId, itemInstanceIds, targetId);
   if (!playable.ok) throw new Error(playable.reason);
   const pendingAttack = getCardDefinition(state, attackInstanceId)!;
-  if (pendingAttack.target === 'enemy' && targetId === undefined) throw new Error('Choose an enemy target');
+  if (pendingAttack.target === CardTarget.Enemy && targetId === undefined)
+    throw new Error('Choose an enemy target');
 
   const run = clone(state);
   const combat = run.combat!;
@@ -1403,10 +1546,20 @@ export function playFusedAttack(
   const preview = getAttackFusionPreview(run, attackInstanceId, itemInstanceIds)!;
   if (targetId) combat.selectedEnemyId = targetId;
   combat.vitality -= preview.totalCost;
-  pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: attack.id, value: attack.cost });
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.CardPlay,
+    sourceId: 'isaac',
+    cardId: attack.id,
+    value: attack.cost,
+  });
   for (const itemInstanceId of itemInstanceIds) {
     const itemCard = getCardDefinition(run, itemInstanceId)!;
-    pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: itemCard.id, value: 0 });
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.CardPlay,
+      sourceId: 'isaac',
+      cardId: itemCard.id,
+      value: 0,
+    });
   }
   playAttack(run, combat, attack, attackInstance, targetId, preview, itemInstanceIds.length);
 
@@ -1434,7 +1587,7 @@ export function selectEnemy(state: RunState, enemyId: string): RunState {
 
 export function placePlayerForDeployment(state: RunState, x: number, y: number): RunState {
   const run = clone(state);
-  if (run.phase !== 'combat' || !run.combat?.deploymentPending)
+  if (run.phase !== RunPhase.Combat || !run.combat?.deploymentPending)
     throw new Error('Player deployment is not active');
   const destination = { x, y };
   if (!getPlayerDeploymentCells(run).some((position) => position.x === x && position.y === y)) {
@@ -1444,7 +1597,7 @@ export function placePlayerForDeployment(state: RunState, x: number, y: number):
   run.combat.playerPosition = destination;
   run.combat.selectedEnemyId = undefined;
   pushAnimation(run.combat, {
-    kind: 'move',
+    kind: CombatAnimationKind.Move,
     sourceId: 'isaac',
     targetId: 'isaac',
     fromX: from.x,
@@ -1457,7 +1610,7 @@ export function placePlayerForDeployment(state: RunState, x: number, y: number):
 
 export function confirmPlayerDeployment(state: RunState): RunState {
   const run = clone(state);
-  if (run.phase !== 'combat' || !run.combat?.deploymentPending)
+  if (run.phase !== RunPhase.Combat || !run.combat?.deploymentPending)
     throw new Error('Player deployment is not active');
   run.combat.deploymentPending = false;
   run.combat.enemies
@@ -1465,11 +1618,15 @@ export function confirmPlayerDeployment(state: RunState): RunState {
     .forEach((enemy) => {
       enemy.intent = rollIntent(run, enemy);
     });
-  pushAnimation(run.combat, { kind: 'round-start', sourceId: 'isaac', value: run.combat.round });
+  pushAnimation(run.combat, {
+    kind: CombatAnimationKind.RoundStart,
+    sourceId: 'isaac',
+    value: run.combat.round,
+  });
   pushLog(
     run.combat,
     `Isaac deployed at (${run.combat.playerPosition.x}, ${run.combat.playerPosition.y}).`,
-    'special',
+    CombatLogTone.Special,
     'deploymentConfirmed',
     {
       x: run.combat.playerPosition.x,
@@ -1481,7 +1638,7 @@ export function confirmPlayerDeployment(state: RunState): RunState {
 
 export function movePlayer(state: RunState, x: number, y: number): RunState {
   const run = clone(state);
-  if (run.phase !== 'combat' || !run.combat) throw new Error('Not in combat');
+  if (run.phase !== RunPhase.Combat || !run.combat) throw new Error('Not in combat');
   ensureCombatGrid(run);
   const destination = { x, y };
   if (!getReachablePlayerCells(run).some((position) => position.x === x && position.y === y)) {
@@ -1491,7 +1648,7 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
   run.combat.playerPosition = destination;
   run.combat.vitality -= 1;
   pushAnimation(run.combat, {
-    kind: 'move',
+    kind: CombatAnimationKind.Move,
     sourceId: 'isaac',
     targetId: 'isaac',
     fromX: from.x,
@@ -1499,18 +1656,24 @@ export function movePlayer(state: RunState, x: number, y: number): RunState {
     toX: x,
     toY: y,
   });
-  pushLog(run.combat, `Isaac moved from (${from.x}, ${from.y}) to (${x}, ${y}).`, 'normal', 'playerMoved', {
-    fromX: from.x,
-    fromY: from.y,
-    x,
-    y,
-  });
+  pushLog(
+    run.combat,
+    `Isaac moved from (${from.x}, ${from.y}) to (${x}, ${y}).`,
+    CombatLogTone.Normal,
+    'playerMoved',
+    {
+      fromX: from.x,
+      fromY: from.y,
+      x,
+      y,
+    },
+  );
   return touch(run);
 }
 
 export function useCombatBomb(state: RunState, x: number, y: number): RunState {
   const run = clone(state);
-  if (run.phase !== 'combat' || !run.combat) throw new Error('Not in combat');
+  if (run.phase !== RunPhase.Combat || !run.combat) throw new Error('Not in combat');
   if (run.combat.deploymentPending) throw new Error('Confirm deployment before using a bomb');
   if (run.player.bombs < 1) throw new Error('No bombs available');
   const center = { x, y };
@@ -1524,7 +1687,13 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
       if (isCombatCellAvailable(run.combat, cell)) blastCells.add(positionKey(cell));
     }
   }
-  pushAnimation(run.combat, { kind: 'bomb-blast', sourceId: 'isaac', toX: x, toY: y, value: 50 });
+  pushAnimation(run.combat, {
+    kind: CombatAnimationKind.BombBlast,
+    sourceId: 'isaac',
+    toX: x,
+    toY: y,
+    value: 50,
+  });
   let totalDamage = 0;
   let hitEnemies = 0;
   for (const enemy of run.combat.enemies.filter((entry) => entry.hp > 0)) {
@@ -1542,7 +1711,7 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
     const rawDamage = coveredCells.length * 50;
     totalDamage += durabilityDamage;
     pushAnimation(run.combat, {
-      kind: 'bomb-hit',
+      kind: CombatAnimationKind.BombHit,
       sourceId: 'isaac',
       targetId: enemy.instanceId,
       value: hpDamage,
@@ -1552,13 +1721,17 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
       hitCount: coveredCells.length,
     });
     if (wasAlive && enemy.hp <= 0) {
-      pushAnimation(run.combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+      pushAnimation(run.combat, {
+        kind: CombatAnimationKind.Defeat,
+        sourceId: enemy.instanceId,
+        targetId: enemy.instanceId,
+      });
     }
   }
   pushLog(
     run.combat,
     `Bomb hit ${hitEnemies} enemies for ${totalDamage} damage at (${x}, ${y}).`,
-    'special',
+    CombatLogTone.Special,
     'bombBlast',
     {
       enemies: hitEnemies,
@@ -1572,7 +1745,7 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
 }
 
 export function playCard(state: RunState, instanceId: string, targetId?: string): RunState {
-  if (getCardDefinition(state, instanceId)?.type === 'attack') {
+  if (getCardDefinition(state, instanceId)?.type === CardType.Attack) {
     return playFusedAttack(state, instanceId, [], targetId);
   }
   const playable = canPlayCard(state, instanceId, targetId);
@@ -1580,8 +1753,8 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   const pendingInstance = getCard(state, instanceId);
   const pendingCard = pendingInstance ? CARDS[pendingInstance.definitionId] : undefined;
   if (
-    pendingCard?.target === 'enemy' &&
-    ['attack', 'hex'].includes(pendingCard.type) &&
+    pendingCard?.target === CardTarget.Enemy &&
+    [CardType.Attack, CardType.Hex].includes(pendingCard.type) &&
     targetId === undefined
   ) {
     throw new Error('Choose an enemy target');
@@ -1592,43 +1765,58 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
   const card = CARDS[instance.definitionId]!;
   if (targetId) combat.selectedEnemyId = targetId;
   combat.vitality -= card.cost;
-  pushAnimation(combat, { kind: 'card-play', sourceId: 'isaac', cardId: card.id, value: card.cost });
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.CardPlay,
+    sourceId: 'isaac',
+    cardId: card.id,
+    value: card.cost,
+  });
 
-  if (card.type === 'shield') {
+  if (card.type === CardType.Shield) {
     const amount = (card.value ?? 5) + (instance.upgraded ? 3 : 0);
     combat.playerShield += amount;
-    pushAnimation(combat, { kind: 'shield', sourceId: 'isaac', targetId: 'isaac', value: amount });
-    pushLog(combat, `${card.name} granted ${amount} shield.`, 'good', 'shield', {
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Shield,
+      sourceId: 'isaac',
+      targetId: 'isaac',
+      value: amount,
+    });
+    pushLog(combat, `${card.name} granted ${amount} shield.`, CombatLogTone.Good, 'shield', {
       sourceCardId: card.id,
       amount,
     });
   }
-  if (card.type === 'recovery') {
+  if (card.type === CardType.Recovery) {
     const amount = (card.value ?? 10) + (instance.upgraded ? 5 : 0);
     const healed = healRed(run.player, amount);
-    pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
-    pushLog(combat, `${card.name} recovered ${healed} HP.`, 'good', 'heal', {
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Heal,
+      sourceId: 'isaac',
+      targetId: 'isaac',
+      value: healed,
+    });
+    pushLog(combat, `${card.name} recovered ${healed} HP.`, CombatLogTone.Good, 'heal', {
       sourceCardId: card.id,
       amount: healed,
     });
   }
-  if (card.type === 'hex') {
+  if (card.type === CardType.Hex) {
     const target = selectedTarget(combat, targetId);
     if (target) {
       target.cursedTurns += (card.value ?? 1) + (instance.upgraded ? 1 : 0);
       pushAnimation(combat, {
-        kind: 'curse',
+        kind: CombatAnimationKind.Curse,
         sourceId: 'isaac',
         targetId: target.instanceId,
         value: target.cursedTurns,
       });
-      pushLog(combat, `${target.name} was cursed.`, 'special', 'cursed', {
+      pushLog(combat, `${target.name} was cursed.`, CombatLogTone.Special, 'cursed', {
         enemyId: target.id,
         enemy: target.name,
       });
     }
   }
-  if (card.type === 'tarot') {
+  if (card.type === CardType.Tarot) {
     if (card.id === 'the-empress') combat.playerDamageBuff += card.value ?? 3;
     if (card.id === 'death' || card.id === 'the-sun') {
       combat.enemies
@@ -1637,26 +1825,37 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
           const wasAlive = enemy.hp > 0;
           const dealt = hurtEnemy(enemy, card.value ?? 25, 99);
           pushAnimation(combat, {
-            kind: 'player-attack',
+            kind: CombatAnimationKind.PlayerAttack,
             sourceId: 'isaac',
             targetId: enemy.instanceId,
             value: dealt,
-            attackMode: card.id === 'death' ? 'knife' : 'brimstone',
+            attackMode: card.id === 'death' ? AttackMode.Knife : AttackMode.Brimstone,
           });
           if (wasAlive && enemy.hp <= 0)
-            pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+            pushAnimation(combat, {
+              kind: CombatAnimationKind.Defeat,
+              sourceId: enemy.instanceId,
+              targetId: enemy.instanceId,
+            });
         });
       if (card.id === 'the-sun') {
         const healed = healRed(run.player, 10);
-        pushAnimation(combat, { kind: 'heal', sourceId: 'isaac', targetId: 'isaac', value: healed });
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Heal,
+          sourceId: 'isaac',
+          targetId: 'isaac',
+          value: healed,
+        });
       }
-      pushLog(combat, `${card.name} consumed in a burst of power.`, 'special', 'tarot', { cardId: card.id });
+      pushLog(combat, `${card.name} consumed in a burst of power.`, CombatLogTone.Special, 'tarot', {
+        cardId: card.id,
+      });
     }
   }
-  if (card.type === 'skill') playSkill(run, combat, instance);
-  if (card.type === 'item') playPassiveItemCard(run, combat, card);
+  if (card.type === CardType.Skill) playSkill(run, combat, instance);
+  if (card.type === CardType.Item) playPassiveItemCard(run, combat, card);
 
-  if (card.type !== 'skill') {
+  if (card.type !== CardType.Skill) {
     combat.hand = combat.hand.filter((id) => id !== instanceId);
     if (card.exhaust) {
       combat.exhausted.push(instanceId);
@@ -1671,13 +1870,17 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
 
 export function endTurn(state: RunState): RunState {
   const run = clone(state);
-  if (run.phase !== 'combat' || !run.combat) throw new Error('Not in combat');
-  run.phase = 'discard';
-  pushAnimation(run.combat, { kind: 'discard-phase', sourceId: 'isaac', value: run.player.stats.maxRetain });
+  if (run.phase !== RunPhase.Combat || !run.combat) throw new Error('Not in combat');
+  run.phase = RunPhase.Discard;
+  pushAnimation(run.combat, {
+    kind: CombatAnimationKind.DiscardPhase,
+    sourceId: 'isaac',
+    value: run.player.stats.maxRetain,
+  });
   pushLog(
     run.combat,
     `Choose any cards to discard, then retain no more than ${run.player.stats.maxRetain}.`,
-    'normal',
+    CombatLogTone.Normal,
     'discard',
     { count: run.player.stats.maxRetain },
   );
@@ -1686,13 +1889,13 @@ export function endTurn(state: RunState): RunState {
 
 export function discardCard(state: RunState, instanceId: string): RunState {
   const run = clone(state);
-  if (run.phase !== 'discard' || !run.combat) throw new Error('Not choosing discards');
+  if (run.phase !== RunPhase.Discard || !run.combat) throw new Error('Not choosing discards');
   const instance = getCard(run, instanceId);
   if (!instance) throw new Error('Unknown card');
   const definition = CARDS[instance.definitionId];
   if (!run.combat.hand.includes(instanceId)) throw new Error('Card is not in hand');
   run.combat.hand = run.combat.hand.filter((id) => id !== instanceId);
-  if (definition?.type === 'skill') {
+  if (definition?.type === CardType.Skill) {
     const item = Object.values(ITEMS).find((entry) => entry.skillCardId === instance.definitionId);
     run.combat.exhausted.push(instanceId);
     run.player.deck = run.player.deck.filter((card) => card.instanceId !== instanceId);
@@ -1704,7 +1907,7 @@ export function discardCard(state: RunState, instanceId: string): RunState {
     pushLog(
       run.combat,
       `${item?.name ?? definition.name} was discarded and is gone.`,
-      'danger',
+      CombatLogTone.Danger,
       'activeDiscarded',
       {
         itemId: item?.id ?? '',
@@ -1714,16 +1917,24 @@ export function discardCard(state: RunState, instanceId: string): RunState {
   } else {
     run.combat.discardPile.push(instanceId);
   }
-  pushAnimation(run.combat, { kind: 'card-discard', sourceId: 'isaac', cardId: instance.definitionId });
+  pushAnimation(run.combat, {
+    kind: CombatAnimationKind.CardDiscard,
+    sourceId: 'isaac',
+    cardId: instance.definitionId,
+  });
   return touch(run);
 }
 
 export function finishDiscard(state: RunState): RunState {
   const run = clone(state);
-  if (run.phase !== 'discard' || !run.combat) throw new Error('Not choosing discards');
+  if (run.phase !== RunPhase.Discard || !run.combat) throw new Error('Not choosing discards');
   if (run.combat.hand.length > run.player.stats.maxRetain)
     throw new Error(`Retain no more than ${run.player.stats.maxRetain} cards`);
-  pushAnimation(run.combat, { kind: 'enemy-phase', sourceId: 'isaac', value: run.combat.round });
+  pushAnimation(run.combat, {
+    kind: CombatAnimationKind.EnemyPhase,
+    sourceId: 'isaac',
+    value: run.combat.round,
+  });
   resolveEnemyTurn(run);
   return touch(run);
 }
@@ -1732,22 +1943,31 @@ function addCurseCard(run: RunState, combat: CombatState): void {
   const curse = createCard(run, 'dead-weight');
   run.player.deck.push(curse);
   combat.discardPile.push(curse.instanceId);
-  pushLog(combat, 'A Dead Weight curse was added to your deck.', 'danger', 'deadWeight');
+  pushLog(combat, 'A Dead Weight curse was added to your deck.', CombatLogTone.Danger, 'deadWeight');
 }
 
 function blackHeartBurst(combat: CombatState): void {
-  pushAnimation(combat, { kind: 'black-heart', sourceId: 'isaac', targetId: 'isaac', value: 100 });
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.BlackHeart,
+    sourceId: 'isaac',
+    targetId: 'isaac',
+    value: 100,
+  });
   for (const enemy of combat.enemies.filter((entry) => entry.hp > 0)) {
     const wasAlive = enemy.hp > 0;
     if (enemy.elite || enemy.boss) enemy.hp = Math.max(0, enemy.hp - 100);
     else enemy.hp = 0;
     if (wasAlive && enemy.hp <= 0)
-      pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Defeat,
+        sourceId: enemy.instanceId,
+        targetId: enemy.instanceId,
+      });
   }
   pushLog(
     combat,
     'A black heart shattered: normal enemies died and champions took 100 damage!',
-    'special',
+    CombatLogTone.Special,
     'blackBurst',
   );
 }
@@ -1756,13 +1976,13 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
   if (nextRandom(run) < run.player.stats.dodgeChance) {
     if (source)
       pushAnimation(combat, {
-        kind: 'enemy-attack',
+        kind: CombatAnimationKind.EnemyAttack,
         sourceId: source.instanceId,
         targetId: 'isaac',
         value: 0,
         secondaryValue: 0,
       });
-    pushLog(combat, 'Isaac slipped past the attack.', 'good', 'dodge');
+    pushLog(combat, 'Isaac slipped past the attack.', CombatLogTone.Good, 'dodge');
     return 0;
   }
   const cap = combat.damageCap;
@@ -1783,7 +2003,7 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
     damage -= applied;
     if (heart.hp <= 0) {
       run.player.pocketHearts.pop();
-      if (heart.kind === 'black') blackHeartBurst(combat);
+      if (heart.kind === HeartKind.Black) blackHeartBurst(combat);
     }
   }
   const redDamage = Math.min(run.player.redHp, damage);
@@ -1793,7 +2013,7 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
   const heartDamage = Math.max(0, initial - shielded);
   if (source) {
     pushAnimation(combat, {
-      kind: 'enemy-attack',
+      kind: CombatAnimationKind.EnemyAttack,
       sourceId: source.instanceId,
       targetId: 'isaac',
       value: heartDamage,
@@ -1804,7 +2024,7 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
     pushLog(
       combat,
       `${source.name} attacked Isaac for ${heartDamage} heart damage (${shielded} blocked by shield).`,
-      'danger',
+      CombatLogTone.Danger,
       'enemyAttack',
       {
         enemyId: source.id,
@@ -1817,7 +2037,7 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
     pushLog(
       combat,
       `Isaac took ${heartDamage} heart damage (${shielded} blocked by shield).`,
-      'danger',
+      CombatLogTone.Danger,
       'playerHit',
       {
         damage: heartDamage,
@@ -1829,11 +2049,11 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
 }
 
 function cursedActions(enemy: EnemyState, actions: EnemyAction[]): EnemyAction[] {
-  const intendedAttacks = actions.filter((entry) => entry.kind === 'attack');
+  const intendedAttacks = actions.filter((entry) => entry.kind === IntentKind.Attack);
   const count = enemy.boss ? 2 : 1;
   return Array.from({ length: count }, (_, index) => {
     const raw = intendedAttacks[index]?.value ?? intendedAttacks[0]?.value ?? enemy.attack;
-    return action('attack', Math.max(1, Math.round(raw * 0.6)));
+    return action(IntentKind.Attack, Math.max(1, Math.round(raw * 0.6)));
   });
 }
 
@@ -1845,7 +2065,7 @@ function reachableEnemyPositions(combat: CombatState, enemy: EnemyState): GridPo
       .map(positionKey),
   );
   blocked.add(positionKey(combat.playerPosition));
-  const diagonal = enemy.movementPattern === 'diagonal-jump';
+  const diagonal = enemy.movementPattern === EnemyMovementPattern.DiagonalJump;
   const directions = [
     { x: 1, y: 0 },
     { x: -1, y: 0 },
@@ -1888,21 +2108,25 @@ function moveEnemyTo(
   const from = { ...enemy.position };
   enemy.position = destination;
   pushAnimation(combat, {
-    kind: 'move',
+    kind: CombatAnimationKind.Move,
     sourceId: enemy.instanceId,
     targetId: enemy.instanceId,
     fromX: from.x,
     fromY: from.y,
     toX: destination.x,
     toY: destination.y,
-    movementStyle: wandering ? 'wander' : enemy.movementPattern === 'diagonal-jump' ? 'jump' : 'walk',
+    movementStyle: wandering
+      ? CombatMovementStyle.Wander
+      : enemy.movementPattern === EnemyMovementPattern.DiagonalJump
+        ? CombatMovementStyle.Jump
+        : CombatMovementStyle.Walk,
   });
   pushLog(
     combat,
     wandering
       ? `${enemy.name} wandered to (${destination.x}, ${destination.y}) while Isaac was out of sight.`
       : `${enemy.name} moved to (${destination.x}, ${destination.y}).`,
-    'normal',
+    CombatLogTone.Normal,
     wandering ? 'enemyWandered' : 'enemyMoved',
     { enemyId: enemy.id, enemy: enemy.name, x: destination.x, y: destination.y },
   );
@@ -1912,11 +2136,21 @@ function moveEnemyTo(
 function moveEnemyRandomly(run: RunState, combat: CombatState, enemy: EnemyState): boolean {
   const destinations = reachableEnemyPositions(combat, enemy);
   if (!destinations.length || nextRandom(run) < 0.2) {
-    pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
-    pushLog(combat, `${enemy.name} listened in the dark and stayed put.`, 'normal', 'enemyWanderIdle', {
-      enemyId: enemy.id,
-      enemy: enemy.name,
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.Idle,
+      sourceId: enemy.instanceId,
+      targetId: enemy.instanceId,
     });
+    pushLog(
+      combat,
+      `${enemy.name} listened in the dark and stayed put.`,
+      CombatLogTone.Normal,
+      'enemyWanderIdle',
+      {
+        enemyId: enemy.id,
+        enemy: enemy.name,
+      },
+    );
     return false;
   }
   return moveEnemyTo(combat, enemy, pickOne(run, destinations), true);
@@ -1930,11 +2164,11 @@ function moveEnemyTowardPlayer(combat: CombatState, enemy: EnemyState): boolean 
     const rightCanAttack = enemyCanAttackPosition(enemy, playerPosition, right) ? 0 : 1;
     if (leftCanAttack !== rightCanAttack) return leftCanAttack - rightCanAttack;
     const leftAlignment =
-      enemy.movementPattern === 'diagonal-jump'
+      enemy.movementPattern === EnemyMovementPattern.DiagonalJump
         ? enemyChebyshevDistanceToPosition(enemy, playerPosition, left)
         : Math.min(Math.abs(left.x - playerPosition.x), Math.abs(left.y - playerPosition.y));
     const rightAlignment =
-      enemy.movementPattern === 'diagonal-jump'
+      enemy.movementPattern === EnemyMovementPattern.DiagonalJump
         ? enemyChebyshevDistanceToPosition(enemy, playerPosition, right)
         : Math.min(Math.abs(right.x - playerPosition.x), Math.abs(right.y - playerPosition.y));
     return (
@@ -1958,76 +2192,107 @@ function resolveEnemyAction(
   enemyAction: EnemyAction,
 ): void {
   switch (enemyAction.kind) {
-    case 'attack': {
+    case IntentKind.Attack: {
       if (enemyCanAttackPosition(enemy, combat.playerPosition)) {
         hurtPlayer(run, combat, enemyAction.value, enemy);
         enemy.prepared = false;
       } else {
-        pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
-        pushLog(combat, `${enemy.name} is still outside attack range.`, 'normal', 'enemyOutOfRange', {
-          enemyId: enemy.id,
-          enemy: enemy.name,
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Idle,
+          sourceId: enemy.instanceId,
+          targetId: enemy.instanceId,
         });
+        pushLog(
+          combat,
+          `${enemy.name} is still outside attack range.`,
+          CombatLogTone.Normal,
+          'enemyOutOfRange',
+          {
+            enemyId: enemy.id,
+            enemy: enemy.name,
+          },
+        );
       }
       break;
     }
-    case 'shield':
+    case IntentKind.Shield:
       enemy.shield += enemyAction.value;
       pushAnimation(combat, {
-        kind: 'shield',
+        kind: CombatAnimationKind.Shield,
         sourceId: enemy.instanceId,
         targetId: enemy.instanceId,
         value: enemyAction.value,
       });
-      pushLog(combat, `${enemy.name} gained ${enemyAction.value} shield.`, 'normal', 'enemyShield', {
-        enemyId: enemy.id,
-        enemy: enemy.name,
-        amount: enemyAction.value,
-      });
+      pushLog(
+        combat,
+        `${enemy.name} gained ${enemyAction.value} shield.`,
+        CombatLogTone.Normal,
+        'enemyShield',
+        {
+          enemyId: enemy.id,
+          enemy: enemy.name,
+          amount: enemyAction.value,
+        },
+      );
       break;
-    case 'curse':
-      pushAnimation(combat, { kind: 'curse', sourceId: enemy.instanceId, targetId: 'isaac', value: 1 });
+    case IntentKind.Curse:
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Curse,
+        sourceId: enemy.instanceId,
+        targetId: 'isaac',
+        value: 1,
+      });
       addCurseCard(run, combat);
       break;
-    case 'heal': {
+    case IntentKind.Heal: {
       const allies = combat.enemies.filter((entry) => entry.hp > 0);
       const target = allies.reduce((lowest, entry) => (entry.hp < lowest.hp ? entry : lowest), allies[0]!);
       const healed = Math.min(enemyAction.value, target.maxHp - target.hp);
       target.hp += healed;
       pushAnimation(combat, {
-        kind: 'heal',
+        kind: CombatAnimationKind.Heal,
         sourceId: enemy.instanceId,
         targetId: target.instanceId,
         value: healed,
       });
-      pushLog(combat, `${enemy.name} restored ${healed} HP to ${target.name}.`, 'normal', 'enemyHeal', {
-        enemyId: enemy.id,
-        enemy: enemy.name,
-        amount: healed,
-        targetId: target.id,
-        target: target.name,
-      });
+      pushLog(
+        combat,
+        `${enemy.name} restored ${healed} HP to ${target.name}.`,
+        CombatLogTone.Normal,
+        'enemyHeal',
+        {
+          enemyId: enemy.id,
+          enemy: enemy.name,
+          amount: healed,
+          targetId: target.id,
+          target: target.name,
+        },
+      );
       break;
     }
-    case 'prepare':
+    case IntentKind.Prepare:
       enemy.prepared = true;
       pushAnimation(combat, {
-        kind: 'prepare',
+        kind: CombatAnimationKind.Prepare,
         sourceId: enemy.instanceId,
         targetId: enemy.instanceId,
         value: enemy.attack * 2,
       });
-      pushLog(combat, `${enemy.name} prepares a doubled attack!`, 'danger', 'prepare', {
+      pushLog(combat, `${enemy.name} prepares a doubled attack!`, CombatLogTone.Danger, 'prepare', {
         enemyId: enemy.id,
         enemy: enemy.name,
       });
       break;
-    case 'summon': {
+    case IntentKind.Summon: {
       const livingMinions = combat.enemies.filter((entry) => entry.hp > 0 && !entry.boss).length;
       const summonCount = Math.max(0, Math.min(enemyAction.value || 1, 3 - livingMinions));
       if (summonCount <= 0) {
-        pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
-        pushLog(combat, `${enemy.name}'s call went unanswered.`, 'normal', 'bossSummonBlocked', {
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Idle,
+          sourceId: enemy.instanceId,
+          targetId: enemy.instanceId,
+        });
+        pushLog(combat, `${enemy.name}'s call went unanswered.`, CombatLogTone.Normal, 'bossSummonBlocked', {
           enemyId: enemy.id,
           enemy: enemy.name,
         });
@@ -2041,23 +2306,27 @@ function resolveEnemyAction(
         summoned.alerted = true;
         combat.enemies.push(summoned);
         pushAnimation(combat, {
-          kind: 'summon',
+          kind: CombatAnimationKind.Summon,
           sourceId: enemy.instanceId,
           targetId: summoned.instanceId,
           value: 1,
         });
       }
       ensureCombatGrid(run);
-      pushLog(combat, `${enemy.name} summoned ${summonCount} minion.`, 'danger', 'bossSummon', {
+      pushLog(combat, `${enemy.name} summoned ${summonCount} minion.`, CombatLogTone.Danger, 'bossSummon', {
         enemyId: enemy.id,
         enemy: enemy.name,
         count: summonCount,
       });
       break;
     }
-    case 'idle':
-      pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
-      pushLog(combat, `${enemy.name} hesitates.`, 'normal', 'hesitate', {
+    case IntentKind.Idle:
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Idle,
+        sourceId: enemy.instanceId,
+        targetId: enemy.instanceId,
+      });
+      pushLog(combat, `${enemy.name} hesitates.`, CombatLogTone.Normal, 'hesitate', {
         enemyId: enemy.id,
         enemy: enemy.name,
       });
@@ -2068,7 +2337,7 @@ function resolveEnemyAction(
 function resolveEnemyTurn(run: RunState): void {
   const combat = run.combat!;
   ensureCombatGrid(run);
-  run.phase = 'combat';
+  run.phase = RunPhase.Combat;
   for (const enemy of combat.enemies.filter((entry) => entry.hp > 0)) {
     if (enemy.hp <= 0) continue;
     ensureEnemyBehavior(enemy);
@@ -2077,31 +2346,45 @@ function resolveEnemyTurn(run: RunState): void {
       const dealt = hurtEnemy(enemy, enemy.poisonDamage || 3, 99);
       enemy.poisonTurns -= 1;
       pushAnimation(combat, {
-        kind: 'poison',
+        kind: CombatAnimationKind.Poison,
         sourceId: 'isaac',
         targetId: enemy.instanceId,
         value: dealt,
         poisonTurns: enemy.poisonTurns,
       });
-      pushLog(combat, `${enemy.name} took ${dealt} poison damage.`, 'good', 'enemyPoisoned', {
+      pushLog(combat, `${enemy.name} took ${dealt} poison damage.`, CombatLogTone.Good, 'enemyPoisoned', {
         enemyId: enemy.id,
         enemy: enemy.name,
         damage: dealt,
         turns: enemy.poisonTurns,
       });
       if (wasAlive && enemy.hp <= 0) {
-        pushAnimation(combat, { kind: 'defeat', sourceId: enemy.instanceId, targetId: enemy.instanceId });
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Defeat,
+          sourceId: enemy.instanceId,
+          targetId: enemy.instanceId,
+        });
         continue;
       }
     }
     if (enemy.staggeredTurns > 0) {
       enemy.staggeredTurns -= 1;
       enemy.turnsSinceAttack += 1;
-      pushAnimation(combat, { kind: 'idle', sourceId: enemy.instanceId, targetId: enemy.instanceId });
-      pushLog(combat, `${enemy.name} is staggered and loses its action.`, 'good', 'enemyStaggered', {
-        enemyId: enemy.id,
-        enemy: enemy.name,
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Idle,
+        sourceId: enemy.instanceId,
+        targetId: enemy.instanceId,
       });
+      pushLog(
+        combat,
+        `${enemy.name} is staggered and loses its action.`,
+        CombatLogTone.Good,
+        'enemyStaggered',
+        {
+          enemyId: enemy.id,
+          enemy: enemy.name,
+        },
+      );
     } else {
       const roaming = !enemy.alerted && !enemyCanSeePosition(enemy, combat.playerPosition);
       if (roaming) moveEnemyRandomly(run, combat, enemy);
@@ -2111,8 +2394,8 @@ function resolveEnemyTurn(run: RunState): void {
         enemy.intent.actions?.length ? enemy.intent.actions : [action(enemy.intent.kind, enemy.intent.value)]
       ).slice(0, actionLimit);
       const intendedActions = rolledActions.map((rolledAction) =>
-        roaming && (rolledAction.kind === 'attack' || rolledAction.kind === 'curse')
-          ? action('idle', 0)
+        roaming && (rolledAction.kind === IntentKind.Attack || rolledAction.kind === IntentKind.Curse)
+          ? action(IntentKind.Idle, 0)
           : rolledAction,
       );
       const weakened = enemy.cursedTurns > 0 && !roaming;
@@ -2123,7 +2406,7 @@ function resolveEnemyTurn(run: RunState): void {
         pushLog(
           combat,
           `${enemy.name}'s curse suppresses its special action and weakens its attack.`,
-          'good',
+          CombatLogTone.Good,
           'enemyWeakened',
           {
             enemyId: enemy.id,
@@ -2136,7 +2419,7 @@ function resolveEnemyTurn(run: RunState): void {
       for (const enemyAction of enemyActions) {
         if (run.player.redHp <= 0) break;
         resolveEnemyAction(run, combat, enemy, enemyAction);
-        attacked ||= enemyAction.kind === 'attack';
+        attacked ||= enemyAction.kind === IntentKind.Attack;
       }
       enemy.turnsSinceAttack = attacked ? 0 : enemy.turnsSinceAttack + 1;
     }
@@ -2149,7 +2432,7 @@ function resolveEnemyTurn(run: RunState): void {
     return;
   }
   if (run.player.redHp <= 0) {
-    run.phase = 'defeat';
+    run.phase = RunPhase.Defeat;
     run.victory = false;
     run.combat = combat;
     return;
@@ -2169,11 +2452,11 @@ function resolveEnemyTurn(run: RunState): void {
   if (!combat.enemies.some((enemy) => enemy.hp > 0 && enemy.instanceId === combat.selectedEnemyId)) {
     combat.selectedEnemyId = undefined;
   }
-  pushAnimation(combat, { kind: 'round-start', sourceId: 'isaac', value: combat.round });
+  pushAnimation(combat, { kind: CombatAnimationKind.RoundStart, sourceId: 'isaac', value: combat.round });
   pushLog(
     combat,
     `Round ${combat.round} — vitality restored to ${combat.vitality}.`,
-    'special',
+    CombatLogTone.Special,
     'nextRound',
     { round: combat.round, vitality: combat.vitality },
   );
@@ -2181,21 +2464,21 @@ function resolveEnemyTurn(run: RunState): void {
 
 function rollLoot(run: RunState): string {
   const resource = weightedPick(run, [
-    { value: 'coins' as const, weight: 42 + run.player.stats.luck * 2 },
-    { value: 'bombs' as const, weight: 18 },
-    { value: 'keys' as const, weight: 16 },
-    { value: 'red-heart' as const, weight: 12 },
-    { value: 'soul-heart' as const, weight: 8 + run.player.stats.luck },
-    { value: 'black-heart' as const, weight: 4 + run.player.stats.luck },
+    { value: ResourceKind.Coins, weight: 42 + run.player.stats.luck * 2 },
+    { value: ResourceKind.Bombs, weight: 18 },
+    { value: ResourceKind.Keys, weight: 16 },
+    { value: ResourceKind.RedHeart, weight: 12 },
+    { value: ResourceKind.SoulHeart, weight: 8 + run.player.stats.luck },
+    { value: ResourceKind.BlackHeart, weight: 4 + run.player.stats.luck },
   ]);
   const amount =
-    resource === 'coins'
+    resource === ResourceKind.Coins
       ? weightedPick(run, [
           { value: 1, weight: 65 },
           { value: 5, weight: 28 },
           { value: 10, weight: 7 },
         ])
-      : resource === 'bombs' || resource === 'keys'
+      : resource === ResourceKind.Bombs || resource === ResourceKind.Keys
         ? randomInt(run, 1, 2)
         : 1;
   return applyResource(run, resource, amount);
@@ -2205,40 +2488,40 @@ function makeFloorUpgrade(run: RunState): void {
   const options: RewardOption[] = shuffle(run, [
     {
       id: makeId('up', run),
-      type: 'upgrade',
-      upgrade: 'damage',
+      type: RewardOptionType.Upgrade,
+      upgrade: UpgradeKind.Damage,
       label: 'Attack Up',
       description: '+2 base attack damage.',
       icon: '↑',
     },
     {
       id: makeId('up', run),
-      type: 'upgrade',
-      upgrade: 'heart',
+      type: RewardOptionType.Upgrade,
+      upgrade: UpgradeKind.Heart,
       label: 'Heart Training',
       description: '+5 HP per red container and fully heal.',
       icon: '♥',
     },
     {
       id: makeId('up', run),
-      type: 'upgrade',
-      upgrade: 'armor',
+      type: RewardOptionType.Upgrade,
+      upgrade: UpgradeKind.Armor,
       label: 'Tough Skin',
       description: '+1 permanent armor.',
       icon: '⬡',
     },
     {
       id: makeId('up', run),
-      type: 'upgrade',
-      upgrade: 'speed',
+      type: RewardOptionType.Upgrade,
+      upgrade: UpgradeKind.Speed,
       label: 'Attack Accelerator',
       description: '+0.25 fire rate.',
       icon: '»',
     },
     {
       id: makeId('up', run),
-      type: 'upgrade',
-      upgrade: 'skill',
+      type: RewardOptionType.Upgrade,
+      upgrade: UpgradeKind.Skill,
       label: 'Battery Pack',
       description: 'Reduce active recharge by one round.',
       icon: '▣',
@@ -2247,8 +2530,8 @@ function makeFloorUpgrade(run: RunState): void {
       ? [
           {
             id: makeId('up', run),
-            type: 'upgrade' as const,
-            upgrade: 'vitality' as const,
+            type: RewardOptionType.Upgrade,
+            upgrade: UpgradeKind.Vitality,
             label: 'Adrenaline',
             description: '+1 maximum vitality (maximum 6).',
             icon: '✦',
@@ -2257,7 +2540,7 @@ function makeFloorUpgrade(run: RunState): void {
       : []),
   ] satisfies RewardOption[]).slice(0, 3);
   setChoice(run, {
-    kind: 'upgrade',
+    kind: ChoiceKind.Upgrade,
     title: `${FLOORS[run.floorIndex]?.name} cleared`,
     subtitle:
       run.floorIndex === 5
@@ -2265,25 +2548,26 @@ function makeFloorUpgrade(run: RunState): void {
         : 'Choose one permanent floor blessing.',
     options,
     canSkip: false,
-    next: run.floorIndex === 5 ? 'victory' : 'next-floor',
+    next: run.floorIndex === 5 ? ChoiceNext.Victory : ChoiceNext.NextFloor,
   });
 }
 
-function makeDealItems(run: RunState, type: 'devil' | 'angel'): void {
-  const options = itemOptions(run, type, 3);
-  if (type === 'devil') {
+function makeDealItems(run: RunState, type: DealType): void {
+  const rewardPool = type === DealType.Devil ? RewardPool.Devil : RewardPool.Angel;
+  const options = itemOptions(run, rewardPool, 3);
+  if (type === DealType.Devil) {
     options.forEach((option) => {
       option.description = `${option.description} Cost: 1 red-heart container.`;
     });
   }
-  setChoice(run, {
-    kind: 'item',
-    title: type === 'devil' ? 'Devil Room' : 'Angel Room',
-    subtitle: type === 'devil' ? 'Power always has a price.' : 'Faith is rewarded freely.',
+  setRoomRewardChoice(run, {
+    kind: ChoiceKind.Item,
+    title: type === DealType.Devil ? 'Devil Room' : 'Angel Room',
+    subtitle: type === DealType.Devil ? 'Power always has a price.' : 'Faith is rewarded freely.',
     options,
-    canSkip: true,
-    next: 'floor-upgrade',
+    next: ChoiceNext.FloorUpgrade,
     dealType: type,
+    rewardPool,
   });
 }
 
@@ -2296,38 +2580,38 @@ function makeBossGate(run: RunState): void {
     return;
   }
   run.devilChance = 0.35;
-  const type: 'devil' | 'angel' =
+  const type: DealType =
     !run.tookDevilDeal && run.angelFavor > 0 && nextRandom(run) < Math.min(0.8, 0.35 + run.angelFavor * 0.2)
-      ? 'angel'
-      : 'devil';
+      ? DealType.Angel
+      : DealType.Devil;
   setChoice(run, {
-    kind: 'deal',
-    title: type === 'devil' ? 'A trapdoor exhales heat…' : 'A white door opens…',
-    subtitle: `${type === 'devil' ? 'Devil' : 'Angel'} and Angel rooms can never appear together.`,
+    kind: ChoiceKind.Deal,
+    title: type === DealType.Devil ? 'A trapdoor exhales heat…' : 'A white door opens…',
+    subtitle: `${type === DealType.Devil ? 'Devil' : 'Angel'} and Angel rooms can never appear together.`,
     options: [
       {
         id: makeId('deal', run),
-        type: 'action',
-        action: 'enter-deal',
+        type: RewardOptionType.Action,
+        action: ChoiceAction.EnterDeal,
         label: `Enter ${type} room`,
         description:
-          type === 'devil'
+          type === DealType.Devil
             ? 'See three powerful items offered for heart containers.'
             : 'Receive a free holy item.',
-        icon: type === 'devil' ? '▼' : '△',
+        icon: type === DealType.Devil ? '▼' : '△',
       },
       {
         id: makeId('skip', run),
-        type: 'action',
-        action: 'skip-deal',
+        type: RewardOptionType.Action,
+        action: ChoiceAction.SkipDeal,
         label: 'Descend without entering',
         description:
-          type === 'devil' ? 'Build Angel favor for later floors.' : 'Leave the blessing untouched.',
+          type === DealType.Devil ? 'Build Angel favor for later floors.' : 'Leave the blessing untouched.',
         icon: '↘',
       },
     ],
     canSkip: false,
-    next: 'floor-upgrade',
+    next: ChoiceNext.FloorUpgrade,
     dealType: type,
   });
 }
@@ -2338,65 +2622,70 @@ function finishCombat(run: RunState): void {
   run.lastReward = [loot];
   run.clearedRooms += 1;
   run.score +=
-    combat.roomKind === 'boss' ? 500 + run.floorIndex * 100 : combat.roomKind === 'elite' ? 220 : 90;
-  if (combat.roomKind === 'elite' && combat.damageTakenThisFloor === 0) unlock(run, 'tech-x');
+    combat.roomKind === RoomKind.Boss
+      ? 500 + run.floorIndex * 100
+      : combat.roomKind === RoomKind.Elite
+        ? 220
+        : 90;
+  if (combat.roomKind === RoomKind.Elite && combat.damageTakenThisFloor === 0) unlock(run, 'tech-x');
   checkProgressUnlocks(run);
 
-  if (combat.roomKind === 'boss') {
-    setChoice(run, {
-      kind: 'item',
+  if (combat.roomKind === RoomKind.Boss) {
+    setRoomRewardChoice(run, {
+      kind: ChoiceKind.Item,
       title: `${FLOORS[run.floorIndex]?.bossName} defeated`,
       subtitle: `Boss drop: ${loot}. Choose one item before the exit door opens.`,
-      options: itemOptions(run, 'boss', 3),
-      canSkip: false,
-      next: 'boss-gate',
+      options: itemOptions(run, RewardPool.Boss, 3),
+      next: ChoiceNext.BossGate,
+      rewardPool: RewardPool.Boss,
     });
-  } else if (combat.roomKind === 'elite') {
-    setChoice(run, {
-      kind: 'item',
+  } else if (combat.roomKind === RoomKind.Elite) {
+    setRoomRewardChoice(run, {
+      kind: ChoiceKind.Item,
       title: 'Champion defeated',
       subtitle: `Room drop: ${loot}. Choose one elite item.`,
-      options: itemOptions(run, 'elite', 3),
-      canSkip: false,
-      next: 'map',
+      options: itemOptions(run, RewardPool.Elite, 3),
+      next: ChoiceNext.Map,
+      rewardPool: RewardPool.Elite,
     });
   } else if (
     combat.roomLayout.unitCount >= 3 &&
     nextRandom(run) <
       Math.min(
         0.6,
-        (combat.roomLayout.shape === 'large' ? 0.38 : 0.28) +
+        (combat.roomLayout.shape === CombatRoomShape.Large ? 0.38 : 0.28) +
           run.floorIndex * 0.02 +
           run.player.stats.luck * 0.02,
       )
   ) {
-    setChoice(run, {
-      kind: 'item',
+    setRoomRewardChoice(run, {
+      kind: ChoiceKind.Item,
       title: 'Large room treasure',
       subtitle: `Room drop: ${loot}. Choose one permanent stat item; it never enters the combat deck.`,
-      options: itemOptions(run, 'large-room', 3),
-      canSkip: true,
-      next: 'map',
-      rewardContext: 'large-room',
+      options: itemOptions(run, RewardPool.LargeRoom, 3),
+      next: ChoiceNext.Map,
+      rewardContext: RewardContext.LargeRoom,
+      rewardPool: RewardPool.LargeRoom,
     });
   } else {
-    setChoice(run, {
-      kind: 'card',
+    setRoomRewardChoice(run, {
+      kind: ChoiceKind.Card,
       title: 'Room cleared',
       subtitle: `Room drop: ${loot}. Add one card, or skip.`,
-      options: cardOptions(run, 3),
-      canSkip: true,
-      next: 'map',
+      options: cardOptions(run, RewardPool.RoomClear, 3),
+      next: ChoiceNext.Map,
+      rewardPool: RewardPool.RoomClear,
     });
   }
+  if (run.choice) run.choice.requiresRewardConfirmation = true;
 }
 
 function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade']>): void {
   switch (upgrade) {
-    case 'damage':
+    case UpgradeKind.Damage:
       run.player.stats.baseDamage += 2;
       break;
-    case 'heart':
+    case UpgradeKind.Heart:
       run.player.stats.heartSize += 5;
       run.player.pocketHearts.forEach((heart) => {
         heart.maxHp += 5;
@@ -2404,17 +2693,17 @@ function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade'
       });
       run.player.redHp = maxRedHp(run.player);
       break;
-    case 'armor':
+    case UpgradeKind.Armor:
       run.player.stats.armor += 1;
       break;
-    case 'vitality':
+    case UpgradeKind.Vitality:
       run.player.stats.maxVitality += 1;
       break;
-    case 'speed':
+    case UpgradeKind.Speed:
       run.player.stats.fireRate += 0.25;
       break;
-    case 'skill': {
-      const active = run.player.deck.find((card) => CARDS[card.definitionId]?.type === 'skill');
+    case UpgradeKind.Skill: {
+      const active = run.player.deck.find((card) => CARDS[card.definitionId]?.type === CardType.Skill);
       if (active) active.upgraded = true;
       break;
     }
@@ -2432,7 +2721,7 @@ function advanceFloor(run: RunState): void {
   run.choice = undefined;
   run.combat = undefined;
   run.currentRoomId = undefined;
-  run.phase = 'map';
+  run.phase = RunPhase.Map;
   revealMap(run);
   makeFloorStartChoice(run);
 }
@@ -2441,7 +2730,7 @@ function finishVictory(run: RunState): void {
   if (run.floorRedDamage === 0) unlock(run, 'holy-mantle');
   unlock(run, 'brimstone');
   unlock(run, 'moms-knife');
-  run.phase = 'victory';
+  run.phase = RunPhase.Victory;
   run.choice = undefined;
   run.combat = undefined;
   run.victory = true;
@@ -2450,19 +2739,19 @@ function finishVictory(run: RunState): void {
 
 function advanceAfterChoice(run: RunState, next: ChoiceState['next']): void {
   switch (next) {
-    case 'map':
+    case ChoiceNext.Map:
       returnToMap(run);
       break;
-    case 'floor-upgrade':
+    case ChoiceNext.FloorUpgrade:
       makeFloorUpgrade(run);
       break;
-    case 'next-floor':
+    case ChoiceNext.NextFloor:
       advanceFloor(run);
       break;
-    case 'victory':
+    case ChoiceNext.Victory:
       finishVictory(run);
       break;
-    case 'boss-gate':
+    case ChoiceNext.BossGate:
       makeBossGate(run);
       break;
   }
@@ -2476,32 +2765,42 @@ function payPrice(run: RunState, option: RewardOption): void {
 
 export function chooseOption(state: RunState, optionId: string): RunState {
   const run = clone(state);
-  if (run.phase !== 'choice' || !run.choice) throw new Error('There is no choice to make');
+  if (run.phase !== RunPhase.Choice || !run.choice) throw new Error('There is no choice to make');
   const choice = run.choice;
+  if (choice.requiresRewardConfirmation) throw new Error('Acknowledge the room reward first');
   const option = choice.options.find((entry) => entry.id === optionId);
   if (!option || option.sold) throw new Error('That option is unavailable');
 
-  if (option.action === 'leave') {
+  if (option.action === ChoiceAction.Leave) {
     returnToMap(run);
     return touch(run);
   }
-  if (option.action === 'sacrifice') {
+  if (option.action === ChoiceAction.Sacrifice) {
     if (run.player.redHp <= 15) throw new Error('Not enough red-heart HP to survive the sacrifice');
     run.player.redHp -= 15;
     run.floorRedDamage += 15;
-    addPocketHeart(run, 'soul');
-    const tarot = pickOne(run, ['the-empress', 'death', 'the-sun']);
-    run.player.deck.push(createCard(run, tarot));
-    run.lastReward = ['1 soul heart', CARDS[tarot]!.name];
+    addPocketHeart(run, HeartKind.Soul);
+    const tarotPool = Object.values(CARDS).filter(
+      (card) => card.type === CardType.Tarot && card.rewardPools.includes(RewardPool.Sacrifice),
+    );
+    const tarot = weightedPick(
+      run,
+      tarotPool.map((card) => ({
+        value: card,
+        weight: cardRewardWeight(card, RewardPool.Sacrifice),
+      })),
+    );
+    run.player.deck.push(createCard(run, tarot.id));
+    run.lastReward = ['1 soul heart', tarot.name];
     returnToMap(run);
     return touch(run);
   }
-  if (option.action === 'enter-deal') {
-    makeDealItems(run, choice.dealType ?? 'devil');
+  if (option.action === ChoiceAction.EnterDeal) {
+    makeDealItems(run, choice.dealType ?? DealType.Devil);
     return touch(run);
   }
-  if (option.action === 'skip-deal') {
-    if (choice.dealType === 'devil') {
+  if (option.action === ChoiceAction.SkipDeal) {
+    if (choice.dealType === DealType.Devil) {
       run.angelFavor += 1;
       checkProgressUnlocks(run);
     }
@@ -2510,8 +2809,8 @@ export function chooseOption(state: RunState, optionId: string): RunState {
   }
 
   payPrice(run, option);
-  if (option.type === 'item' && option.itemId) {
-    if (choice.dealType === 'devil') {
+  if (option.type === RewardOptionType.Item && option.itemId) {
+    if (choice.dealType === DealType.Devil) {
       if (run.player.redContainers <= 1) throw new Error('A Devil deal needs a spare red-heart container');
       run.player.redContainers -= 1;
       run.player.redHp = Math.min(run.player.redHp, maxRedHp(run.player));
@@ -2521,20 +2820,20 @@ export function chooseOption(state: RunState, optionId: string): RunState {
     equipItem(run, option.itemId);
     run.lastReward = [ITEMS[option.itemId]!.name];
   }
-  if (option.type === 'card' && option.cardId) {
+  if (option.type === RewardOptionType.Card && option.cardId) {
     run.player.deck.push(createCard(run, option.cardId));
     run.lastReward = [CARDS[option.cardId]!.name];
   }
-  if (option.type === 'resource' && option.resource && option.amount) {
+  if (option.type === RewardOptionType.Resource && option.resource && option.amount) {
     run.lastReward = [applyResource(run, option.resource, option.amount)];
   }
-  if (option.type === 'upgrade' && option.upgrade) {
+  if (option.type === RewardOptionType.Upgrade && option.upgrade) {
     applyUpgrade(run, option.upgrade);
     run.lastReward = [option.label];
   }
   checkProgressUnlocks(run);
 
-  if (choice.kind === 'shop') {
+  if (choice.kind === ChoiceKind.Shop) {
     const current = run.choice!.options.find((entry) => entry.id === optionId);
     if (current) current.sold = true;
   } else {
@@ -2545,16 +2844,26 @@ export function chooseOption(state: RunState, optionId: string): RunState {
 
 export function skipChoice(state: RunState): RunState {
   const run = clone(state);
-  if (run.phase !== 'choice' || !run.choice?.canSkip) throw new Error('This choice cannot be skipped');
+  if (run.phase !== RunPhase.Choice || !run.choice?.canSkip) throw new Error('This choice cannot be skipped');
+  if (run.choice.requiresRewardConfirmation) throw new Error('Acknowledge the room reward first');
   const next = run.choice.next;
-  if (run.choice.kind === 'shop') returnToMap(run);
+  if (run.choice.kind === ChoiceKind.Shop) returnToMap(run);
   else advanceAfterChoice(run, next);
+  return touch(run);
+}
+
+export function acknowledgeRoomReward(state: RunState): RunState {
+  const run = clone(state);
+  if (run.phase !== RunPhase.Choice || !run.choice?.requiresRewardConfirmation) {
+    throw new Error('There is no room reward to acknowledge');
+  }
+  run.choice.requiresRewardConfirmation = false;
   return touch(run);
 }
 
 export function abandonRun(state: RunState): RunState {
   const run = clone(state);
-  run.phase = 'defeat';
+  run.phase = RunPhase.Defeat;
   run.victory = false;
   return touch(run);
 }

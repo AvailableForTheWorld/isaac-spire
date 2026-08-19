@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy, itemUsesCombatCard } from './catalog.js';
 import {
+  acknowledgeRoomReward,
   canPlayCard,
   canPlayFusedAttack,
   chooseOption,
@@ -33,11 +34,31 @@ import {
 } from './engine.js';
 import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
+import {
+  AttackMode,
+  CardType,
+  ChoiceAction,
+  ChoiceKind,
+  ChoiceNext,
+  CombatAnimationKind,
+  CombatMovementStyle,
+  CombatRoomShape,
+  EnemyMovementPattern,
+  HeartKind,
+  IntentKind,
+  ItemKind,
+  ResourceKind,
+  RewardContext,
+  RewardOptionType,
+  RewardPool,
+  RoomKind,
+  RunPhase,
+} from './types.js';
 
 function createRun(seed?: string, unlockedItemIds = DEFAULT_UNLOCKS) {
   const run = createRunWithFloorChoice(seed, unlockedItemIds);
-  if (run.choice?.rewardContext !== 'floor-start') return run;
-  const resource = run.choice.options.find((option) => option.type === 'resource')!;
+  if (run.choice?.rewardContext !== RewardContext.FloorStart) return run;
+  const resource = run.choice.options.find((option) => option.type === RewardOptionType.Resource)!;
   return chooseOption(run, resource.id);
 }
 
@@ -46,14 +67,16 @@ function settleChoice(
   onChoice?: (choiceRun: ReturnType<typeof createRun>) => void,
 ) {
   let next = run;
-  while (next.phase === 'choice') {
+  while (next.phase === RunPhase.Choice) {
     onChoice?.(next);
     const choice = next.choice!;
-    if (choice.kind === 'shop') {
-      next = chooseOption(next, choice.options.find((option) => option.action === 'leave')!.id);
-    } else if (choice.kind === 'deal') {
-      next = chooseOption(next, choice.options.find((option) => option.action === 'skip-deal')!.id);
-    } else if (choice.canSkip && (choice.kind === 'card' || choice.kind === 'sacrifice')) {
+    if (choice.requiresRewardConfirmation) {
+      next = acknowledgeRoomReward(next);
+    } else if (choice.kind === ChoiceKind.Shop) {
+      next = chooseOption(next, choice.options.find((option) => option.action === ChoiceAction.Leave)!.id);
+    } else if (choice.kind === ChoiceKind.Deal) {
+      next = chooseOption(next, choice.options.find((option) => option.action === ChoiceAction.SkipDeal)!.id);
+    } else if (choice.canSkip && (choice.kind === ChoiceKind.Card || choice.kind === ChoiceKind.Sacrifice)) {
       next = skipChoice(next);
     } else {
       next = chooseOption(next, choice.options[0]!.id);
@@ -71,7 +94,7 @@ function instantlyWinCombat(run: ReturnType<typeof createRun>) {
     enemy.armor = 0;
   });
   target.position = { x: combat.playerPosition.x + 4, y: combat.playerPosition.y };
-  const attack = run.player.deck.find((card) => CARDS[card.definitionId]?.type === 'attack')!;
+  const attack = run.player.deck.find((card) => CARDS[card.definitionId]?.type === CardType.Attack)!;
   combat.hand = combat.hand.filter((id) => id !== attack.instanceId);
   combat.hand.push(attack.instanceId);
   combat.drawPile = combat.drawPile.filter((id) => id !== attack.instanceId);
@@ -85,12 +108,12 @@ describe('run generation', () => {
   it('offers a combat item card, a permanent stat item, and an asset pack at floor entry', () => {
     // A legacy profile may only remember The D6; baseline, non-event items must still fill all three slots.
     const run = createRunWithFloorChoice('FLOOR-START-REWARDS', ['d6']);
-    expect(run).toMatchObject({ phase: 'choice', floorIndex: 0 });
+    expect(run).toMatchObject({ phase: RunPhase.Choice, floorIndex: 0 });
     expect(run.choice).toMatchObject({
-      kind: 'loot',
-      rewardContext: 'floor-start',
+      kind: ChoiceKind.Loot,
+      rewardContext: RewardContext.FloorStart,
       canSkip: false,
-      next: 'map',
+      next: ChoiceNext.Map,
     });
     expect(run.choice!.options).toHaveLength(3);
 
@@ -98,12 +121,12 @@ describe('run generation', () => {
       (option) => option.itemId && itemUsesCombatCard(ITEMS[option.itemId]!),
     )!;
     const permanentOption = run.choice!.options.find(
-      (option) => option.itemId && ITEMS[option.itemId]?.pool.includes('large-room'),
+      (option) => option.itemId && ITEMS[option.itemId]?.pool.includes(RewardPool.LargeRoom),
     )!;
-    const resourceOption = run.choice!.options.find((option) => option.type === 'resource')!;
-    expect(ITEMS[combatOption.itemId!]!.kind).toBe('passive');
+    const resourceOption = run.choice!.options.find((option) => option.type === RewardOptionType.Resource)!;
+    expect(ITEMS[combatOption.itemId!]!.kind).toBe(ItemKind.Passive);
     expect(ITEMS[permanentOption.itemId!]!.combatCard).toBe(false);
-    expect(['coins', 'bombs', 'keys']).toContain(resourceOption.resource);
+    expect([ResourceKind.Coins, ResourceKind.Bombs, ResourceKind.Keys]).toContain(resourceOption.resource);
 
     const withCombatItem = chooseOption(run, combatOption.id);
     expect(withCombatItem.phase).toBe('map');
@@ -117,7 +140,8 @@ describe('run generation', () => {
     expect(withPermanentItem.player.items).toContain(permanentOption.itemId);
     expect(withPermanentItem.player.deck).toHaveLength(deckSize);
 
-    const resourceKey = resourceOption.resource as 'coins' | 'bombs' | 'keys';
+    const resourceKey = resourceOption.resource as
+      ResourceKind.Coins | ResourceKind.Bombs | ResourceKind.Keys;
     const beforeResource = run.player[resourceKey];
     const withResource = chooseOption(run, resourceOption.id);
     expect(withResource.player[resourceKey]).toBe(beforeResource + resourceOption.amount!);
@@ -200,10 +224,10 @@ describe('run generation', () => {
     const run = createRun('ROUTES-42');
     for (let lane = 0; lane < 3; lane += 1) {
       const rooms = run.floorMap.nodes.filter((node) => Math.floor(node.lane) === lane);
-      expect(rooms.filter((room) => room.kind === 'shop')).toHaveLength(1);
-      expect(rooms.filter((room) => room.kind === 'treasure')).toHaveLength(1);
-      expect(rooms.filter((room) => room.kind === 'secret')).toHaveLength(1);
-      expect(rooms.filter((room) => room.kind === 'super-secret')).toHaveLength(1);
+      expect(rooms.filter((room) => room.kind === RoomKind.Shop)).toHaveLength(1);
+      expect(rooms.filter((room) => room.kind === RoomKind.Treasure)).toHaveLength(1);
+      expect(rooms.filter((room) => room.kind === RoomKind.Secret)).toHaveLength(1);
+      expect(rooms.filter((room) => room.kind === RoomKind.SuperSecret)).toHaveLength(1);
     }
   });
 
@@ -212,7 +236,9 @@ describe('run generation', () => {
     const anchor = run.floorMap.nodes.find((node) => node.lane === 1 && node.depth === 3)!;
     run.floorMap.currentNodeId = anchor.id;
     run.player.bombs = 0;
-    const secret = run.floorMap.nodes.find((node) => node.kind === 'secret' && node.anchorId === anchor.id)!;
+    const secret = run.floorMap.nodes.find(
+      (node) => node.kind === RoomKind.Secret && node.anchorId === anchor.id,
+    )!;
     expect(getAvailableNodes(run)).not.toContain(secret.id);
     expect(() => useMapBomb(run)).toThrow(/bomb/i);
     expect(anchor.connections.every((id) => getAvailableNodes(run).includes(id))).toBe(true);
@@ -220,7 +246,11 @@ describe('run generation', () => {
     run.player.bombs = 1;
     run = useMapBomb(run);
     expect(run.player.bombs).toBe(0);
-    expect(run.mapBombResult).toMatchObject({ currentNodeId: anchor.id, found: true, roomKind: 'secret' });
+    expect(run.mapBombResult).toMatchObject({
+      currentNodeId: anchor.id,
+      found: true,
+      roomKind: RoomKind.Secret,
+    });
     expect(run.floorMap.nodes.find((node) => node.id === secret.id)).toMatchObject({
       revealed: true,
       doorOpened: true,
@@ -232,7 +262,7 @@ describe('run generation', () => {
 
   it('keeps floor-one shops free and spends one key on locked shops and treasure rooms later', () => {
     let firstFloor = createRun('FIRST-FLOOR-DOOR');
-    const freeShop = firstFloor.floorMap.nodes.find((node) => node.kind === 'shop')!;
+    const freeShop = firstFloor.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
     firstFloor.floorMap.currentNodeId = firstFloor.floorMap.nodes.find((node) =>
       node.connections.includes(freeShop.id),
     )!.id;
@@ -243,7 +273,7 @@ describe('run generation', () => {
     let laterFloor = createRun('LOCKED-DOOR');
     laterFloor.floorIndex = 1;
     laterFloor.floorMap = createFloorMap(1, laterFloor.seed);
-    const lockedTreasure = laterFloor.floorMap.nodes.find((node) => node.kind === 'treasure')!;
+    const lockedTreasure = laterFloor.floorMap.nodes.find((node) => node.kind === RoomKind.Treasure)!;
     laterFloor.floorMap.currentNodeId = laterFloor.floorMap.nodes.find((node) =>
       node.connections.includes(lockedTreasure.id),
     )!.id;
@@ -283,19 +313,69 @@ describe('run generation', () => {
     run.floorMap.currentNodeId = anchor.id;
     run.player.coins = 100;
     run = enterRoom(run, shop.id);
-    const purchase = run.choice!.options.find((option) => option.action !== 'leave')!;
+    const purchase = run.choice!.options.find((option) => option.action !== ChoiceAction.Leave)!;
     run = chooseOption(run, purchase.id);
-    expect(run.phase).toBe('choice');
+    expect(run.phase).toBe(RunPhase.Choice);
     expect(run.choice!.options.find((option) => option.id === purchase.id)?.sold).toBe(true);
 
-    const leave = run.choice!.options.find((option) => option.action === 'leave')!;
+    const leave = run.choice!.options.find((option) => option.action === ChoiceAction.Leave)!;
     run = chooseOption(run, leave.id);
-    expect(run.phase).toBe('map');
+    expect(run.phase).toBe(RunPhase.Map);
     expect(run.choice).toBeUndefined();
+  });
+
+  it.each([
+    RoomKind.Shop,
+    RoomKind.Treasure,
+    RoomKind.Planetarium,
+    RoomKind.Curse,
+    RoomKind.Sacrifice,
+    RoomKind.Secret,
+    RoomKind.SuperSecret,
+  ])('can leave the %s without taking an offered reward', (roomKind) => {
+    let run = createRun(`LEAVE-${roomKind}`);
+    const room = run.floorMap.nodes.find((node) => node.kind === roomKind)!;
+    if (room.optional) {
+      run.floorMap.currentNodeId = room.anchorId!;
+      room.doorOpened = true;
+      room.revealed = true;
+    } else {
+      const anchor = run.floorMap.nodes.find((node) => node.connections.includes(room.id))!;
+      run.floorMap.currentNodeId = anchor.id;
+    }
+
+    run = enterRoom(run, room.id);
+    const playerBeforeLeaving = structuredClone(run.player);
+    expect(run.choice?.canSkip).toBe(true);
+
+    run = skipChoice(run);
+    expect(run.phase).toBe(RunPhase.Map);
+    expect(run.choice).toBeUndefined();
+    expect(run.player).toEqual(playerBeforeLeaving);
+    expect(run.player.activeItemId).toBe('d6');
   });
 });
 
 describe('combat', () => {
+  it.each([RoomKind.Combat, RoomKind.Elite, RoomKind.Boss])(
+    'can leave the %s reward without taking a card or item',
+    (roomKind) => {
+      let run = createRun(`LEAVE-${roomKind}-REWARD`);
+      const room = run.floorMap.nodes.find((node) => node.kind === roomKind)!;
+      const anchor = run.floorMap.nodes.find((node) => node.connections.includes(room.id))!;
+      run.floorMap.currentNodeId = anchor.id;
+      run = confirmPlayerDeployment(enterRoom(run, room.id));
+      run = instantlyWinCombat(run);
+
+      expect(run.choice?.canSkip).toBe(true);
+      const playerBeforeLeaving = structuredClone(run.player);
+      run = skipChoice(acknowledgeRoomReward(run));
+
+      expect(run.player).toEqual(playerBeforeLeaving);
+      expect(run.player.activeItemId).toBe('d6');
+    },
+  );
+
   it('uses one bomb for a 3 by 3 blast and damages a large enemy once per occupied tile', () => {
     let run = createRun('COMBAT-BOMB');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
@@ -320,9 +400,9 @@ describe('combat', () => {
     expect(run.combat!.vitality).toBe(run.player.stats.maxVitality);
     expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(800);
     expect(run.combat!.animationEvents.slice(-2)).toMatchObject([
-      { kind: 'bomb-blast', toX: 5, toY: 3, value: 50 },
+      { kind: CombatAnimationKind.BombBlast, toX: 5, toY: 3, value: 50 },
       {
-        kind: 'bomb-hit',
+        kind: CombatAnimationKind.BombHit,
         targetId: target.instanceId,
         value: 200,
         secondaryValue: 0,
@@ -340,6 +420,8 @@ describe('combat', () => {
     delete (run.player.stats as Partial<typeof run.player.stats>).attackRange;
     delete run.combat!.deploymentPending;
     delete (run.combat as Partial<typeof run.combat>).roomLayout;
+    delete (run.combat as Partial<typeof run.combat>).animationSequence;
+    delete (run.combat as Partial<typeof run.combat>).animationEvents;
     delete (run.combat!.enemies[0] as { movementSpeed?: number }).movementSpeed;
     delete (run.combat!.enemies[0] as { visionRange?: number }).visionRange;
     delete (run.combat!.enemies[0] as { footprintWidth?: number }).footprintWidth;
@@ -350,8 +432,10 @@ describe('combat', () => {
     expect(getPlayerMovementSpeed(hydrated)).toBe(3);
     expect(hydrated.player.stats.attackRange).toBe(5);
     expect(hydrated.combat!.deploymentPending).toBe(false);
+    expect(hydrated.combat!.animationSequence).toBe(0);
+    expect(hydrated.combat!.animationEvents).toEqual([]);
     expect(hydrated.combat!.roomLayout).toMatchObject({
-      shape: 'standard',
+      shape: CombatRoomShape.Standard,
       width: 17,
       height: 9,
       unitCount: 1,
@@ -374,7 +458,7 @@ describe('combat', () => {
 
     const hydrated = hydrateRunState(run);
 
-    expect(hydrated.player.stats.attackMode).toBe('basic');
+    expect(hydrated.player.stats.attackMode).toBe(AttackMode.Basic);
     expect(hydrated.combat!.attackMeter).toBe(0.75);
     expect(hydrated.player.deck.some((card) => card.definitionId === 'basic-attack')).toBe(true);
     expect(hydrated.player.deck.some((card) => card.definitionId === 'sweeping-attack')).toBe(true);
@@ -436,7 +520,7 @@ describe('combat', () => {
       const occupied = new Set<string>();
       shapes.add(combat.roomLayout.shape);
       largestEncounter = Math.max(largestEncounter, combat.enemies.length);
-      if (combat.roomLayout.shape === 'l-shaped') {
+      if (combat.roomLayout.shape === CombatRoomShape.LShaped) {
         sawLShape = true;
         expect(combat.roomLayout.width * combat.roomLayout.height - roomCells.length).toBe(17 * 9);
       }
@@ -502,24 +586,28 @@ describe('combat', () => {
     for (let index = 0; index < 40 && !rewarded; index += 1) {
       let run = createRun(`LARGE-ROOM-TREASURE-${index}`);
       run = enterRoom(run, getAvailableNodes(run)[0]!);
-      run.combat!.roomLayout = { shape: 'large', width: 34, height: 18, unitCount: 4 };
+      run.combat!.roomLayout = { shape: CombatRoomShape.Large, width: 34, height: 18, unitCount: 4 };
       run = instantlyWinCombat(run);
-      if (run.choice?.rewardContext === 'large-room') rewarded = run;
+      if (run.choice?.rewardContext === RewardContext.LargeRoom) rewarded = run;
     }
 
-    expect(rewarded?.choice).toMatchObject({ kind: 'item', rewardContext: 'large-room', canSkip: true });
+    expect(rewarded?.choice).toMatchObject({
+      kind: ChoiceKind.Item,
+      rewardContext: RewardContext.LargeRoom,
+      canSkip: true,
+    });
     expect(rewarded!.choice!.options).toHaveLength(3);
     expect(
       rewarded!.choice!.options.every((option) => {
         const item = option.itemId ? ITEMS[option.itemId] : undefined;
-        return item?.pool.includes('large-room') && item.combatCard === false;
+        return item?.pool.includes(RewardPool.LargeRoom) && item.combatCard === false;
       }),
     ).toBe(true);
 
     const option = rewarded!.choice!.options[0]!;
     const deckSize = rewarded!.player.deck.length;
     const statsBefore = { ...rewarded!.player.stats };
-    const chosen = chooseOption(rewarded!, option.id);
+    const chosen = chooseOption(acknowledgeRoomReward(rewarded!), option.id);
     expect(chosen.player.items).toContain(option.itemId);
     expect(chosen.player.deck).toHaveLength(deckSize);
     expect(chosen.player.stats).not.toEqual(statsBefore);
@@ -542,7 +630,7 @@ describe('combat', () => {
     );
 
     run = endTurn(run);
-    expect(run.phase).toBe('discard');
+    expect(run.phase).toBe(RunPhase.Discard);
     run = finishDiscard(run);
 
     expect(
@@ -593,7 +681,12 @@ describe('combat', () => {
     enemy.position = { x: 13, y: 0 };
     enemy.visionRange = 1;
     enemy.alerted = false;
-    enemy.intent = { kind: 'attack', value: 99, label: 'Attack', actions: [{ kind: 'attack', value: 99 }] };
+    enemy.intent = {
+      kind: IntentKind.Attack,
+      value: 99,
+      label: 'Attack',
+      actions: [{ kind: IntentKind.Attack, value: 99 }],
+    };
     run.combat!.hand = run.combat!.hand.slice(0, 5);
     expect(isPlayerInEnemyVision(run, enemy.instanceId)).toBe(false);
     const redHpBefore = run.player.redHp;
@@ -622,12 +715,17 @@ describe('combat', () => {
     enemy.position = { x: 6, y: 0 };
     enemy.footprintWidth = 2;
     enemy.footprintHeight = 2;
-    enemy.movementPattern = 'diagonal-jump';
+    enemy.movementPattern = EnemyMovementPattern.DiagonalJump;
     enemy.movementSpeed = 3;
     enemy.attackRange = 1;
     enemy.visionRange = 10;
     enemy.alerted = true;
-    enemy.intent = { kind: 'attack', value: 12, label: 'Attack', actions: [{ kind: 'attack', value: 12 }] };
+    enemy.intent = {
+      kind: IntentKind.Attack,
+      value: 12,
+      label: 'Attack',
+      actions: [{ kind: IntentKind.Attack, value: 12 }],
+    };
     run.combat!.hand = run.combat!.hand.slice(0, 5);
     const redHpBefore = run.player.redHp;
 
@@ -635,7 +733,9 @@ describe('combat', () => {
     expect(
       run.combat!.animationEvents.some(
         (event) =>
-          event.kind === 'move' && event.sourceId === enemy.instanceId && event.movementStyle === 'jump',
+          event.kind === CombatAnimationKind.Move &&
+          event.sourceId === enemy.instanceId &&
+          event.movementStyle === CombatMovementStyle.Jump,
       ),
     ).toBe(true);
     expect(run.player.redHp).toBeLessThan(redHpBefore);
@@ -655,7 +755,7 @@ describe('combat', () => {
     expect(run.combat!.playerPosition).toEqual({ x: 2, y: 4 });
     expect(run.combat!.vitality).toBe(vitalityBefore - 1);
     expect(run.combat!.animationEvents.at(-1)).toMatchObject({
-      kind: 'move',
+      kind: CombatAnimationKind.Move,
       sourceId: 'isaac',
       fromX: 0,
       fromY: 4,
@@ -734,12 +834,16 @@ describe('combat', () => {
 
     run = playCard(run, attack.instanceId, target.instanceId);
 
-    expect(run.phase).toBe('choice');
+    expect(run.phase).toBe(RunPhase.Choice);
+    expect(run.choice?.requiresRewardConfirmation).toBe(true);
+    expect(() => chooseOption(run, run.choice!.options[0]!.id)).toThrow(/acknowledge/i);
+    run = acknowledgeRoomReward(run);
+    expect(run.choice?.requiresRewardConfirmation).toBe(false);
     expect(
       run
         .combat!.animationEvents.filter((event) => event.sequence > previousSequence)
         .map((event) => event.kind),
-    ).toEqual(['card-play', 'player-attack', 'defeat']);
+    ).toEqual([CombatAnimationKind.CardPlay, CombatAnimationKind.PlayerAttack, CombatAnimationKind.Defeat]);
   });
 
   it('records the complete player attack calculation for the slower damage animation', () => {
@@ -762,7 +866,7 @@ describe('combat', () => {
 
     expect(run.combat!.enemies[0]).toMatchObject({ hp: 100, shield: 0 });
     expect(run.combat!.animationEvents.at(-1)).toMatchObject({
-      kind: 'player-attack',
+      kind: CombatAnimationKind.PlayerAttack,
       targetId: target.instanceId,
       rawValue: 6,
       armorValue: 2,
@@ -891,7 +995,12 @@ describe('combat', () => {
     target.hp = 100;
     target.armor = 0;
     target.shield = 0;
-    target.intent = { kind: 'idle', value: 0, label: 'Idle', actions: [{ kind: 'idle', value: 0 }] };
+    target.intent = {
+      kind: IntentKind.Idle,
+      value: 0,
+      label: 'Idle',
+      actions: [{ kind: IntentKind.Idle, value: 0 }],
+    };
     combat.enemies.slice(1).forEach((enemy) => {
       enemy.hp = 0;
     });
@@ -961,14 +1070,24 @@ describe('combat', () => {
     run.combat!.enemies.forEach((enemy, index) => {
       enemy.intent =
         index === 0
-          ? { kind: 'prepare', value: 0, label: 'Preparing…', actions: [{ kind: 'prepare', value: 0 }] }
-          : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
+          ? {
+              kind: IntentKind.Prepare,
+              value: 0,
+              label: 'Preparing…',
+              actions: [{ kind: IntentKind.Prepare, value: 0 }],
+            }
+          : {
+              kind: IntentKind.Idle,
+              value: 0,
+              label: 'Staggered',
+              actions: [{ kind: IntentKind.Idle, value: 0 }],
+            };
     });
     run.combat!.hand = [];
     run = endTurn(run);
     run = finishDiscard(run);
     const prepared = run.combat!.enemies.find((enemy) => enemy.instanceId === enemyId)!;
-    expect(prepared.intent.actions).toEqual([{ kind: 'attack', value: prepared.attack * 2 }]);
+    expect(prepared.intent.actions).toEqual([{ kind: IntentKind.Attack, value: prepared.attack * 2 }]);
 
     const durabilityBefore = run.player.redHp + run.combat!.playerShield;
     run.combat!.hand = [];
@@ -990,14 +1109,24 @@ describe('combat', () => {
     run.combat!.enemies.forEach((entry) => {
       entry.intent =
         entry.instanceId === enemy.instanceId
-          ? { kind: 'attack', value: 1, label: 'Attack 1', actions: [{ kind: 'attack', value: 1 }] }
-          : { kind: 'idle', value: 0, label: 'Staggered', actions: [{ kind: 'idle', value: 0 }] };
+          ? {
+              kind: IntentKind.Attack,
+              value: 1,
+              label: 'Attack 1',
+              actions: [{ kind: IntentKind.Attack, value: 1 }],
+            }
+          : {
+              kind: IntentKind.Idle,
+              value: 0,
+              label: 'Staggered',
+              actions: [{ kind: IntentKind.Idle, value: 0 }],
+            };
     });
     run.combat!.hand = [];
     run = endTurn(run);
     run = finishDiscard(run);
     const reacting = run.combat!.enemies.find((entry) => entry.instanceId === enemy.instanceId)!;
-    expect(reacting.intent.actions).toEqual([{ kind: 'heal', value: 10 }]);
+    expect(reacting.intent.actions).toEqual([{ kind: IntentKind.Heal, value: 10 }]);
 
     const hpBefore = reacting.hp;
     const deckBefore = run.player.deck.length;
@@ -1021,12 +1150,12 @@ describe('combat', () => {
       entry.hp = 0;
     });
     enemy.intent = {
-      kind: 'shield',
+      kind: IntentKind.Shield,
       value: 9,
       label: 'Guard 9 + Recover 8',
       actions: [
-        { kind: 'shield', value: 9 },
-        { kind: 'heal', value: 8 },
+        { kind: IntentKind.Shield, value: 9 },
+        { kind: IntentKind.Heal, value: 8 },
       ],
     };
     run.player.stats.dodgeChance = 0;
@@ -1056,15 +1185,15 @@ describe('combat', () => {
       behavior: 'boss',
       position: { x: 1, y: 4 },
       attackRange: 5,
-      movementPattern: 'cardinal',
+      movementPattern: EnemyMovementPattern.Cardinal,
       alerted: true,
       intent: {
-        kind: 'attack',
+        kind: IntentKind.Attack,
         value: 8,
         label: 'Attack 8 + Attack 6',
         actions: [
-          { kind: 'attack', value: 8 },
-          { kind: 'attack', value: 6 },
+          { kind: IntentKind.Attack, value: 8 },
+          { kind: IntentKind.Attack, value: 6 },
         ],
       },
     });
@@ -1078,7 +1207,9 @@ describe('combat', () => {
 
     expect(run.player.redHp).toBe(hpBefore - 14);
     expect(run.combat!.log.filter((entry) => entry.messageKey === 'enemyAttack')).toHaveLength(2);
-    expect(run.combat!.animationEvents.filter((event) => event.kind === 'enemy-attack')).toHaveLength(2);
+    expect(
+      run.combat!.animationEvents.filter((event) => event.kind === CombatAnimationKind.EnemyAttack),
+    ).toHaveLength(2);
     expect(run.combat!.enemies[0]!.intent.actions).toHaveLength(2);
   });
 
@@ -1095,16 +1226,16 @@ describe('combat', () => {
       attack: 10,
       position: { x: 1, y: 4 },
       attackRange: 5,
-      movementPattern: 'cardinal',
+      movementPattern: EnemyMovementPattern.Cardinal,
       alerted: true,
       behaviorStep: 0,
       intent: {
-        kind: 'attack',
+        kind: IntentKind.Attack,
         value: 10,
         label: 'Attack 10 + Preparing…',
         actions: [
-          { kind: 'attack', value: 10 },
-          { kind: 'prepare', value: 0 },
+          { kind: IntentKind.Attack, value: 10 },
+          { kind: IntentKind.Prepare, value: 0 },
         ],
       },
     });
@@ -1117,7 +1248,7 @@ describe('combat', () => {
 
     const chargedBoss = run.combat!.enemies[0]!;
     expect(chargedBoss.prepared).toBe(true);
-    expect(chargedBoss.intent.actions?.[0]).toEqual({ kind: 'attack', value: 20 });
+    expect(chargedBoss.intent.actions?.[0]).toEqual({ kind: IntentKind.Attack, value: 20 });
     expect(chargedBoss.intent.actions).toHaveLength(2);
   });
 
@@ -1133,15 +1264,15 @@ describe('combat', () => {
       behavior: 'boss',
       position: { x: 1, y: 4 },
       attackRange: 5,
-      movementPattern: 'cardinal',
+      movementPattern: EnemyMovementPattern.Cardinal,
       alerted: true,
       intent: {
-        kind: 'summon',
+        kind: IntentKind.Summon,
         value: 1,
         label: 'Summon 1 + Guard 4',
         actions: [
-          { kind: 'summon', value: 1 },
-          { kind: 'shield', value: 4 },
+          { kind: IntentKind.Summon, value: 1 },
+          { kind: IntentKind.Shield, value: 4 },
         ],
       },
     });
@@ -1151,7 +1282,7 @@ describe('combat', () => {
 
     expect(run.combat!.enemies.filter((enemy) => enemy.hp > 0 && !enemy.boss)).toHaveLength(1);
     expect(run.combat!.enemies[0]!.shield).toBe(4);
-    expect(run.combat!.animationEvents.some((event) => event.kind === 'summon')).toBe(true);
+    expect(run.combat!.animationEvents.some((event) => event.kind === CombatAnimationKind.Summon)).toBe(true);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'bossSummon')).toBe(true);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyAttack')).toBe(false);
   });
@@ -1168,10 +1299,10 @@ describe('combat', () => {
     enemy.attackRange = 5;
     enemy.alerted = true;
     enemy.intent = {
-      kind: 'attack',
+      kind: IntentKind.Attack,
       value: 12,
       label: 'Attack 12',
-      actions: [{ kind: 'attack', value: 12 }],
+      actions: [{ kind: IntentKind.Attack, value: 12 }],
     };
     run.player.stats.dodgeChance = 0;
     run.combat!.playerShield = 0;
@@ -1219,9 +1350,10 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     expect(run.combat!.hand).toHaveLength(7);
     run = endTurn(run);
-    expect(run.phase).toBe('discard');
+    expect(run.phase).toBe(RunPhase.Discard);
     const discardable = run.combat!.hand.filter(
-      (id) => CARDS[run.player.deck.find((card) => card.instanceId === id)!.definitionId]!.type !== 'skill',
+      (id) =>
+        CARDS[run.player.deck.find((card) => card.instanceId === id)!.definitionId]!.type !== CardType.Skill,
     );
     run = discardCard(run, discardable[0]!);
     run = discardCard(run, discardable[1]!);
@@ -1236,7 +1368,7 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     run.combat!.hand = run.combat!.hand.slice(0, 4);
     run = endTurn(run);
-    expect(run.phase).toBe('discard');
+    expect(run.phase).toBe(RunPhase.Discard);
     expect(run.combat!.round).toBe(1);
     run = finishDiscard(run);
     expect(run.combat!.round).toBe(2);
@@ -1251,12 +1383,12 @@ describe('combat', () => {
       enemy.hp = 0;
     });
     target.intent = {
-      kind: 'attack',
+      kind: IntentKind.Attack,
       value: 20,
       label: 'Attack 20 + Guard 9',
       actions: [
-        { kind: 'attack', value: 20 },
-        { kind: 'shield', value: 9 },
+        { kind: IntentKind.Attack, value: 20 },
+        { kind: IntentKind.Shield, value: 9 },
       ],
     };
     const curse = run.player.deck.find((card) => card.definitionId === 'bad-trip')!;
@@ -1278,7 +1410,7 @@ describe('combat', () => {
   it('detonates an emptied black heart against the whole room', () => {
     let run = createRun('BLACK-HEART');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
-    addPocketHeart(run, 'black');
+    addPocketHeart(run, HeartKind.Black);
     run.player.pocketHearts.at(-1)!.hp = 1;
     run.player.stats.armor = 0;
     run.combat!.playerShield = 0;
@@ -1287,12 +1419,12 @@ describe('combat', () => {
       enemy.position = index === 0 ? { x: 1, y: 4 } : enemy.position;
       enemy.intent =
         index === 0
-          ? { kind: 'attack', value: 5, label: 'Attack 5' }
-          : { kind: 'idle', value: 0, label: 'Idle' };
+          ? { kind: IntentKind.Attack, value: 5, label: 'Attack 5' }
+          : { kind: IntentKind.Idle, value: 0, label: 'Idle' };
     });
     run = endTurn(run);
     run = finishDiscard(run);
-    expect(run.phase).toBe('choice');
+    expect(run.phase).toBe(RunPhase.Choice);
     expect(run.combat!.enemies.every((enemy) => enemy.hp === 0)).toBe(true);
   });
 
@@ -1399,7 +1531,7 @@ describe('combat', () => {
     for (const card of otherCards) {
       const rerolled = run.player.deck.find((entry) => entry.instanceId === card.instanceId)!;
       expect(rerolled.definitionId).not.toBe(definitionsBefore.get(card.instanceId));
-      expect(['skill', 'curse']).not.toContain(CARDS[rerolled.definitionId]!.type);
+      expect([CardType.Skill, CardType.Curse]).not.toContain(CARDS[rerolled.definitionId]!.type);
     }
     expect(run.combat!.discardPile).toHaveLength(0);
     expect(run.combat!.cooldowns[d6.instanceId]).toBe(3);
@@ -1412,26 +1544,29 @@ describe('first run', () => {
     run.player.keys = 99;
     let guard = 0;
     const provisionFloors = new Set([0]);
-    while (run.phase !== 'victory' && guard < 200) {
+    while (run.phase !== RunPhase.Victory && guard < 200) {
       guard += 1;
-      if (run.phase === 'map') {
+      if (run.phase === RunPhase.Map) {
         const available = getAvailableNodes(run).map((id) =>
           run.floorMap.nodes.find((node) => node.id === id)!,
         );
-        const center = available.find((node) => !node.optional && (node.kind === 'boss' || node.lane === 1));
+        const center = available.find(
+          (node) => !node.optional && (node.kind === RoomKind.Boss || node.lane === 1),
+        );
         run = enterRoom(run, (center ?? available.find((node) => !node.optional))!.id);
-      } else if (run.phase === 'combat') {
+      } else if (run.phase === RunPhase.Combat) {
         run = instantlyWinCombat(run);
-      } else if (run.phase === 'choice') {
+      } else if (run.phase === RunPhase.Choice) {
         run = settleChoice(run, (choiceRun) => {
-          if (choiceRun.choice?.rewardContext === 'floor-start') provisionFloors.add(choiceRun.floorIndex);
+          if (choiceRun.choice?.rewardContext === RewardContext.FloorStart)
+            provisionFloors.add(choiceRun.floorIndex);
         });
       } else {
         throw new Error(`Unexpected phase ${run.phase}`);
       }
     }
     expect(guard).toBeLessThan(200);
-    expect(run.phase).toBe('victory');
+    expect(run.phase).toBe(RunPhase.Victory);
     expect(run.floorIndex).toBe(5);
     expect([...provisionFloors]).toEqual([0, 1, 2, 3, 4, 5]);
     expect(run.unlocks).toContain('moms-knife');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RunState } from '@isaac-spire/game';
+import { RewardPool, type RunState } from '@isaac-spire/game';
 import i18n from './i18n';
 import { cardDescription, cardName, logText } from './localize';
 
@@ -12,6 +12,11 @@ describe('game localization', () => {
     expect(i18n.t('fusion.free')).toBe('融合不消耗体力');
     expect(i18n.t('fusion.description')).toContain('不会留下持续属性');
     expect(i18n.t('combat.roomClearTitle')).toBe('房间已清理');
+    expect(i18n.t('rewardReveal.confirm')).toBe('打开选牌奖励');
+    expect(i18n.t(`rewardPools.${RewardPool.SuperSecret}`)).toBe('超级隐藏房');
+    expect(i18n.t('choice.rewardStrength', { pool: '天使房', strength: 5, label: '异常珍贵' })).toBe(
+      '天使房 · 强度 5 · 异常珍贵',
+    );
     expect(cardName(i18n.t, 'item:goat-head')).toBe('山羊头');
     expect(i18n.t('combat.confirmActiveDiscard', { item: '六面骰' })).toContain('不再出现在本局战斗中');
     expect(i18n.t('choice.replaceActiveConfirm', { current: '六面骰', next: '美味的心' })).toContain(
@@ -19,6 +24,7 @@ describe('game localization', () => {
     );
     expect(i18n.t('confirmation.replaceActiveTitle')).toBe('要替换当前主动道具吗？');
     expect(i18n.t('confirmation.discardActive')).toBe('永久弃掉');
+    expect(i18n.t('choice.leaveEmpty')).toBe('什么也不拿，直接离开');
   });
 
   it('localizes combat logs from runs saved before semantic log keys', () => {

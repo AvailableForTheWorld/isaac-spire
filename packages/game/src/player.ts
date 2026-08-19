@@ -1,5 +1,6 @@
 import { CARDS, ITEMS, itemUsesCombatCard, passiveCardId } from './catalog.js';
-import type { CardInstance, PlayerState, RunState } from './types.js';
+import type { CardInstance, HeartKind, PlayerState, RunState } from './types.js';
+import { AttackMode, CharacterId, ItemKind } from './types.js';
 import { randomInt } from './random.js';
 
 export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string): CardInstance {
@@ -13,7 +14,7 @@ export function createCard(run: Pick<RunState, 'rngState'>, definitionId: string
 
 export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
   const player: PlayerState = {
-    character: 'isaac',
+    character: CharacterId.Isaac,
     redContainers: 3,
     redHp: 90,
     pocketHearts: [],
@@ -33,7 +34,7 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
       shopDiscount: 0,
       movementSpeed: 3,
       attackRange: 5,
-      attackMode: 'basic',
+      attackMode: AttackMode.Basic,
     },
     coins: 5,
     bombs: 1,
@@ -64,7 +65,7 @@ export function healRed(player: PlayerState, amount: number): number {
   return player.redHp - before;
 }
 
-export function addPocketHeart(run: RunState, kind: 'soul' | 'black', count = 1): void {
+export function addPocketHeart(run: RunState, kind: HeartKind, count = 1): void {
   for (let index = 0; index < count; index += 1) {
     run.player.pocketHearts.push({
       id: `h-${randomInt(run, 100000, 999999)}`,
@@ -96,7 +97,7 @@ export function equipItem(run: RunState, itemId: string): void {
   const item = ITEMS[itemId];
   if (!item) throw new Error(`Unknown item: ${itemId}`);
   const newlyEquipped = !run.player.items.includes(item.id);
-  if (item.kind === 'active') {
+  if (item.kind === ItemKind.Active) {
     if (run.player.activeItemId) {
       const previous = ITEMS[run.player.activeItemId];
       if (previous?.skillCardId) {
@@ -108,8 +109,8 @@ export function equipItem(run: RunState, itemId: string): void {
     if (item.skillCardId) run.player.deck.push(createCard(run, item.skillCardId));
     if (!run.player.items.includes(item.id)) run.player.items.push(item.id);
   }
-  if (newlyEquipped && item.kind === 'passive') run.player.items.push(item.id);
-  if (newlyEquipped && item.kind === 'passive' && !itemUsesCombatCard(item)) {
+  if (newlyEquipped && item.kind === ItemKind.Passive) run.player.items.push(item.id);
+  if (newlyEquipped && item.kind === ItemKind.Passive && !itemUsesCombatCard(item)) {
     for (const effect of item.effects ?? []) {
       if (!effect.stat) continue;
       const stat = effect.stat;

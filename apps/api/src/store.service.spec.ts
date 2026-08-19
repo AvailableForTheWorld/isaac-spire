@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createRun, DEFAULT_PROFILE, type PersistedRun } from '@isaac-spire/game';
+import { createRun, DEFAULT_PROFILE, RunPhase, RunStatus, type PersistedRun } from '@isaac-spire/game';
 import { StoreService } from './store.service.js';
 
 let temporaryDirectory: string | undefined;
@@ -30,7 +30,7 @@ describe('StoreService', () => {
   it('persists a compressed run and updates meta progression once', async () => {
     const service = await createStore();
     const run = createRun('API-SAVE');
-    run.phase = 'victory';
+    run.phase = RunPhase.Victory;
     run.victory = true;
     run.score = 1234;
     run.unlocks.push('moms-knife');
@@ -39,7 +39,7 @@ describe('StoreService', () => {
     const saved = await service.getRun(run.id);
     const profile = await service.profile();
     const stats = await service.storageStats();
-    expect(saved.status).toBe('won');
+    expect(saved.status).toBe(RunStatus.Won);
     expect(saved.snapshot.seed).toBe('API-SAVE');
     expect(profile.wins).toBe(1);
     expect(profile.bestScore).toBe(1234);
@@ -54,7 +54,7 @@ describe('StoreService', () => {
     const run = createRun('LEGACY-SAVE');
     const persisted: PersistedRun = {
       id: run.id,
-      status: 'active',
+      status: RunStatus.Active,
       snapshot: run,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,

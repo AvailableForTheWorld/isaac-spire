@@ -1,5 +1,6 @@
 import { ITEMS, itemUsesCombatCard, passiveCardId } from '../catalog.js';
 import type { CombatState, RunState } from '../types.js';
+import { AttackMode, ItemKind } from '../types.js';
 
 const LEGACY_CARD_IDS: Readonly<Record<string, string>> = {
   'isaacs-tears': 'basic-attack',
@@ -20,7 +21,7 @@ export function migrateRunSnapshot(state: RunState): RunState {
   run.player.deck.forEach((card) => {
     card.definitionId = currentCardId(card.definitionId);
   });
-  if ((run.player.stats.attackMode as string) === 'tears') run.player.stats.attackMode = 'basic';
+  if ((run.player.stats.attackMode as string) === 'tears') run.player.stats.attackMode = AttackMode.Basic;
   run.choice?.options.forEach((option) => {
     if (option.cardId) option.cardId = currentCardId(option.cardId);
   });
@@ -30,19 +31,19 @@ export function migrateRunSnapshot(state: RunState): RunState {
     legacyCombat.attackMeter ??= legacyCombat.tearMeter ?? 0;
     delete legacyCombat.tearMeter;
     if ((legacyCombat.attackModeOverride as string | undefined) === 'tears')
-      legacyCombat.attackModeOverride = 'basic';
+      legacyCombat.attackModeOverride = AttackMode.Basic;
     (legacyCombat.animationEvents ?? []).forEach((event) => {
-      if ((event.attackMode as string | undefined) === 'tears') event.attackMode = 'basic';
+      if ((event.attackMode as string | undefined) === 'tears') event.attackMode = AttackMode.Basic;
     });
     (legacyCombat.log ?? []).forEach((entry) => {
       if (typeof entry.params?.cardId === 'string') entry.params.cardId = currentCardId(entry.params.cardId);
-      if (entry.params?.mode === 'tears') entry.params.mode = 'basic';
+      if (entry.params?.mode === 'tears') entry.params.mode = AttackMode.Basic;
     });
   }
 
   const retiredCardIds = new Set(
     Object.values(ITEMS)
-      .filter((item) => item.kind === 'passive' && !itemUsesCombatCard(item))
+      .filter((item) => item.kind === ItemKind.Passive && !itemUsesCombatCard(item))
       .map((item) => passiveCardId(item.id)),
   );
   const retiredInstances = new Set(

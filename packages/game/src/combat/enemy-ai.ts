@@ -1,33 +1,27 @@
-import type {
-  EnemyAction,
-  EnemyBehavior,
-  EnemyDefinition,
-  EnemyIntent,
-  EnemyState,
-  IntentKind,
-  RunState,
-} from '../types.js';
+import type { EnemyAction, EnemyDefinition, EnemyIntent, EnemyState, RunState } from '../types.js';
+import { EnemyBehavior, IntentKind } from '../types.js';
 import { enemyCanAttackPosition, ISAAC_DOOR_POSITION } from './grid.js';
 
 function intentLabel(kind: IntentKind, value: number): string {
   const labels: Record<IntentKind, string> = {
-    attack: `Attack ${value}`,
-    shield: `Guard ${value}`,
-    curse: 'Curse',
-    heal: `Recover ${value}`,
-    prepare: 'Preparing…',
-    summon: `Summon ${value}`,
-    idle: 'Staggered',
+    [IntentKind.Attack]: `Attack ${value}`,
+    [IntentKind.Shield]: `Guard ${value}`,
+    [IntentKind.Curse]: 'Curse',
+    [IntentKind.Heal]: `Recover ${value}`,
+    [IntentKind.Prepare]: 'Preparing…',
+    [IntentKind.Summon]: `Summon ${value}`,
+    [IntentKind.Idle]: 'Staggered',
   };
   return labels[kind];
 }
 
 export function behaviorFor(enemy: Pick<EnemyDefinition, 'id' | 'elite' | 'boss'>): EnemyBehavior {
-  if (enemy.boss) return 'boss';
-  if (enemy.elite || ['globin', 'knight', 'fat-bat', 'champion-knight'].includes(enemy.id)) return 'tank';
-  if (['horf', 'vis'].includes(enemy.id)) return 'hexer';
-  if (['spider', 'charger', 'leaper'].includes(enemy.id)) return 'hunter';
-  return 'swarm';
+  if (enemy.boss) return EnemyBehavior.Boss;
+  if (enemy.elite || ['globin', 'knight', 'fat-bat', 'champion-knight'].includes(enemy.id))
+    return EnemyBehavior.Tank;
+  if (['horf', 'vis'].includes(enemy.id)) return EnemyBehavior.Hexer;
+  if (['spider', 'charger', 'leaper'].includes(enemy.id)) return EnemyBehavior.Hunter;
+  return EnemyBehavior.Swarm;
 }
 
 export function enemyAction(kind: IntentKind, value = 0): EnemyAction {
@@ -47,7 +41,7 @@ function healValue(run: RunState, multiplier = 1): number {
 }
 
 export function makeIntent(actions: EnemyAction[]): EnemyIntent {
-  const primary = actions[0] ?? enemyAction('idle');
+  const primary = actions[0] ?? enemyAction(IntentKind.Idle);
   return {
     kind: primary.kind,
     value: primary.value,
@@ -58,57 +52,62 @@ export function makeIntent(actions: EnemyAction[]): EnemyIntent {
 
 function behaviorPattern(run: RunState, enemy: EnemyState): EnemyAction[][] {
   switch (enemy.behavior) {
-    case 'hunter':
+    case EnemyBehavior.Hunter:
       return [
-        [enemyAction('prepare')],
-        [enemyAction('attack', attackValue(enemy))],
-        [enemyAction('attack', attackValue(enemy, 1.2))],
+        [enemyAction(IntentKind.Prepare)],
+        [enemyAction(IntentKind.Attack, attackValue(enemy))],
+        [enemyAction(IntentKind.Attack, attackValue(enemy, 1.2))],
       ];
-    case 'hexer':
+    case EnemyBehavior.Hexer:
       return [
-        [enemyAction('curse')],
-        [enemyAction('attack', attackValue(enemy))],
-        [enemyAction('heal', healValue(run))],
-        [enemyAction('prepare')],
+        [enemyAction(IntentKind.Curse)],
+        [enemyAction(IntentKind.Attack, attackValue(enemy))],
+        [enemyAction(IntentKind.Heal, healValue(run))],
+        [enemyAction(IntentKind.Prepare)],
       ];
-    case 'tank':
+    case EnemyBehavior.Tank:
       return [
-        [enemyAction('shield', shieldValue(run, 1.35))],
-        [enemyAction('attack', attackValue(enemy))],
-        [enemyAction('prepare')],
-        [enemyAction('heal', healValue(run))],
+        [enemyAction(IntentKind.Shield, shieldValue(run, 1.35))],
+        [enemyAction(IntentKind.Attack, attackValue(enemy))],
+        [enemyAction(IntentKind.Prepare)],
+        [enemyAction(IntentKind.Heal, healValue(run))],
       ];
-    case 'boss':
-      return [[enemyAction('attack', attackValue(enemy)), enemyAction('attack', attackValue(enemy, 0.7))]];
-    case 'swarm':
+    case EnemyBehavior.Boss:
+      return [
+        [
+          enemyAction(IntentKind.Attack, attackValue(enemy)),
+          enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
+        ],
+      ];
+    case EnemyBehavior.Swarm:
     default:
       return [
-        [enemyAction('attack', attackValue(enemy))],
-        [enemyAction('prepare')],
-        [enemyAction('shield', shieldValue(run, 0.5))],
-        [enemyAction('attack', attackValue(enemy, 1.15))],
+        [enemyAction(IntentKind.Attack, attackValue(enemy))],
+        [enemyAction(IntentKind.Prepare)],
+        [enemyAction(IntentKind.Shield, shieldValue(run, 0.5))],
+        [enemyAction(IntentKind.Attack, attackValue(enemy, 1.15))],
       ];
   }
 }
 
 function reactionIntent(run: RunState, enemy: EnemyState): EnemyIntent {
   switch (enemy.behavior) {
-    case 'hunter':
-      return makeIntent([enemyAction('prepare')]);
-    case 'swarm':
-      return makeIntent([enemyAction('shield', shieldValue(run, 0.65))]);
-    case 'hexer':
-      return makeIntent([enemyAction('heal', healValue(run, 1.2))]);
-    case 'boss':
-      return makeIntent([enemyAction('heal', healValue(run, 1.35))]);
-    case 'tank':
+    case EnemyBehavior.Hunter:
+      return makeIntent([enemyAction(IntentKind.Prepare)]);
+    case EnemyBehavior.Swarm:
+      return makeIntent([enemyAction(IntentKind.Shield, shieldValue(run, 0.65))]);
+    case EnemyBehavior.Hexer:
+      return makeIntent([enemyAction(IntentKind.Heal, healValue(run, 1.2))]);
+    case EnemyBehavior.Boss:
+      return makeIntent([enemyAction(IntentKind.Heal, healValue(run, 1.35))]);
+    case EnemyBehavior.Tank:
     default:
-      return makeIntent([enemyAction('shield', shieldValue(run, 1.25))]);
+      return makeIntent([enemyAction(IntentKind.Shield, shieldValue(run, 1.25))]);
   }
 }
 
 export function ensureEnemyBehavior(enemy: EnemyState): void {
-  enemy.intent ??= { kind: 'idle', value: 0, label: 'Watching' };
+  enemy.intent ??= { kind: IntentKind.Idle, value: 0, label: 'Watching' };
   enemy.behavior ??= behaviorFor(enemy);
   enemy.behaviorStep ??= 0;
   enemy.damageTakenThisRound ??= 0;
@@ -132,36 +131,58 @@ function rollBossIntent(run: RunState, enemy: EnemyState, canReact: boolean): En
   if (canReact) {
     enemy.reactionCooldown = 2;
     patterns = inRange
-      ? [[enemyAction('attack', attackValue(enemy, 1.1)), enemyAction('heal', healValue(run, 1.35))]]
-      : [[enemyAction('heal', healValue(run, 1.35)), enemyAction('shield', shieldValue(run, 1.25))]];
+      ? [
+          [
+            enemyAction(IntentKind.Attack, attackValue(enemy, 1.1)),
+            enemyAction(IntentKind.Heal, healValue(run, 1.35)),
+          ],
+        ]
+      : [
+          [
+            enemyAction(IntentKind.Heal, healValue(run, 1.35)),
+            enemyAction(IntentKind.Shield, shieldValue(run, 1.25)),
+          ],
+        ];
   } else if (inRange && enemy.prepared) {
     patterns = [
-      [enemyAction('attack', attackValue(enemy, 2)), enemyAction('attack', attackValue(enemy, 0.7))],
-      [enemyAction('attack', attackValue(enemy, 2)), enemyAction('curse')],
-      [enemyAction('attack', attackValue(enemy, 2)), enemyAction('summon', 1)],
-      [enemyAction('attack', attackValue(enemy, 2)), enemyAction('shield', shieldValue(run))],
+      [
+        enemyAction(IntentKind.Attack, attackValue(enemy, 2)),
+        enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
+      ],
+      [enemyAction(IntentKind.Attack, attackValue(enemy, 2)), enemyAction(IntentKind.Curse)],
+      [enemyAction(IntentKind.Attack, attackValue(enemy, 2)), enemyAction(IntentKind.Summon, 1)],
+      [
+        enemyAction(IntentKind.Attack, attackValue(enemy, 2)),
+        enemyAction(IntentKind.Shield, shieldValue(run)),
+      ],
     ];
   } else if (inRange) {
     patterns = [
-      [enemyAction('attack', attackValue(enemy)), enemyAction('attack', attackValue(enemy, 0.7))],
-      [enemyAction('curse'), enemyAction('attack', attackValue(enemy))],
-      [enemyAction('summon', 1), enemyAction('attack', attackValue(enemy, 0.9))],
-      [enemyAction('prepare'), enemyAction('attack', attackValue(enemy, 2))],
-      [enemyAction('attack', attackValue(enemy, 1.15)), enemyAction('shield', shieldValue(run))],
-      [enemyAction('attack', attackValue(enemy)), enemyAction('prepare')],
+      [
+        enemyAction(IntentKind.Attack, attackValue(enemy)),
+        enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
+      ],
+      [enemyAction(IntentKind.Curse), enemyAction(IntentKind.Attack, attackValue(enemy))],
+      [enemyAction(IntentKind.Summon, 1), enemyAction(IntentKind.Attack, attackValue(enemy, 0.9))],
+      [enemyAction(IntentKind.Prepare), enemyAction(IntentKind.Attack, attackValue(enemy, 2))],
+      [
+        enemyAction(IntentKind.Attack, attackValue(enemy, 1.15)),
+        enemyAction(IntentKind.Shield, shieldValue(run)),
+      ],
+      [enemyAction(IntentKind.Attack, attackValue(enemy)), enemyAction(IntentKind.Prepare)],
     ];
   } else {
     patterns = [
-      [enemyAction('summon', 1), enemyAction('prepare')],
-      [enemyAction('curse'), enemyAction('shield', shieldValue(run, 1.25))],
-      [enemyAction('heal', healValue(run, 1.15)), enemyAction('summon', 1)],
-      [enemyAction('prepare'), enemyAction('shield', shieldValue(run))],
+      [enemyAction(IntentKind.Summon, 1), enemyAction(IntentKind.Prepare)],
+      [enemyAction(IntentKind.Curse), enemyAction(IntentKind.Shield, shieldValue(run, 1.25))],
+      [enemyAction(IntentKind.Heal, healValue(run, 1.15)), enemyAction(IntentKind.Summon, 1)],
+      [enemyAction(IntentKind.Prepare), enemyAction(IntentKind.Shield, shieldValue(run))],
     ];
   }
 
   const actions = patterns[enemy.behaviorStep % patterns.length] ?? [
-    enemyAction('attack', attackValue(enemy)),
-    enemyAction('attack', attackValue(enemy, 0.7)),
+    enemyAction(IntentKind.Attack, attackValue(enemy)),
+    enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
   ];
   enemy.behaviorStep = (enemy.behaviorStep + 1) % patterns.length;
   return makeIntent(actions);
@@ -177,14 +198,17 @@ export function rollEnemyIntent(run: RunState, enemy: EnemyState): EnemyIntent {
     enemy.hp < enemy.maxHp;
   enemy.damageTakenThisRound = 0;
   if (enemy.boss) return rollBossIntent(run, enemy, canReact);
-  if (enemy.prepared) return makeIntent([enemyAction('attack', attackValue(enemy, 2))]);
-  if (enemy.turnsSinceAttack >= 1) return makeIntent([enemyAction('attack', attackValue(enemy, 1.15))]);
+  if (enemy.prepared) return makeIntent([enemyAction(IntentKind.Attack, attackValue(enemy, 2))]);
+  if (enemy.turnsSinceAttack >= 1)
+    return makeIntent([enemyAction(IntentKind.Attack, attackValue(enemy, 1.15))]);
   if (canReact) {
     enemy.reactionCooldown = 2;
     return reactionIntent(run, enemy);
   }
   const pattern = behaviorPattern(run, enemy);
-  const actions = pattern[enemy.behaviorStep % pattern.length] ?? [enemyAction('attack', attackValue(enemy))];
+  const actions = pattern[enemy.behaviorStep % pattern.length] ?? [
+    enemyAction(IntentKind.Attack, attackValue(enemy)),
+  ];
   enemy.behaviorStep = (enemy.behaviorStep + 1) % pattern.length;
   return makeIntent(actions);
 }

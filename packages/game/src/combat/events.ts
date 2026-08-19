@@ -1,4 +1,5 @@
 import type { CombatAnimationEvent, CombatLogEntry, CombatState } from '../types.js';
+import { CombatLogTone } from '../types.js';
 
 const MAX_LOG_ENTRIES = 8;
 const MAX_ANIMATION_EVENTS = 32;
@@ -6,7 +7,7 @@ const MAX_ANIMATION_EVENTS = 32;
 export function pushCombatLog(
   combat: CombatState,
   message: string,
-  tone: CombatLogEntry['tone'] = 'normal',
+  tone: CombatLogEntry['tone'] = CombatLogTone.Normal,
   messageKey?: string,
   params?: Record<string, string | number>,
 ): void {

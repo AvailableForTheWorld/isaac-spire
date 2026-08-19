@@ -2,7 +2,9 @@ import { type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CARDS,
+  CardType,
   ITEMS,
+  ItemKind,
   canPlayCard,
   canPlayFusedAttack,
   getAttackFusionMaterialIds,
@@ -17,6 +19,7 @@ import {
   itemDescription,
   itemName,
 } from '../../../localize';
+import { CombatCardMode, CombatPileKind } from '../combat-ui.enums';
 
 export function CardView({
   run,
@@ -31,7 +34,7 @@ export function CardView({
 }: {
   run: RunState;
   instance: CardInstance;
-  mode: 'play' | 'discard';
+  mode: CombatCardMode;
   index: number;
   animating: boolean;
   targeting: boolean;
@@ -44,26 +47,26 @@ export function CardView({
   if (!definition) return null;
   const directPlayable = canPlayCard(run, instance.instanceId);
   const fusionStarter =
-    definition.type === 'attack'
+    definition.type === CardType.Attack
       ? getAttackFusionMaterialIds(run, instance.instanceId).find(
           (id) => canPlayFusedAttack(run, instance.instanceId, [id]).ok,
         )
       : undefined;
   const playable = directPlayable.ok || fusionStarter ? { ok: true } : directPlayable;
   const cooldown = run.combat?.cooldowns[instance.instanceId] ?? 0;
-  const isSkill = definition.type === 'skill';
+  const isSkill = definition.type === CardType.Skill;
   const item = definition.itemId
     ? ITEMS[definition.itemId]
     : Object.values(ITEMS).find((entry) => entry.skillCardId === definition.id);
   const maxCharge = isSkill && item ? Math.max(1, (item.chargeRounds ?? 3) - (instance.upgraded ? 1 : 0)) : 0;
   const charge = Math.max(0, maxCharge - cooldown);
-  const disabled = locked || (mode === 'play' ? !playable.ok : false);
+  const disabled = locked || (mode === CombatCardMode.Play ? !playable.ok : false);
   return (
     <button
-      className={`game-card ${definition.type} ${instance.upgraded ? 'upgraded' : ''} ${targeting ? 'targeting' : ''} ${animating ? (mode === 'discard' ? 'discarding-out' : 'playing-out') : ''}`}
+      className={`game-card ${definition.type} ${instance.upgraded ? 'upgraded' : ''} ${targeting ? 'targeting' : ''} ${animating ? (mode === CombatCardMode.Discard ? 'discarding-out' : 'playing-out') : ''}`}
       style={{ '--card-index': index } as CSSProperties}
       disabled={disabled}
-      onClick={mode === 'play' ? onPlay : onDiscard}
+      onClick={mode === CombatCardMode.Play ? onPlay : onDiscard}
       title={disabled && playable.reason ? errorText(t, playable.reason) : cardDescription(t, definition.id)}
     >
       <span className="card-cost">{definition.cost}</span>
@@ -84,7 +87,7 @@ export function CardView({
           {cooldown > 0 ? t('combat.recharging', { rounds: cooldown }) : t('combat.activeRetained')}
         </small>
       )}
-      {isSkill && mode === 'discard' && (
+      {isSkill && mode === CombatCardMode.Discard && (
         <small className="active-loss">{t('combat.activeDiscardWarning')}</small>
       )}
       {definition.exhaust && <small>{t('combat.oneOff')}</small>}
@@ -118,11 +121,11 @@ export function PileViewer({
   onClose,
 }: {
   run: RunState;
-  pile: 'draw' | 'discard';
+  pile: CombatPileKind;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const ids = run.combat?.[pile === 'draw' ? 'drawPile' : 'discardPile'] ?? [];
+  const ids = run.combat?.[pile === CombatPileKind.Draw ? 'drawPile' : 'discardPile'] ?? [];
   const cards = ids
     .map((id) => run.player.deck.find((card) => card.instanceId === id))
     .filter((card): card is CardInstance => Boolean(card));
@@ -132,7 +135,7 @@ export function PileViewer({
         className="pile-viewer"
         role="dialog"
         aria-modal="true"
-        aria-label={t(pile === 'draw' ? 'combat.drawPileTitle' : 'combat.discardPileTitle', {
+        aria-label={t(pile === CombatPileKind.Draw ? 'combat.drawPileTitle' : 'combat.discardPileTitle', {
           count: cards.length,
         })}
         onClick={(event) => event.stopPropagation()}
@@ -141,7 +144,7 @@ export function PileViewer({
           <div>
             <span>{t('combat.pileInspect')}</span>
             <h2>
-              {t(pile === 'draw' ? 'combat.drawPileTitle' : 'combat.discardPileTitle', {
+              {t(pile === CombatPileKind.Draw ? 'combat.drawPileTitle' : 'combat.discardPileTitle', {
                 count: cards.length,
               })}
             </h2>
@@ -150,7 +153,7 @@ export function PileViewer({
             ×
           </button>
         </header>
-        <p>{t(pile === 'draw' ? 'combat.drawPileHint' : 'combat.discardPileHint')}</p>
+        <p>{t(pile === CombatPileKind.Draw ? 'combat.drawPileHint' : 'combat.discardPileHint')}</p>
         <div className="pile-card-grid">
           {cards.map((instance, index) => {
             const definition = CARDS[instance.definitionId];
@@ -175,7 +178,7 @@ export function PileViewer({
 
 export function CombatItemRail({ run }: { run: RunState }) {
   const { t } = useTranslation();
-  const passives = run.player.items.filter((id) => ITEMS[id]?.kind === 'passive');
+  const passives = run.player.items.filter((id) => ITEMS[id]?.kind === ItemKind.Passive);
   return (
     <aside className="combat-item-rail" aria-label={t('combat.passiveItems')}>
       <strong>{t('combat.passiveItems')}</strong>

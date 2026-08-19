@@ -353,6 +353,18 @@ input:focus-visible {
   min-height: 100vh;
   padding-top: 4.5rem;
   background: #151211;
+  cursor: default;
+  caret-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.game-shell input,
+.game-shell textarea,
+.game-shell [contenteditable='true'] {
+  cursor: text;
+  caret-color: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .game-header {
   position: fixed;
@@ -1485,7 +1497,7 @@ html[lang^='zh']
   padding: 0.5rem 0.15rem 0.2rem;
   overflow-x: auto;
   overflow-y: hidden;
-  pointer-events: auto;
+  pointer-events: none;
   scrollbar-color: rgba(205, 169, 133, 0.45) rgba(18, 15, 14, 0.5);
   scrollbar-width: thin;
 }
@@ -1506,7 +1518,7 @@ html[lang^='zh']
   padding: 0.85rem 0.95rem;
   border: 1px solid rgba(205, 170, 145, 0.22);
   background: rgba(36, 29, 27, 0.78);
-  cursor: crosshair;
+  cursor: default;
   text-align: left;
   box-shadow: 0 8px 20px #0004;
   backdrop-filter: blur(2px);
@@ -1523,7 +1535,7 @@ html[lang^='zh']
   background: rgba(48, 40, 36, 0.68);
 }
 .enemy-strip .enemy-panel {
-  pointer-events: auto;
+  pointer-events: none;
 }
 .combat-stage-stack.deploying .enemy-strip,
 .combat-stage-stack.deploying .enemy-panel {
@@ -1541,8 +1553,10 @@ html[lang^='zh']
     0 12px 28px #0007;
 }
 .enemy-strip.targeting .enemy-panel.targetable {
+  pointer-events: auto;
   border-color: #75c8d7;
   background: rgba(36, 29, 27, 0.9);
+  cursor: crosshair;
   box-shadow:
     0 0 0 2px rgba(88, 190, 210, 0.28),
     0 0 24px rgba(88, 190, 210, 0.2);
@@ -1560,7 +1574,6 @@ html[lang^='zh']
   animation: none;
 }
 .enemy-strip.targeting .enemy-panel:not(.targetable) {
-  cursor: not-allowed;
   opacity: 0.42;
 }
 .enemy-panel > strong {
@@ -3228,7 +3241,7 @@ html[lang^='zh']
   overflow: hidden;
   background: radial-gradient(circle at 50% 46%, rgba(122, 82, 48, 0.4), rgba(9, 8, 8, 0.94) 44%);
   pointer-events: all;
-  animation: reward-overlay 1.9s ease both;
+  animation: reward-overlay-in 0.2s ease-out both;
 }
 .reward-rays {
   position: absolute;
@@ -3344,6 +3357,12 @@ html[lang^='zh']
   font-size: 0.72rem;
   font-weight: 800;
 }
+.reward-confirm {
+  position: relative;
+  min-width: 13rem;
+  margin-top: 1.5rem;
+  animation: reward-confirm-in 0.35s 1.05s ease-out backwards;
+}
 @keyframes chest-land {
   from {
     transform: translateY(-8rem) scale(0.7);
@@ -3379,14 +3398,15 @@ html[lang^='zh']
     opacity: 0;
   }
 }
-@keyframes reward-overlay {
-  0%,
-  88% {
-    opacity: 1;
-  }
-  100% {
+@keyframes reward-overlay-in {
+  from {
     opacity: 0;
-    visibility: hidden;
+  }
+}
+@keyframes reward-confirm-in {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
   }
 }
 
@@ -3516,6 +3536,17 @@ html[lang^='zh']
   font-weight: 800;
   letter-spacing: 0.12em;
 }
+.reward-strength {
+  display: inline-flex;
+  margin-top: 0.7rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(213, 176, 118, 0.3);
+  background: rgba(43, 33, 27, 0.62);
+  color: #d0ae72;
+  font-size: 0.55rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+}
 .choice-grid {
   display: flex;
   width: min(100%, 70rem);
@@ -3572,6 +3603,14 @@ html[lang^='zh']
   font-size: 0.48rem;
   font-weight: 800;
   letter-spacing: 0.11em;
+}
+.choice-card > small + small {
+  margin-top: 0.4rem;
+}
+.choice-card > small.reward-origins {
+  color: #9a7e67;
+  line-height: 1.45;
+  letter-spacing: 0.05em;
 }
 .choice-card .price {
   position: absolute;

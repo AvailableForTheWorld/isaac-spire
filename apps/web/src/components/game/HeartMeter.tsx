@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { RunState } from '@isaac-spire/game';
+import { HeartKind, type RunState } from '@isaac-spire/game';
 
 export function HeartMeter({ run, shield, armor }: { run: RunState; shield?: number; armor?: number }) {
   const { t } = useTranslation();
@@ -39,7 +39,7 @@ export function HeartMeter({ run, shield, armor }: { run: RunState; shield?: num
             key={heart.id}
             title={`${heart.hp}/${heart.maxHp} ${t('combat.hp')}`}
           >
-            <b>{heart.kind === 'soul' ? '♡' : '♥'}</b>
+            <b>{heart.kind === HeartKind.Soul ? '♡' : '♥'}</b>
             <small>
               {heart.hp}/{heart.maxHp}
             </small>

@@ -19,6 +19,7 @@ apps/api: HTTP controllers -> StoreService -> RunRepository port -> SQLite adapt
 
 ## Shared game package
 
+- `domain/enums.ts`: the single source of truth for persisted/API discriminants, including cards, targets, items, rooms, intents, animation events, choices, phases, and run status.
 - `domain/player.ts`: player, card, item, stat, and fusion contracts.
 - `domain/map.ts`: room, route node, connection, and floor-map contracts.
 - `domain/combat.ts`: enemies, intentions, grid rooms, combat state, and animation-domain events.
@@ -28,6 +29,7 @@ apps/api: HTTP controllers -> StoreService -> RunRepository port -> SQLite adapt
 - `combat/grid.ts`: collision, footprint math, cardinal BFS, visibility, and range strategies.
 - `combat/enemy-ai.ts`: behavior strategy selection and deterministic intent state machines.
 - `combat/events.ts`: bounded combat log and animation event buffers.
+- `rewards/room-rewards.ts`: exhaustive room reward budgets, quality curves, and selection metadata.
 - `state/migrations.ts`: pure, idempotent save-schema migrations.
 - `engine.ts`: compatibility facade and application commands. New cohesive algorithms belong in a domain module, not in this facade.
 
@@ -61,7 +63,7 @@ Registries reject duplicate keys during startup. Runtime lookup is `Map`-backed 
 
 ## Frontend
 
-`App.tsx` only mounts `GameApplication`. `GameApplication` selects a phase view. `useGameSession` owns persistence, transitions, error handling, and clear/reward timing. Feature views receive a snapshot plus a `RunCommand` dispatcher and do not call storage directly.
+`App.tsx` only mounts `GameApplication`. `GameApplication` selects a phase view. `useGameSession` owns persistence and error handling; reward confirmation is an explicit persisted game-state transition rather than a UI timer. Feature views receive a snapshot plus a `RunCommand` dispatcher and do not call storage directly.
 
 ```text
 features/
@@ -70,7 +72,7 @@ features/
   home/       start/resume screen
   map/        route presentation
   combat/     combat page, cards, fusion, targeting, timings
-  rewards/    room/floor choices and clear transition
+  rewards/    room/floor choices and blocking chest confirmation
   result/     victory/defeat
   stats/      run inspection
 components/game/  shared HUD and dialogs
@@ -103,3 +105,5 @@ Do not synchronize entire client snapshots between players. Add a `packages/prot
 4. Persist IDs and mutable state only—never copy complete item/enemy definitions into a run snapshot.
 5. Every new save shape gets an idempotent migration and a compatibility test.
 6. Every behavior change updates `CHANGELOG.md` and adds a focused domain test.
+7. Every categorical discriminator (`type`, `kind`, `target`, `phase`, `status`, `roomKind`, and similar fields) uses the enum from `domain/enums.ts`; do not repeat wire literals in content, engine, UI, API, or tests.
+8. Enum values are wire data. Preserve their serialized value for save/API compatibility; add a migration before changing or removing one.

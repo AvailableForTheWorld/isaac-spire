@@ -2,7 +2,13 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CARDS,
+  CardTarget,
+  CardType,
+  CombatAnimationKind,
   ITEMS,
+  IntentKind,
+  RoomKind,
+  RunPhase,
   canPlayCard,
   canPlayFusedAttack,
   confirmPlayerDeployment,
@@ -20,7 +26,6 @@ import {
   placePlayerForDeployment,
   playCard,
   playFusedAttack,
-  selectEnemy,
   useCombatBomb as deployCombatBomb,
   type CardInstance,
   type EnemyIntent,
@@ -37,19 +42,20 @@ import { CombatItemRail, CardView, PileViewer } from './components/CombatCards';
 import { FusionAttackModal } from './components/FusionAttackModal';
 import { TargetingGuide } from './components/TargetingGuide';
 import { combatAnimationDuration } from './animationTiming';
+import { ActiveDiscardScope, CombatCardMode, CombatPileKind } from './combat-ui.enums';
 
 function enemyIntentIcon(kind: EnemyIntent['kind']): string {
-  return kind === 'attack'
+  return kind === IntentKind.Attack
     ? '⚔'
-    : kind === 'shield'
+    : kind === IntentKind.Shield
       ? '⬡'
-      : kind === 'curse'
+      : kind === IntentKind.Curse
         ? '☠'
-        : kind === 'heal'
+        : kind === IntentKind.Heal
           ? '♥'
-          : kind === 'prepare'
+          : kind === IntentKind.Prepare
             ? '!'
-            : kind === 'summon'
+            : kind === IntentKind.Summon
               ? '♟'
               : '…';
 }
@@ -63,7 +69,7 @@ export function CombatView({
   const { t } = useTranslation();
   const [animatingCardId, setAnimatingCardId] = useState<string>();
   const [animationLocked, setAnimationLocked] = useState(false);
-  const [viewingPile, setViewingPile] = useState<'draw' | 'discard'>();
+  const [viewingPile, setViewingPile] = useState<CombatPileKind>();
   const [targetingCardId, setTargetingCardId] = useState<string>();
   const [fusionAttackId, setFusionAttackId] = useState<string>();
   const [fusionItemIds, setFusionItemIds] = useState<string[]>([]);
@@ -71,12 +77,12 @@ export function CombatView({
   const [hoveredTargetId, setHoveredTargetId] = useState<string>();
   const [bombTargeting, setBombTargeting] = useState(false);
   const [pendingActiveDiscard, setPendingActiveDiscard] = useState<
-    { type: 'single'; instanceId: string } | { type: 'all' }
+    { type: ActiveDiscardScope.Single; instanceId: string } | { type: ActiveDiscardScope.All }
   >();
   const combat = run.combat!;
   const deploymentPending = Boolean(combat.deploymentPending);
   const lastAnimationSequence = useRef(combat.animationSequence);
-  const discardMode = run.phase === 'discard';
+  const discardMode = run.phase === RunPhase.Discard;
   const handCards = combat.hand
     .map((id) => run.player.deck.find((card) => card.instanceId === id))
     .filter((card): card is CardInstance => Boolean(card));
@@ -96,7 +102,9 @@ export function CombatView({
     const events = combat.animationEvents.filter((event) => event.sequence > lastAnimationSequence.current);
     lastAnimationSequence.current = combat.animationSequence;
     if (!events.length) return;
-    const blockingEvents = events.filter((event) => event.kind !== 'move' || event.sourceId !== 'isaac');
+    const blockingEvents = events.filter(
+      (event) => event.kind !== CombatAnimationKind.Move || event.sourceId !== 'isaac',
+    );
     if (!blockingEvents.length) return;
     const duration = combatAnimationDuration(blockingEvents);
     setAnimationLocked(true);
@@ -166,7 +174,7 @@ export function CombatView({
   };
   const discardAll = () => {
     if (activeSkillCardId && handCards.some((card) => card.definitionId === activeSkillCardId)) {
-      setPendingActiveDiscard({ type: 'all' });
+      setPendingActiveDiscard({ type: ActiveDiscardScope.All });
       return;
     }
     discardAllCards();
@@ -182,7 +190,7 @@ export function CombatView({
             <h1>
               {deploymentPending
                 ? t('combat.deploymentTitle')
-                : combat.roomKind === 'boss'
+                : combat.roomKind === RoomKind.Boss
                   ? floorBoss(t, run.floorIndex)
                   : t('combat.round', { round: combat.round })}
             </h1>
@@ -275,9 +283,9 @@ export function CombatView({
               const intendedActions = enemy.intent.actions?.length
                 ? enemy.intent.actions
                 : [{ kind: enemy.intent.kind, value: enemy.intent.value }];
-              const intendedAttacks = intendedActions.filter((entry) => entry.kind === 'attack');
+              const intendedAttacks = intendedActions.filter((entry) => entry.kind === IntentKind.Attack);
               const weakenedActions = Array.from({ length: enemy.boss ? 2 : 1 }, (_, index) => ({
-                kind: 'attack' as const,
+                kind: IntentKind.Attack,
                 value: Math.max(
                   1,
                   Math.round(
@@ -287,10 +295,15 @@ export function CombatView({
               }));
               const shownIntent: EnemyIntent =
                 (enemy.staggeredTurns ?? 0) > 0
-                  ? { kind: 'idle', value: 0, label: '', actions: [{ kind: 'idle', value: 0 }] }
+                  ? {
+                      kind: IntentKind.Idle,
+                      value: 0,
+                      label: '',
+                      actions: [{ kind: IntentKind.Idle, value: 0 }],
+                    }
                   : enemy.cursedTurns > 0
                     ? {
-                        kind: 'attack',
+                        kind: IntentKind.Attack,
                         value: weakenedActions[0]!.value,
                         label: '',
                         actions: weakenedActions,
@@ -311,7 +324,7 @@ export function CombatView({
               const identityNumber = duplicateEnemies.length > 1 ? duplicateIndex : undefined;
               const targetable = Boolean(
                 targetingCardId &&
-                (targetingDefinition?.type === 'attack'
+                (targetingDefinition?.type === CardType.Attack
                   ? pendingFusionItemIds.length
                     ? canPlayFusedAttack(run, targetingCardId, pendingFusionItemIds, enemy.instanceId).ok
                     : canPlayCard(run, targetingCardId, enemy.instanceId).ok
@@ -321,13 +334,7 @@ export function CombatView({
                 <button
                   key={enemy.instanceId}
                   data-enemy-instance-id={enemy.instanceId}
-                  disabled={
-                    deploymentPending ||
-                    bombTargeting ||
-                    enemy.hp <= 0 ||
-                    animationLocked ||
-                    Boolean(targetingCardId && !targetable)
-                  }
+                  disabled={!targetable}
                   className={`enemy-panel ${selected?.instanceId === enemy.instanceId ? 'selected' : ''} ${targetable ? 'targetable' : ''} ${hoveredTargetId === enemy.instanceId ? 'aimed' : ''} ${enemy.hp <= 0 ? 'dead' : ''} ${inRange ? 'in-range' : 'out-of-range'}`}
                   onPointerEnter={() => {
                     if (targetable) setHoveredTargetId(enemy.instanceId);
@@ -342,22 +349,19 @@ export function CombatView({
                     setHoveredTargetId((current) => (current === enemy.instanceId ? undefined : current))
                   }
                   onClick={() => {
-                    if (targetingCardId) {
-                      const cardId = targetingCardId;
-                      const fusedIds = [...pendingFusionItemIds];
-                      setTargetingCardId(undefined);
-                      setPendingFusionItemIds([]);
-                      setHoveredTargetId(undefined);
-                      animateCardAction(cardId, (state) =>
-                        targetingDefinition?.type === 'attack'
-                          ? fusedIds.length
-                            ? playFusedAttack(state, cardId, fusedIds, enemy.instanceId)
-                            : playCard(state, cardId, enemy.instanceId)
-                          : playCard(state, cardId, enemy.instanceId),
-                      );
-                    } else {
-                      commit((state) => selectEnemy(state, enemy.instanceId));
-                    }
+                    if (!targetingCardId || !targetable) return;
+                    const cardId = targetingCardId;
+                    const fusedIds = [...pendingFusionItemIds];
+                    setTargetingCardId(undefined);
+                    setPendingFusionItemIds([]);
+                    setHoveredTargetId(undefined);
+                    animateCardAction(cardId, (state) =>
+                      targetingDefinition?.type === CardType.Attack
+                        ? fusedIds.length
+                          ? playFusedAttack(state, cardId, fusedIds, enemy.instanceId)
+                          : playCard(state, cardId, enemy.instanceId)
+                        : playCard(state, cardId, enemy.instanceId),
+                    );
                   }}
                 >
                   {targetable && (
@@ -451,10 +455,10 @@ export function CombatView({
             </strong>
           </div>
           <div className="pile-counts">
-            <button onClick={() => setViewingPile('draw')}>
+            <button onClick={() => setViewingPile(CombatPileKind.Draw)}>
               {t('combat.draw', { count: combat.drawPile.length })}
             </button>
-            <button onClick={() => setViewingPile('discard')}>
+            <button onClick={() => setViewingPile(CombatPileKind.Discard)}>
               {t('combat.discard', { count: combat.discardPile.length })}
             </button>
             <span>{t('combat.deck', { count: run.player.deck.length })}</span>
@@ -466,14 +470,14 @@ export function CombatView({
               key={instance.instanceId}
               run={run}
               instance={instance}
-              mode={discardMode ? 'discard' : 'play'}
+              mode={discardMode ? CombatCardMode.Discard : CombatCardMode.Play}
               index={index}
               animating={animatingCardId === instance.instanceId}
               targeting={targetingCardId === instance.instanceId}
               locked={deploymentPending || bombTargeting || Boolean(animatingCardId) || animationLocked}
               onPlay={() => {
                 const definition = CARDS[instance.definitionId];
-                if (definition?.type === 'attack') {
+                if (definition?.type === CardType.Attack) {
                   if (targetingCardId === instance.instanceId) {
                     setTargetingCardId(undefined);
                     setPendingFusionItemIds([]);
@@ -485,14 +489,14 @@ export function CombatView({
                   if (getAttackFusionMaterialIds(run, instance.instanceId).length) {
                     setFusionAttackId(instance.instanceId);
                     setFusionItemIds([]);
-                  } else if (definition.target === 'enemy') {
+                  } else if (definition.target === CardTarget.Enemy) {
                     setTargetingCardId(instance.instanceId);
                   } else {
                     animateCardAction(instance.instanceId, (state) => playCard(state, instance.instanceId));
                   }
                   return;
                 }
-                if (definition?.target === 'enemy' && definition.type === 'hex') {
+                if (definition?.target === CardTarget.Enemy && definition.type === CardType.Hex) {
                   setTargetingCardId((current) =>
                     current === instance.instanceId ? undefined : instance.instanceId,
                   );
@@ -503,7 +507,10 @@ export function CombatView({
               }}
               onDiscard={() => {
                 if (instance.definitionId === activeSkillCardId) {
-                  setPendingActiveDiscard({ type: 'single', instanceId: instance.instanceId });
+                  setPendingActiveDiscard({
+                    type: ActiveDiscardScope.Single,
+                    instanceId: instance.instanceId,
+                  });
                   return;
                 }
                 animateCardAction(instance.instanceId, (state) => discardCard(state, instance.instanceId));
@@ -612,7 +619,7 @@ export function CombatView({
             const definition = getCardDefinition(run, attackId);
             setFusionAttackId(undefined);
             setFusionItemIds([]);
-            if (definition?.target === 'enemy') {
+            if (definition?.target === CardTarget.Enemy) {
               setPendingFusionItemIds(selectedFusionIds);
               setTargetingCardId(attackId);
             } else {
@@ -638,13 +645,15 @@ export function CombatView({
             },
           ]}
           confirmLabel={t(
-            pendingActiveDiscard.type === 'all' ? 'confirmation.discardAll' : 'confirmation.discardActive',
+            pendingActiveDiscard.type === ActiveDiscardScope.All
+              ? 'confirmation.discardAll'
+              : 'confirmation.discardActive',
           )}
           onCancel={() => setPendingActiveDiscard(undefined)}
           onConfirm={() => {
             const pending = pendingActiveDiscard;
             setPendingActiveDiscard(undefined);
-            if (pending.type === 'all') discardAllCards();
+            if (pending.type === ActiveDiscardScope.All) discardAllCards();
             else animateCardAction(pending.instanceId, (state) => discardCard(state, pending.instanceId));
           }}
         />

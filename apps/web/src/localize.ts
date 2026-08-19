@@ -1,14 +1,19 @@
 import type { TFunction } from 'i18next';
 import {
   CARDS,
+  ChoiceAction,
+  ChoiceKind,
+  DealType,
   FLOORS,
   ITEMS,
+  RewardContext,
+  RoomKind,
+  UpgradeKind,
   type CardType,
   type ChoiceState,
   type EnemyIntent,
   type EnemyState,
   type RewardOption,
-  type RoomKind,
   type RunState,
 } from '@isaac-spire/game';
 
@@ -80,7 +85,7 @@ export function rewardText(t: TFunction, reward: string): string {
   if (match) return t('rewards.soul', { amount: Number(match[1]), count: Number(match[1]) });
   match = reward.match(/^(\d+) black hearts?$/);
   if (match) return t('rewards.black', { amount: Number(match[1]), count: Number(match[1]) });
-  const upgrade = (['damage', 'heart', 'armor', 'vitality', 'speed', 'skill'] as const).find(
+  const upgrade = Object.values(UpgradeKind).find(
     (key) => t(`upgrades.${key}.name`, { lng: 'en' }) === reward,
   );
   return upgrade ? t(`upgrades.${upgrade}.name`) : reward;
@@ -98,23 +103,25 @@ export function choiceTitle(t: TFunction, run: RunState): string {
   const choice = run.choice;
   if (!choice) return '';
   const room = currentRoomKind(run);
-  if (choice.kind === 'upgrade') return t('choice.floorCleared', { floor: floorName(t, run.floorIndex) });
-  if (choice.kind === 'deal')
-    return t(choice.dealType === 'angel' ? 'choice.angelGateTitle' : 'choice.devilGateTitle');
-  if (choice.dealType) return t(choice.dealType === 'angel' ? 'choice.angelRoom' : 'choice.devilRoom');
-  if (choice.kind === 'shop') return t('choice.shopTitle');
-  if (choice.kind === 'sacrifice') return t('choice.sacrificeTitle');
-  if (choice.rewardContext === 'floor-start')
+  if (choice.kind === ChoiceKind.Upgrade)
+    return t('choice.floorCleared', { floor: floorName(t, run.floorIndex) });
+  if (choice.kind === ChoiceKind.Deal)
+    return t(choice.dealType === DealType.Angel ? 'choice.angelGateTitle' : 'choice.devilGateTitle');
+  if (choice.dealType) return t(choice.dealType === DealType.Angel ? 'choice.angelRoom' : 'choice.devilRoom');
+  if (choice.kind === ChoiceKind.Shop) return t('choice.shopTitle');
+  if (choice.kind === ChoiceKind.Sacrifice) return t('choice.sacrificeTitle');
+  if (choice.rewardContext === RewardContext.FloorStart)
     return t('choice.floorStartTitle', { floor: floorName(t, run.floorIndex) });
-  if (choice.rewardContext === 'large-room') return t('choice.largeRoomTitle');
-  if (room === 'treasure') return t('choice.treasureTitle');
-  if (room === 'planetarium') return t('choice.planetariumTitle');
-  if (room === 'curse') return t('choice.curseTitle');
-  if (room === 'secret') return t('choice.secretTitle');
-  if (room === 'super-secret') return t('choice.superSecretTitle');
-  if (run.combat?.roomKind === 'boss') return t('choice.bossTitle', { boss: floorBoss(t, run.floorIndex) });
-  if (run.combat?.roomKind === 'elite') return t('choice.eliteTitle');
-  if (choice.kind === 'card') return t('choice.clearedTitle');
+  if (choice.rewardContext === RewardContext.LargeRoom) return t('choice.largeRoomTitle');
+  if (room === RoomKind.Treasure) return t('choice.treasureTitle');
+  if (room === RoomKind.Planetarium) return t('choice.planetariumTitle');
+  if (room === RoomKind.Curse) return t('choice.curseTitle');
+  if (room === RoomKind.Secret) return t('choice.secretTitle');
+  if (room === RoomKind.SuperSecret) return t('choice.superSecretTitle');
+  if (run.combat?.roomKind === RoomKind.Boss)
+    return t('choice.bossTitle', { boss: floorBoss(t, run.floorIndex) });
+  if (run.combat?.roomKind === RoomKind.Elite) return t('choice.eliteTitle');
+  if (choice.kind === ChoiceKind.Card) return t('choice.clearedTitle');
   return choice.title;
 }
 
@@ -123,34 +130,36 @@ export function choiceSubtitle(t: TFunction, run: RunState): string {
   if (!choice) return '';
   const room = currentRoomKind(run);
   const reward = rewardsText(t, run);
-  if (choice.kind === 'upgrade')
+  if (choice.kind === ChoiceKind.Upgrade)
     return t(run.floorIndex === 5 ? 'choice.finalBlessing' : 'choice.floorBlessing');
-  if (choice.kind === 'deal') return t('choice.gateSubtitle');
+  if (choice.kind === ChoiceKind.Deal) return t('choice.gateSubtitle');
   if (choice.dealType)
-    return t(choice.dealType === 'angel' ? 'choice.angelSubtitle' : 'choice.devilSubtitle');
-  if (choice.kind === 'shop') return t('choice.shopSubtitle', { coins: run.player.coins });
-  if (choice.kind === 'sacrifice') return t('choice.sacrificeSubtitle');
-  if (choice.rewardContext === 'floor-start') return t('choice.floorStartSubtitle');
-  if (choice.rewardContext === 'large-room') return t('choice.largeRoomSubtitle', { reward });
-  if (room === 'treasure') return t('choice.treasureSubtitle');
-  if (room === 'planetarium') return t('choice.planetariumSubtitle');
-  if (room === 'curse') {
+    return t(choice.dealType === DealType.Angel ? 'choice.angelSubtitle' : 'choice.devilSubtitle');
+  if (choice.kind === ChoiceKind.Shop) return t('choice.shopSubtitle', { coins: run.player.coins });
+  if (choice.kind === ChoiceKind.Sacrifice) return t('choice.sacrificeSubtitle');
+  if (choice.rewardContext === RewardContext.FloorStart) return t('choice.floorStartSubtitle');
+  if (choice.rewardContext === RewardContext.LargeRoom) return t('choice.largeRoomSubtitle', { reward });
+  if (room === RoomKind.Treasure) return t('choice.treasureSubtitle');
+  if (room === RoomKind.Planetarium) return t('choice.planetariumSubtitle');
+  if (room === RoomKind.Curse) {
     const hp = Number(choice.subtitle.match(/\d+/)?.[0] ?? 0);
     return t('choice.curseSubtitle', { hp });
   }
-  if (room === 'secret') return t('choice.secretSubtitle');
-  if (room === 'super-secret') return t('choice.superSecretSubtitle');
-  if (run.combat?.roomKind === 'boss') return t('choice.bossSubtitle', { reward });
-  if (run.combat?.roomKind === 'elite') return t('choice.eliteSubtitle', { reward });
-  if (choice.kind === 'card') return t('choice.clearedSubtitle', { reward });
+  if (room === RoomKind.Secret) return t('choice.secretSubtitle');
+  if (room === RoomKind.SuperSecret) return t('choice.superSecretSubtitle');
+  if (run.combat?.roomKind === RoomKind.Boss) return t('choice.bossSubtitle', { reward });
+  if (run.combat?.roomKind === RoomKind.Elite) return t('choice.eliteSubtitle', { reward });
+  if (choice.kind === ChoiceKind.Card) return t('choice.clearedSubtitle', { reward });
   return choice.subtitle;
 }
 
 function actionKey(option: RewardOption, choice: ChoiceState): string {
-  if (option.action === 'enter-deal') return choice.dealType === 'angel' ? 'enterAngel' : 'enterDevil';
-  if (option.action === 'skip-deal') return choice.dealType === 'angel' ? 'skipAngel' : 'skipDevil';
-  if (option.action === 'sacrifice') return 'sacrifice';
-  if (option.action === 'leave') return choice.kind === 'shop' ? 'leaveShop' : 'walkAway';
+  if (option.action === ChoiceAction.EnterDeal)
+    return choice.dealType === DealType.Angel ? 'enterAngel' : 'enterDevil';
+  if (option.action === ChoiceAction.SkipDeal)
+    return choice.dealType === DealType.Angel ? 'skipAngel' : 'skipDevil';
+  if (option.action === ChoiceAction.Sacrifice) return 'sacrifice';
+  if (option.action === ChoiceAction.Leave) return choice.kind === ChoiceKind.Shop ? 'leaveShop' : 'walkAway';
   return 'walkAway';
 }
 
@@ -167,7 +176,7 @@ export function optionLabel(t: TFunction, option: RewardOption, choice: ChoiceSt
 export function optionDescription(t: TFunction, option: RewardOption, choice: ChoiceState): string {
   if (option.itemId) {
     const description = itemDescription(t, option.itemId);
-    return choice.dealType === 'devil' ? `${description} ${t('choice.devilCost')}` : description;
+    return choice.dealType === DealType.Devil ? `${description} ${t('choice.devilCost')}` : description;
   }
   if (option.cardId) return cardDescription(t, option.cardId);
   if (option.upgrade) return t(`upgrades.${option.upgrade}.description`);

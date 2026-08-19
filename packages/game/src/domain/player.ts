@@ -1,7 +1,14 @@
-export type CardType = 'attack' | 'skill' | 'item' | 'recovery' | 'shield' | 'hex' | 'tarot' | 'curse';
-export type AttackMode = 'basic' | 'knife' | 'brimstone' | 'tech-x';
-export type HeartKind = 'soul' | 'black';
-export type ItemKind = 'active' | 'passive';
+import type {
+  AttackMode,
+  CardTarget,
+  CardType,
+  CharacterId,
+  HeartKind,
+  ItemKind,
+  RewardPool,
+  RewardQuality,
+  UnlockEvent,
+} from './enums.js';
 
 export interface CharacterStats {
   baseDamage: number;
@@ -35,7 +42,7 @@ export interface PocketHeart {
 }
 
 export interface PlayerState {
-  character: 'isaac';
+  character: CharacterId;
   redContainers: number;
   redHp: number;
   pocketHearts: PocketHeart[];
@@ -56,10 +63,12 @@ export interface CardDefinition {
   description: string;
   value?: number;
   hits?: number;
-  target: 'enemy' | 'all-enemies' | 'self' | 'none';
+  target: CardTarget;
   exhaust?: boolean;
   itemId?: string;
   icon: string;
+  quality: RewardQuality;
+  rewardPools: RewardPool[];
   rewardWeight?: number;
 }
 
@@ -113,27 +122,16 @@ export interface ItemDefinition {
   id: string;
   name: string;
   kind: ItemKind;
-  pool: Array<
-    | 'treasure'
-    | 'shop'
-    | 'boss'
-    | 'devil'
-    | 'angel'
-    | 'planetarium'
-    | 'secret'
-    | 'elite'
-    | 'curse'
-    | 'large-room'
-  >;
+  pool: RewardPool[];
   description: string;
   icon: string;
-  quality: 1 | 2 | 3 | 4;
+  quality: RewardQuality;
   chargeRounds?: number;
   skillCardId?: string;
   combatCard?: boolean;
   effects?: ItemEffect[];
   fusion?: AttackFusionEffect;
-  unlock?: { event: string; label: string };
+  unlock?: { event: UnlockEvent; label: string };
 }
 
 export interface FloorDefinition {

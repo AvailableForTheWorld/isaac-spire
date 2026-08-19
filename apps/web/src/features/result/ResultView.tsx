@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
-import { ITEMS, type RunState } from '@isaac-spire/game';
+import { ITEMS, RunPhase, type RunState } from '@isaac-spire/game';
 import { unlockText } from '../../localize';
 
 export function ResultView({ run, onHome }: { run: RunState; onHome: () => void }) {
   const { t } = useTranslation();
-  const won = run.phase === 'victory';
+  const won = run.phase === RunPhase.Victory;
   return (
     <main className={`result-page ${won ? 'won' : 'lost'}`}>
       <div className="result-symbol">{won ? '♚' : '†'}</div>

@@ -1,8 +1,15 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CARDS,
+  ChoiceAction,
+  ChoiceKind,
+  DealType,
   ITEMS,
+  ItemKind,
+  ROOM_REWARD_PROFILES,
+  RewardContext,
+  RewardOptionType,
   chooseOption,
   itemUsesCombatCard,
   skipChoice,
@@ -17,7 +24,6 @@ import {
   itemName,
   optionDescription,
   optionLabel,
-  rewardText,
   rewardsText,
 } from '../../localize';
 
@@ -29,16 +35,17 @@ function ChoiceCard({
 }: {
   option: RewardOption;
   run: RunState;
-  dealType?: 'devil' | 'angel';
+  dealType?: DealType;
   onChoose: () => void;
 }) {
   const { t } = useTranslation();
   const choice = run.choice!;
   const unaffordable =
     (option.price ?? 0) > run.player.coins ||
-    (dealType === 'devil' && option.type === 'item' && run.player.redContainers <= 1);
+    (dealType === DealType.Devil && option.type === RewardOptionType.Item && run.player.redContainers <= 1);
   const offeredCard = option.cardId ? CARDS[option.cardId] : undefined;
   const offeredCardItem = offeredCard?.itemId ? ITEMS[offeredCard.itemId] : undefined;
+  const rewardPools = option.itemId ? ITEMS[option.itemId]?.pool : offeredCard?.rewardPools;
   return (
     <button
       className={`choice-card ${option.type} ${option.sold ? 'sold' : ''}`}
@@ -49,28 +56,35 @@ function ChoiceCard({
       <b>{option.icon}</b>
       <strong>{optionLabel(t, option, choice)}</strong>
       <p>{optionDescription(t, option, choice)}</p>
-      {option.type === 'item' && option.itemId && (
+      {option.type === RewardOptionType.Item && option.itemId && (
         <small>
           {t(`itemKinds.${ITEMS[option.itemId]?.kind}`)} ·{' '}
           {t('choice.quality', { quality: ITEMS[option.itemId]?.quality })}
-          {ITEMS[option.itemId]?.kind === 'passive'
+          {ITEMS[option.itemId]?.kind === ItemKind.Passive
             ? ` · ${t(itemUsesCombatCard(ITEMS[option.itemId]!) ? 'choice.addsItemCard' : 'choice.permanentItem')}`
             : ''}
         </small>
       )}
-      {option.type === 'card' && offeredCard && (
+      {option.type === RewardOptionType.Card && offeredCard && (
         <small>
-          {t('choice.cardLabel', { type: cardTypeName(t, offeredCard.type) })}
-          {offeredCardItem ? ` · ${t('choice.quality', { quality: offeredCardItem.quality })}` : ''}
+          {t('choice.cardLabel', { type: cardTypeName(t, offeredCard.type) })} ·{' '}
+          {t('choice.quality', { quality: offeredCardItem?.quality ?? offeredCard.quality })}
         </small>
       )}
-      {choice.rewardContext === 'floor-start' && option.type === 'resource' && (
+      {rewardPools && rewardPools.length > 0 && (
+        <small className="reward-origins">
+          {t('choice.rewardOrigins', {
+            rooms: rewardPools.map((pool) => t(`rewardPools.${pool}`)).join(' / '),
+          })}
+        </small>
+      )}
+      {choice.rewardContext === RewardContext.FloorStart && option.type === RewardOptionType.Resource && (
         <small>{t('choice.assetPack')}</small>
       )}
       {option.sold && <em>{t('choice.sold')}</em>}
       {unaffordable && !option.sold && (
         <em>
-          {dealType === 'devil' && run.player.redContainers <= 1
+          {dealType === DealType.Devil && run.player.redContainers <= 1
             ? t('choice.needContainers')
             : t('choice.notEnoughCoins')}
         </em>
@@ -79,62 +93,17 @@ function ChoiceCard({
   );
 }
 
-function rewardIcon(reward: string): string {
-  if (/¢$/.test(reward)) return '¢';
-  if (/bomb/.test(reward)) return '●';
-  if (/key/.test(reward)) return '⚿';
-  if (/black heart/.test(reward)) return '♥';
-  if (/soul heart/.test(reward)) return '♡';
-  if (/red-heart/.test(reward)) return '♥';
-  return '✦';
-}
-
-function RoomRewardReveal({ run }: { run: RunState }) {
-  const { t } = useTranslation();
-  return (
-    <div className="reward-reveal" role="status" aria-live="assertive">
-      <div className="reward-rays" />
-      <div className="reward-chest" aria-hidden="true">
-        <i />
-        <b>◆</b>
-      </div>
-      <div className="reward-title">
-        <span>{t('rewardReveal.cleared')}</span>
-        <strong>{t('rewardReveal.open')}</strong>
-      </div>
-      <div className="reward-drops">
-        {run.lastReward.map((reward, index) => (
-          <div key={`${reward}-${index}`} style={{ '--reward-index': index } as CSSProperties}>
-            <b>{rewardIcon(reward)}</b>
-            <span>{rewardText(t, reward)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function ChoiceView({
   run,
   commit,
-  revealRoomReward = false,
 }: {
   run: RunState;
   commit: (action: (state: RunState) => RunState) => void;
-  revealRoomReward?: boolean;
 }) {
   const { t } = useTranslation();
   const [choosingId, setChoosingId] = useState<string>();
   const [pendingActiveChoice, setPendingActiveChoice] = useState<RewardOption>();
   const choice = run.choice!;
-  const [revealingReward, setRevealingReward] = useState(
-    Boolean(revealRoomReward || (run.combat && run.lastReward.length)),
-  );
-  useEffect(() => {
-    if (!revealingReward) return;
-    const timer = window.setTimeout(() => setRevealingReward(false), 1900);
-    return () => window.clearTimeout(timer);
-  }, [revealingReward]);
   const beginChoice = (option: RewardOption) => {
     if (choosingId) return;
     setChoosingId(option.id);
@@ -146,7 +115,7 @@ export function ChoiceView({
   const requestChoice = (option: RewardOption) => {
     if (choosingId) return;
     const offeredItem = option.itemId ? ITEMS[option.itemId] : undefined;
-    if (offeredItem?.kind === 'active' && run.player.activeItemId) {
+    if (offeredItem?.kind === ItemKind.Active && run.player.activeItemId) {
       setPendingActiveChoice(option);
       return;
     }
@@ -154,16 +123,26 @@ export function ChoiceView({
   };
   const currentActiveItem = run.player.activeItemId ? ITEMS[run.player.activeItemId] : undefined;
   const pendingReplacement = pendingActiveChoice?.itemId ? ITEMS[pendingActiveChoice.itemId] : undefined;
+  const rewardProfile = choice.rewardPool ? ROOM_REWARD_PROFILES[choice.rewardPool] : undefined;
+  const hasExplicitLeaveOption = choice.options.some((option) => option.action === ChoiceAction.Leave);
   return (
     <main className={`choice-page ${choice.dealType ?? choice.kind}`}>
-      {revealingReward && <RoomRewardReveal run={run} />}
       <div className="choice-aura" />
       <section className="choice-copy">
         <p className="eyebrow">
-          {choice.kind === 'upgrade' ? t('choice.floorReward') : t('choice.chooseReward')}
+          {choice.kind === ChoiceKind.Upgrade ? t('choice.floorReward') : t('choice.chooseReward')}
         </p>
         <h1>{choiceTitle(t, run)}</h1>
         <p>{choiceSubtitle(t, run)}</p>
+        {choice.rewardPool && rewardProfile && (
+          <div className="reward-strength">
+            {t('choice.rewardStrength', {
+              pool: t(`rewardPools.${choice.rewardPool}`),
+              strength: rewardProfile.strength,
+              label: t(`rewardStrength.${rewardProfile.strength}`),
+            })}
+          </div>
+        )}
         {run.lastReward.length > 0 && (
           <div className="drop-notice">{t('choice.roomDrop', { rewards: rewardsText(t, run) })}</div>
         )}
@@ -180,12 +159,12 @@ export function ChoiceView({
           </div>
         ))}
       </section>
-      {choice.canSkip && (
+      {choice.canSkip && !hasExplicitLeaveOption && (
         <button className="text-button choice-skip" onClick={() => commit(skipChoice)}>
           {t('choice.leaveEmpty')} <span>→</span>
         </button>
       )}
-      {choice.kind === 'shop' && (
+      {choice.kind === ChoiceKind.Shop && (
         <div className="shop-purse">
           {t('choice.shopPurse')} <strong>{run.player.coins}¢</strong>
         </div>

@@ -26,11 +26,16 @@ The pre-commit hook calls the repository-local `lint-staged` binary directly, so
 ## Adding content
 
 1. Add the definition to a focused content pack.
-2. Use stable IDs; persisted snapshots store IDs.
-3. Register the pack through `createContentCatalog`.
-4. Add translations by ID rather than embedding UI text in combat rules.
-5. Add deterministic tests for pool eligibility, unlock rules, and synergy math.
-6. Update `CHANGELOG.md`.
+2. Import categorical values such as `CardType`, `CardTarget`, `ItemKind`, `RewardPool`, and `RoomKind`; never duplicate their string wire values.
+3. Use stable IDs; persisted snapshots store IDs.
+4. Register the pack through `createContentCatalog`.
+5. Add translations by ID rather than embedding UI text in combat rules.
+6. Add deterministic tests for pool eligibility, unlock rules, and synergy math.
+7. Update `CHANGELOG.md`.
+
+## Domain enums
+
+`packages/game/src/domain/enums.ts` owns every shared discriminant used by saves or API payloads. Add a member there before introducing a new category. Keep frontend-only view states in a feature-local enum module, as combat card and pile modes do. Enum values are stable wire values, so renaming a TypeScript member is safe but changing its value requires a save migration and compatibility test.
 
 ## Adding enemy behavior
 

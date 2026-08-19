@@ -17,6 +17,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 - Sass, UnoCSS, ESLint, Prettier, Husky, lint-staged, EditorConfig, reduced-motion support, and response compression.
 - Architecture, storage, and development documentation.
 - A package-manager-independent Husky hook that invokes the repository-local `lint-staged` binary in Git Bash and editor Git integrations, with LF hook line endings pinned on Windows.
+- Exhaustive reward profiles for normal clears, special rooms, deals, future rare rooms, and every current card/item pool assignment.
+- A blocking room-drop chest that appears immediately after the final enemy dies and must be confirmed before card selection.
 
 ### Changed
 
@@ -24,6 +26,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 - `GET /api/runs` returns lightweight `RunSummary` records; `GET /api/runs/active/latest` loads only the resumable snapshot.
 - Battle/grid helpers preserve the original root exports while living in cohesive modules.
 - Styling moved from a flat CSS entry to Sass while retaining the existing visual language.
+- In-run surfaces prevent text selection and text carets while preserving keyboard focus and editable-control behavior.
+- Room item/card rolls now use room-specific quality curves instead of one global rarity table.
+- Reward pools, contexts, qualities, strengths, and result kinds now use semantic enums while preserving their existing serialized values.
+- All shared categorical discriminants—including card type/target, item and room kind, enemy intent/behavior, animation event, room shape, run phase, choice/action/resource/upgrade, deal type, and save status—now come from one stable domain-enum module; frontend-only pile/card modes use local UI enums.
+- React, Phaser, NestJS, SQLite queries, content definitions, translations, and tests now consume enum members instead of repeating wire strings.
+- Enemy stat panels now pass pointer input through to the tactical grid unless an enemy-targeting card is actively choosing a valid target.
+- Legacy combat saves missing the bounded animation-event buffer now hydrate with safe empty defaults.
+- Every room reward can now be left behind without taking a card, item, or resource; doing so preserves the held active item and its deck card.
+- SQLite run ordering uses insertion order as a deterministic tie-breaker when queued saves share the same millisecond timestamp.
 
 ### Performance
 
