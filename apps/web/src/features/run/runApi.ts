@@ -32,13 +32,15 @@ export async function loadRunSummaries(): Promise<RunSummary[]> {
   }
 }
 
-export async function saveRun(run: RunState, create = false): Promise<void> {
+export async function saveRun(run: RunState, create = false): Promise<boolean> {
   try {
     await apiRequest<PersistedRun>(create ? '/runs' : `/runs/${run.id}`, {
       method: create ? 'POST' : 'PUT',
       body: JSON.stringify(run),
     });
+    return true;
   } catch {
     // The current browser snapshot remains authoritative while the API is unavailable.
+    return false;
   }
 }

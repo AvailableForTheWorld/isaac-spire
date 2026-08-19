@@ -1,10 +1,24 @@
 import { useTranslation } from 'react-i18next';
-import type { RunState } from '@isaac-spire/game';
+import { RunPhase, type RunState } from '@isaac-spire/game';
+import type { SaveStatus } from '../../features/run/save-status';
 import { floorName } from '../../localize';
 import { LanguageToggle } from './LanguageToggle';
 
-export function GameHeader({ run, onAbandon }: { run: RunState; onAbandon: () => void }) {
+export function GameHeader({
+  run,
+  saveStatus,
+  onSave,
+  onSaveAndExit,
+  onAbandon,
+}: {
+  run: RunState;
+  saveStatus: SaveStatus;
+  onSave: () => void;
+  onSaveAndExit: () => void;
+  onAbandon: () => void;
+}) {
   const { t } = useTranslation();
+  const resumable = ![RunPhase.Victory, RunPhase.Defeat].includes(run.phase);
   return (
     <header className="game-header">
       <div className="brand-lockup">
@@ -36,15 +50,37 @@ export function GameHeader({ run, onAbandon }: { run: RunState; onAbandon: () =>
           {run.score}
         </span>
       </div>
-      <LanguageToggle compact />
-      <button
-        className="icon-button"
-        onClick={onAbandon}
-        title={t('header.abandon')}
-        aria-label={t('header.abandon')}
-      >
-        ×
-      </button>
+      <div className="header-actions">
+        {resumable && (
+          <>
+            <span className={`save-state ${saveStatus}`} role="status" aria-live="polite">
+              <i />
+              {t(`header.saveStatus.${saveStatus}`)}
+            </span>
+            <button className="header-save-button" onClick={onSave} title={t('header.save')}>
+              <b>⇩</b>
+              <span>{t('header.save')}</span>
+            </button>
+            <button
+              className="header-save-button exit"
+              onClick={onSaveAndExit}
+              title={t('header.saveAndExit')}
+            >
+              <b>⌂</b>
+              <span>{t('header.saveAndExit')}</span>
+            </button>
+          </>
+        )}
+        <LanguageToggle compact />
+        <button
+          className="icon-button"
+          onClick={onAbandon}
+          title={t('header.abandon')}
+          aria-label={t('header.abandon')}
+        >
+          ×
+        </button>
+      </div>
     </header>
   );
 }

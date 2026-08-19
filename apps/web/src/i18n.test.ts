@@ -27,6 +27,13 @@ describe('game localization', () => {
     expect(i18n.t('choice.leaveEmpty')).toBe('什么也不拿，直接离开');
   });
 
+  it('provides Chinese save, exit, and continue-copy for the persistent run flow', () => {
+    expect(i18n.t('header.save', { lng: 'zh-CN' })).toBe('保存');
+    expect(i18n.t('header.saveAndExit', { lng: 'zh-CN' })).toBe('保存并返回主界面');
+    expect(i18n.t('header.saveStatus.saved', { lng: 'zh-CN' })).toBe('已保存');
+    expect(i18n.t('home.continue', { lng: 'zh-CN', floor: 3 })).toBe('继续第 3 层');
+  });
+
   it('localizes combat logs from runs saved before semantic log keys', () => {
     const run = {
       combat: {

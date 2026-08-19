@@ -40,6 +40,7 @@ import {
   makeIntent,
   rollEnemyIntent as rollIntent,
 } from './combat/enemy-ai.js';
+import { difficultyForFloor } from './combat/difficulty.js';
 import { pushCombatAnimation as pushAnimation, pushCombatLog as pushLog } from './combat/events.js';
 import { rewardQualityWeight } from './rewards/room-rewards.js';
 import { migrateRunSnapshot } from './state/migrations.js';
@@ -53,6 +54,7 @@ import {
   AchievementEventType,
   AchievementBossId,
   AttackMode,
+  BossAttackPattern,
   CardEffectOpcode,
   CardTarget,
   CardType,
@@ -965,12 +967,18 @@ function makeEnemy(
   index: number,
   initializeIntent = true,
 ): EnemyState {
-  const scale = 1 + run.floorIndex * 0.08;
+  const difficulty = difficultyForFloor(run.floorIndex);
+  const maxHp = Math.max(1, Math.round(definition.maxHp * difficulty.hpMultiplier));
   const enemy: EnemyState = {
     ...definition,
     instanceId: `${definition.id}-${index}-${randomInt(run, 1000, 9999)}`,
-    maxHp: Math.round(definition.maxHp * scale),
-    hp: Math.round(definition.maxHp * scale),
+    maxHp,
+    hp: maxHp,
+    attack: Math.max(1, Math.round(definition.attack * difficulty.attackMultiplier)),
+    armor: Math.max(0, definition.armor + difficulty.armorBonus),
+    movementSpeed: Math.max(1, definition.movementSpeed + difficulty.movementBonus),
+    attackRange: Math.max(1, definition.attackRange + difficulty.rangeBonus),
+    visionRange: Math.max(1, definition.visionRange + difficulty.rangeBonus),
     shield: 0,
     cursedTurns: 0,
     staggeredTurns: 0,
@@ -1089,8 +1097,9 @@ function encounterDefinitions(
 ): EnemyDefinition[] {
   const pool = enemyPoolForFloor(run.floorIndex);
   const capacity = roomEnemyCapacity(layout);
+  const difficulty = difficultyForFloor(run.floorIndex);
   if (roomKind === RoomKind.Boss) {
-    const supportLimit = layout.unitCount >= 3 ? Math.min(2, Math.floor(run.floorIndex / 2)) : 0;
+    const supportLimit = layout.unitCount >= 3 ? Math.min(capacity - 1, difficulty.bossSupportLimit) : 0;
     const supportCount = supportLimit > 0 ? randomInt(run, 0, supportLimit) : 0;
     return [bossForFloor(run.floorIndex), ...Array.from({ length: supportCount }, () => pickOne(run, pool))];
   }
@@ -1101,8 +1110,9 @@ function encounterDefinitions(
     const supportCount = randomInt(run, minimumSupport, maximumSupport);
     return [eliteForFloor(run.floorIndex), ...Array.from({ length: supportCount }, () => pickOne(run, pool))];
   }
-  const minimum = Math.max(2, Math.ceil(capacity * 0.6));
-  const count = randomInt(run, minimum, capacity);
+  const minimum = Math.max(2, Math.ceil(capacity * difficulty.encounterMinRatio));
+  const maximum = Math.max(minimum, Math.min(capacity, Math.floor(capacity * difficulty.encounterMaxRatio)));
+  const count = randomInt(run, minimum, maximum);
   return Array.from({ length: count }, () => pickOne(run, pool));
 }
 
@@ -2520,11 +2530,13 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
   run.player.bombs -= 1;
   recordAchievementEvent(run, { type: AchievementEventType.BombUsed });
   run.combat.selectedEnemyId = undefined;
-  const blastCells = new Set<string>();
+  const blastDamageByCell = new Map<string, number>();
   for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
     for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
       const cell = { x: x + offsetX, y: y + offsetY };
-      if (isCombatCellAvailable(run.combat, cell)) blastCells.add(positionKey(cell));
+      if (!isCombatCellAvailable(run.combat, cell)) continue;
+      const damage = offsetX === 0 && offsetY === 0 ? 30 : offsetX === 0 || offsetY === 0 ? 20 : 15;
+      blastDamageByCell.set(positionKey(cell), damage);
     }
   }
   pushAnimation(run.combat, {
@@ -2532,23 +2544,27 @@ export function useCombatBomb(state: RunState, x: number, y: number): RunState {
     sourceId: 'isaac',
     toX: x,
     toY: y,
-    value: 50,
+    value: 30,
   });
   let totalDamage = 0;
   let hitEnemies = 0;
   for (const enemy of run.combat.enemies.filter((entry) => entry.hp > 0)) {
-    const coveredCells = getEnemyOccupiedCells(enemy).filter((cell) => blastCells.has(positionKey(cell)));
+    const coveredCells = getEnemyOccupiedCells(enemy).filter((cell) =>
+      blastDamageByCell.has(positionKey(cell)),
+    );
     if (!coveredCells.length) continue;
     hitEnemies += 1;
     const wasAlive = enemy.hp > 0;
     const hpBefore = enemy.hp;
     const shieldBefore = enemy.shield;
     let afterArmorTotal = 0;
-    for (const _cell of coveredCells) afterArmorTotal += hurtEnemy(enemy, 50);
+    for (const cell of coveredCells) {
+      afterArmorTotal += hurtEnemy(enemy, blastDamageByCell.get(positionKey(cell))!);
+    }
     const hpDamage = hpBefore - enemy.hp;
     const shieldDamage = shieldBefore - enemy.shield;
     const durabilityDamage = hpDamage + shieldDamage;
-    const rawDamage = coveredCells.length * 50;
+    const rawDamage = coveredCells.reduce((sum, cell) => sum + blastDamageByCell.get(positionKey(cell))!, 0);
     totalDamage += durabilityDamage;
     pushAnimation(run.combat, {
       kind: CombatAnimationKind.BombHit,
@@ -3006,7 +3022,13 @@ function blackHeartBurst(combat: CombatState): void {
   );
 }
 
-function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: EnemyState): number {
+function hurtPlayer(
+  run: RunState,
+  combat: CombatState,
+  raw: number,
+  source?: EnemyState,
+  enemyAction?: EnemyAction,
+): number {
   if (nextRandom(run) < run.player.stats.dodgeChance + combat.playerDodgeChanceBuff) {
     if (source)
       pushAnimation(combat, {
@@ -3015,6 +3037,9 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
         targetId: 'isaac',
         value: 0,
         secondaryValue: 0,
+        bossPattern: enemyAction?.pattern,
+        toX: enemyAction?.targetX,
+        toY: enemyAction?.targetY,
       });
     pushLog(combat, 'Isaac slipped past the attack.', CombatLogTone.Good, 'dodge');
     return 0;
@@ -3057,6 +3082,9 @@ function hurtPlayer(run: RunState, combat: CombatState, raw: number, source?: En
       secondaryValue: shielded,
       rawValue: rounded,
       armorValue: armorBlocked,
+      bossPattern: enemyAction?.pattern,
+      toX: enemyAction?.targetX,
+      toY: enemyAction?.targetY,
     });
     pushLog(
       combat,
@@ -3224,6 +3252,109 @@ function moveEnemyTowardPlayer(combat: CombatState, enemy: EnemyState): boolean 
   return moveEnemyTo(combat, enemy, destination);
 }
 
+function bossAttackHits(combat: CombatState, enemy: EnemyState, enemyAction: EnemyAction): boolean {
+  const pattern = enemyAction.pattern ?? BossAttackPattern.Contact;
+  const player = combat.playerPosition;
+  const target = {
+    x: enemyAction.targetX ?? player.x,
+    y: enemyAction.targetY ?? player.y,
+  };
+  const targetDistance = Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y));
+  switch (pattern) {
+    case BossAttackPattern.ProjectileSpread:
+    case BossAttackPattern.LeapSlam:
+    case BossAttackPattern.GroundStomp:
+    case BossAttackPattern.ProjectileRain:
+      return targetDistance <= (enemyAction.radius ?? 0);
+    case BossAttackPattern.RadialBurst:
+      return enemyChebyshevDistanceToPosition(enemy, player) <= (enemyAction.radius ?? enemy.attackRange);
+    case BossAttackPattern.SpiralBarrage: {
+      const distance = enemyChebyshevDistanceToPosition(enemy, player);
+      return distance > (enemyAction.innerRadius ?? 0) && distance <= (enemyAction.radius ?? 6);
+    }
+    case BossAttackPattern.LaserLine:
+    case BossAttackPattern.ChargeLane:
+    case BossAttackPattern.RockWave:
+      return player.x === target.x || player.y === target.y;
+    case BossAttackPattern.Contact:
+    default:
+      return enemyCanAttackPosition(enemy, player);
+  }
+}
+
+function relocateBossForAttack(combat: CombatState, enemy: EnemyState, enemyAction: EnemyAction): void {
+  if (
+    ![BossAttackPattern.LeapSlam, BossAttackPattern.ChargeLane].includes(
+      enemyAction.pattern ?? BossAttackPattern.Contact,
+    ) ||
+    enemyAction.targetX === undefined ||
+    enemyAction.targetY === undefined
+  )
+    return;
+  const blocked = new Set(
+    combat.enemies
+      .filter((entry) => entry.hp > 0 && entry.instanceId !== enemy.instanceId)
+      .flatMap((entry) => getEnemyOccupiedCells(entry))
+      .map(positionKey),
+  );
+  blocked.add(positionKey(combat.playerPosition));
+  const destination = findAvailableEnemyPosition(
+    combat,
+    enemy,
+    { x: enemyAction.targetX, y: enemyAction.targetY },
+    blocked,
+  );
+  moveEnemyTo(combat, enemy, destination);
+}
+
+function resolveEnemyAttack(
+  run: RunState,
+  combat: CombatState,
+  enemy: EnemyState,
+  enemyAction: EnemyAction,
+): void {
+  const hits = bossAttackHits(combat, enemy, enemyAction);
+  relocateBossForAttack(combat, enemy, enemyAction);
+  enemy.prepared = false;
+  if (hits) {
+    hurtPlayer(run, combat, enemyAction.value, enemy, enemyAction);
+    return;
+  }
+  if (enemyAction.pattern) {
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.EnemyAttack,
+      sourceId: enemy.instanceId,
+      targetId: 'isaac',
+      value: 0,
+      rawValue: enemyAction.value,
+      bossPattern: enemyAction.pattern,
+      toX: enemyAction.targetX,
+      toY: enemyAction.targetY,
+    });
+    pushLog(
+      combat,
+      `${enemy.name}'s ${enemyAction.pattern} missed Isaac.`,
+      CombatLogTone.Good,
+      'bossPatternDodged',
+      {
+        enemyId: enemy.id,
+        enemy: enemy.name,
+        pattern: enemyAction.pattern,
+      },
+    );
+    return;
+  }
+  pushAnimation(combat, {
+    kind: CombatAnimationKind.Idle,
+    sourceId: enemy.instanceId,
+    targetId: enemy.instanceId,
+  });
+  pushLog(combat, `${enemy.name} is still outside attack range.`, CombatLogTone.Normal, 'enemyOutOfRange', {
+    enemyId: enemy.id,
+    enemy: enemy.name,
+  });
+}
+
 function resolveEnemyAction(
   run: RunState,
   combat: CombatState,
@@ -3231,29 +3362,9 @@ function resolveEnemyAction(
   enemyAction: EnemyAction,
 ): void {
   switch (enemyAction.kind) {
-    case IntentKind.Attack: {
-      if (enemyCanAttackPosition(enemy, combat.playerPosition)) {
-        hurtPlayer(run, combat, enemyAction.value, enemy);
-        enemy.prepared = false;
-      } else {
-        pushAnimation(combat, {
-          kind: CombatAnimationKind.Idle,
-          sourceId: enemy.instanceId,
-          targetId: enemy.instanceId,
-        });
-        pushLog(
-          combat,
-          `${enemy.name} is still outside attack range.`,
-          CombatLogTone.Normal,
-          'enemyOutOfRange',
-          {
-            enemyId: enemy.id,
-            enemy: enemy.name,
-          },
-        );
-      }
+    case IntentKind.Attack:
+      resolveEnemyAttack(run, combat, enemy, enemyAction);
       break;
-    }
     case IntentKind.Shield:
       enemy.shield += enemyAction.value;
       pushAnimation(combat, {
@@ -3431,8 +3542,13 @@ function resolveEnemyTurn(run: RunState): void {
       );
     } else {
       const roaming = !enemy.alerted && !enemyCanSeePosition(enemy, combat.playerPosition);
+      const relocatesWithIntent = enemy.intent.actions?.some((entry) =>
+        [BossAttackPattern.LeapSlam, BossAttackPattern.ChargeLane].includes(
+          entry.pattern ?? BossAttackPattern.Contact,
+        ),
+      );
       if (roaming) moveEnemyRandomly(run, combat, enemy);
-      else moveEnemyTowardPlayer(combat, enemy);
+      else if (!relocatesWithIntent) moveEnemyTowardPlayer(combat, enemy);
       const actionLimit = enemy.boss ? 2 : 1;
       const visibleIntent =
         (enemy.statuses[StatusKind.Blind] ?? 0) > 0 ? rollIntent(run, enemy) : enemy.intent;
@@ -3462,7 +3578,7 @@ function resolveEnemyTurn(run: RunState): void {
       if ((enemy.statuses[StatusKind.Weak] ?? 0) > 0) {
         enemyActions = enemyActions.map((entry) =>
           entry.kind === IntentKind.Attack
-            ? action(IntentKind.Attack, Math.max(1, Math.round(entry.value * 0.5)))
+            ? { ...entry, value: Math.max(1, Math.round(entry.value * 0.5)) }
             : entry,
         );
       }

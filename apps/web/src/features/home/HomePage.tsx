@@ -1,20 +1,25 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ITEMS, RunPhase, type ProfileState, type RunState } from '@isaac-spire/game';
+import { ITEMS, type ProfileState, type RunState } from '@isaac-spire/game';
+import { ConfirmationPanel } from '../../components/game/ConfirmationPanel';
 import { LanguageToggle } from '../../components/game/LanguageToggle';
 import { AchievementPanel } from '../achievements/AchievementPanel';
+import { latestResumableRun } from '../run/localRunRepository';
 
 function shortSeed(): string {
   const words = ['CELLAR', 'ATTACK', 'LAMB', 'MOTHER', 'DICE', 'SPIDER', 'ANGEL', 'STATIC'];
   return `${words[Math.floor(Math.random() * words.length)]}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-function latestResumableRun(...runs: Array<RunState | null>): RunState | undefined {
-  return runs
-    .filter((run): run is RunState =>
-      Boolean(run && ![RunPhase.Victory, RunPhase.Defeat].includes(run.phase)),
-    )
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+function saveTime(updatedAt: string): string {
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 export function HomePage({
@@ -33,6 +38,7 @@ export function HomePage({
   const { t } = useTranslation();
   const [seed, setSeed] = useState(shortSeed());
   const [showAchievements, setShowAchievements] = useState(false);
+  const [confirmNewRun, setConfirmNewRun] = useState(false);
   const resumable = latestResumableRun(localRun, remoteRun);
   return (
     <main className="home-page">
@@ -67,13 +73,24 @@ export function HomePage({
           </button>
         </div>
         <div className="home-actions">
-          <button className="primary-button large" onClick={() => onStart(seed)}>
+          <button
+            className="primary-button large"
+            onClick={() => (resumable ? setConfirmNewRun(true) : onStart(seed))}
+          >
             {t('home.begin')} <span>↓</span>
           </button>
           {resumable && (
-            <button className="secondary-button large" onClick={() => onResume(resumable)}>
-              {t('home.continue', { floor: resumable.floorIndex + 1 })} <span>→</span>
-            </button>
+            <div className="continue-save">
+              <button className="secondary-button large" onClick={() => onResume(resumable)}>
+                {t('home.continue', { floor: resumable.floorIndex + 1 })} <span>→</span>
+              </button>
+              <small>
+                {t('home.saveSummary', {
+                  seed: resumable.seed,
+                  time: saveTime(resumable.updatedAt),
+                })}
+              </small>
+            </div>
           )}
           <button className="secondary-button large" onClick={() => setShowAchievements(true)}>
             {t('home.achievements')} <span>♜</span>
@@ -140,6 +157,29 @@ export function HomePage({
       </section>
       <footer>{t('home.disclaimer')}</footer>
       {showAchievements && <AchievementPanel profile={profile} onClose={() => setShowAchievements(false)} />}
+      {confirmNewRun && resumable && (
+        <ConfirmationPanel
+          eyebrow={t('home.newRunEyebrow')}
+          title={t('home.newRunTitle')}
+          message={t('home.newRunMessage')}
+          items={[
+            {
+              icon: '▣',
+              note: t('home.currentSave'),
+              name: t('home.savedRun', {
+                floor: resumable.floorIndex + 1,
+                seed: resumable.seed,
+              }),
+            },
+          ]}
+          confirmLabel={t('home.startNewRun')}
+          onCancel={() => setConfirmNewRun(false)}
+          onConfirm={() => {
+            setConfirmNewRun(false);
+            onStart(seed);
+          }}
+        />
+      )}
     </main>
   );
 }

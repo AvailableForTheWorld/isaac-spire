@@ -29,6 +29,8 @@ apps/api: HTTP controllers -> StoreService -> RunRepository port -> SQLite adapt
 - `content/catalog.ts`: composes the built-in pack and future expansion/mod packs.
 - `combat/grid.ts`: collision, footprint math, cardinal BFS, visibility, and range strategies.
 - `combat/enemy-ai.ts`: behavior strategy selection and deterministic intent state machines.
+- `combat/boss-patterns.ts`: data-composed, three-phase boss profiles built from reusable spatial attack archetypes.
+- `combat/difficulty.ts`: the explicit six-floor stat, density, mobility, and support-pressure curve.
 - `combat/events.ts`: bounded combat log and animation event buffers.
 - `rewards/room-rewards.ts`: exhaustive room reward budgets, quality curves, and selection metadata.
 - `state/migrations.ts`: pure, idempotent save-schema migrations.
@@ -68,6 +70,8 @@ Registries reject duplicate keys during startup. Runtime lookup is `Map`-backed 
 ## Frontend
 
 `App.tsx` only mounts `GameApplication`. `GameApplication` selects a phase view. `useGameSession` owns persistence and error handling; reward confirmation is an explicit persisted game-state transition rather than a UI timer. Feature views receive a snapshot plus a `RunCommand` dispatcher and do not call storage directly.
+
+The active run is a single logical Continue slot backed by both synchronous browser storage and the SQLite API. Local writes happen before navigation, while remote writes use one serialized promise queue so an older in-flight auto-save cannot overwrite a newer manual save. The menu compares snapshot timestamps and resumes the newest unfinished local or remote version. `pagehide` performs a final local write for tab/window exits; API failure leaves the local slot playable and exposes a `local-only` save state.
 
 ```text
 features/

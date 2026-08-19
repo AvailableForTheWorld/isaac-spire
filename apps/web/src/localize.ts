@@ -64,7 +64,18 @@ export function enemyName(t: TFunction, enemy: Pick<EnemyState, 'id' | 'name'>):
 export function intentLabel(t: TFunction, intent: EnemyIntent): string {
   const actions = intent.actions ?? [{ kind: intent.kind, value: intent.value }];
   return actions
-    .map((entry) => t(`intents.${entry.kind}`, { value: entry.value, defaultValue: entry.kind }))
+    .map((entry) =>
+      entry.pattern
+        ? t(`bossPatterns.${entry.pattern}`, {
+            value: entry.value,
+            x: entry.targetX ?? '—',
+            y: entry.targetY ?? '—',
+            radius: entry.radius ?? 0,
+            inner: entry.innerRadius ?? 0,
+            defaultValue: entry.pattern,
+          })
+        : t(`intents.${entry.kind}`, { value: entry.value, defaultValue: entry.kind }),
+    )
     .join(' + ');
 }
 

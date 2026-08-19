@@ -1,18 +1,23 @@
 import type { EnemyAction, EnemyDefinition, EnemyIntent, EnemyState, RunState } from '../types.js';
-import { EnemyBehavior, IntentKind } from '../types.js';
-import { enemyCanAttackPosition, ISAAC_DOOR_POSITION } from './grid.js';
+import { BossAttackPattern, EnemyBehavior, IntentKind } from '../types.js';
+import { bossIntentActions } from './boss-patterns.js';
 
-function intentLabel(kind: IntentKind, value: number): string {
+function intentLabel(action: EnemyAction): string {
   const labels: Record<IntentKind, string> = {
-    [IntentKind.Attack]: `Attack ${value}`,
-    [IntentKind.Shield]: `Guard ${value}`,
+    [IntentKind.Attack]: `Attack ${action.value}`,
+    [IntentKind.Shield]: `Guard ${action.value}`,
     [IntentKind.Curse]: 'Curse',
-    [IntentKind.Heal]: `Recover ${value}`,
+    [IntentKind.Heal]: `Recover ${action.value}`,
     [IntentKind.Prepare]: 'Preparing…',
-    [IntentKind.Summon]: `Summon ${value}`,
+    [IntentKind.Summon]: `Summon ${action.value}`,
     [IntentKind.Idle]: 'Staggered',
   };
-  return labels[kind];
+  if (!action.pattern || action.pattern === BossAttackPattern.Contact) return labels[action.kind];
+  const target =
+    action.targetX === undefined || action.targetY === undefined
+      ? ''
+      : ` @ (${action.targetX}, ${action.targetY})`;
+  return `${action.pattern} ${action.value}${target}`;
 }
 
 export function behaviorFor(enemy: Pick<EnemyDefinition, 'id' | 'elite' | 'boss'>): EnemyBehavior {
@@ -45,7 +50,7 @@ export function makeIntent(actions: EnemyAction[]): EnemyIntent {
   return {
     kind: primary.kind,
     value: primary.value,
-    label: actions.map((entry) => intentLabel(entry.kind, entry.value)).join(' + '),
+    label: actions.map(intentLabel).join(' + '),
     actions,
   };
 }
@@ -124,68 +129,7 @@ export function ensureEnemyBehavior(enemy: EnemyState): void {
 }
 
 function rollBossIntent(run: RunState, enemy: EnemyState, canReact: boolean): EnemyIntent {
-  const playerPosition = run.combat?.playerPosition ?? ISAAC_DOOR_POSITION;
-  const inRange = enemyCanAttackPosition(enemy, playerPosition);
-  let patterns: EnemyAction[][];
-
-  if (canReact) {
-    enemy.reactionCooldown = 2;
-    patterns = inRange
-      ? [
-          [
-            enemyAction(IntentKind.Attack, attackValue(enemy, 1.1)),
-            enemyAction(IntentKind.Heal, healValue(run, 1.35)),
-          ],
-        ]
-      : [
-          [
-            enemyAction(IntentKind.Heal, healValue(run, 1.35)),
-            enemyAction(IntentKind.Shield, shieldValue(run, 1.25)),
-          ],
-        ];
-  } else if (inRange && enemy.prepared) {
-    patterns = [
-      [
-        enemyAction(IntentKind.Attack, attackValue(enemy, 2)),
-        enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
-      ],
-      [enemyAction(IntentKind.Attack, attackValue(enemy, 2)), enemyAction(IntentKind.Curse)],
-      [enemyAction(IntentKind.Attack, attackValue(enemy, 2)), enemyAction(IntentKind.Summon, 1)],
-      [
-        enemyAction(IntentKind.Attack, attackValue(enemy, 2)),
-        enemyAction(IntentKind.Shield, shieldValue(run)),
-      ],
-    ];
-  } else if (inRange) {
-    patterns = [
-      [
-        enemyAction(IntentKind.Attack, attackValue(enemy)),
-        enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
-      ],
-      [enemyAction(IntentKind.Curse), enemyAction(IntentKind.Attack, attackValue(enemy))],
-      [enemyAction(IntentKind.Summon, 1), enemyAction(IntentKind.Attack, attackValue(enemy, 0.9))],
-      [enemyAction(IntentKind.Prepare), enemyAction(IntentKind.Attack, attackValue(enemy, 2))],
-      [
-        enemyAction(IntentKind.Attack, attackValue(enemy, 1.15)),
-        enemyAction(IntentKind.Shield, shieldValue(run)),
-      ],
-      [enemyAction(IntentKind.Attack, attackValue(enemy)), enemyAction(IntentKind.Prepare)],
-    ];
-  } else {
-    patterns = [
-      [enemyAction(IntentKind.Summon, 1), enemyAction(IntentKind.Prepare)],
-      [enemyAction(IntentKind.Curse), enemyAction(IntentKind.Shield, shieldValue(run, 1.25))],
-      [enemyAction(IntentKind.Heal, healValue(run, 1.15)), enemyAction(IntentKind.Summon, 1)],
-      [enemyAction(IntentKind.Prepare), enemyAction(IntentKind.Shield, shieldValue(run))],
-    ];
-  }
-
-  const actions = patterns[enemy.behaviorStep % patterns.length] ?? [
-    enemyAction(IntentKind.Attack, attackValue(enemy)),
-    enemyAction(IntentKind.Attack, attackValue(enemy, 0.7)),
-  ];
-  enemy.behaviorStep = (enemy.behaviorStep + 1) % patterns.length;
-  return makeIntent(actions);
+  return makeIntent(bossIntentActions(run, enemy, canReact));
 }
 
 export function rollEnemyIntent(run: RunState, enemy: EnemyState): EnemyIntent {

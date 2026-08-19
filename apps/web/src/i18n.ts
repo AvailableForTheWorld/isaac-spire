@@ -2,6 +2,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import {
   AttackMode,
+  BossAttackPattern,
   CARDS,
   CardType,
   CombatRoomShape,
@@ -20,6 +21,7 @@ import {
   eliteForFloor,
   enemyPoolForFloor,
 } from '@isaac-spire/game';
+import { SaveStatus } from './features/run/save-status';
 
 export const LANGUAGE_STORAGE_KEY = 'isaac-spire.language';
 
@@ -93,6 +95,15 @@ const en = {
     language: { label: 'Language', switchTo: '中文', current: 'EN' },
     header: {
       floor: 'FLOOR {{current}} / {{total}}',
+      save: 'Save',
+      saveAndExit: 'Save & main menu',
+      saveStatus: {
+        [SaveStatus.Idle]: 'Auto-save ready',
+        [SaveStatus.Saving]: 'Saving…',
+        [SaveStatus.Saved]: 'Saved',
+        [SaveStatus.LocalOnly]: 'Saved locally',
+        [SaveStatus.Failed]: 'Save failed',
+      } satisfies Record<SaveStatus, string>,
       abandon: 'Abandon run',
       abandonConfirm: 'Abandon this run? The current descent will be recorded as a loss.',
     },
@@ -104,6 +115,14 @@ const en = {
       rerollSeed: 'Roll a new seed',
       begin: 'Begin descent',
       continue: 'Continue floor {{floor}}',
+      saveSummary: 'SAVE · {{seed}} · {{time}}',
+      newRunEyebrow: 'ACTIVE SAVE FOUND',
+      newRunTitle: 'Begin a new descent?',
+      newRunMessage:
+        'The new run will become the Continue slot. Finish or abandon the current save first if you want to keep it accessible.',
+      currentSave: 'CURRENT CONTINUE SLOT',
+      savedRun: 'Floor {{floor}} · {{seed}}',
+      startNewRun: 'Start new run',
       achievements: 'Achievements',
       momKills: 'MOM KILLS',
       bestScore: 'BEST SCORE',
@@ -408,6 +427,18 @@ const en = {
       [IntentKind.Summon]: 'Summon {{value}} minion',
       [IntentKind.Idle]: 'Staggered',
     } satisfies Record<IntentKind, string>,
+    bossPatterns: {
+      [BossAttackPattern.Contact]: 'Contact {{value}}',
+      [BossAttackPattern.ProjectileSpread]: 'Spread {{value}} → ({{x}},{{y}}) ±{{radius}}',
+      [BossAttackPattern.RadialBurst]: 'Radial burst {{value}} · R{{radius}}',
+      [BossAttackPattern.SpiralBarrage]: 'Spiral {{value}} · R{{inner}}–{{radius}}',
+      [BossAttackPattern.LaserLine]: 'Laser cross {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.LeapSlam]: 'Leap slam {{value}} → ({{x}},{{y}}) ±{{radius}}',
+      [BossAttackPattern.GroundStomp]: 'Stomp {{value}} → ({{x}},{{y}}) ±{{radius}}',
+      [BossAttackPattern.ChargeLane]: 'Charge lane {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.RockWave]: 'Rock cross {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.ProjectileRain]: 'Projectile rain {{value}} → ({{x}},{{y}}) ±{{radius}}',
+    } satisfies Record<BossAttackPattern, string>,
     cardTypes: {
       [CardType.Attack]: 'attack',
       [CardType.Skill]: 'active item',
@@ -657,6 +688,7 @@ const en = {
       enemyWandered: '{{enemy}} wandered to ({{x}}, {{y}}) while Isaac was out of sight.',
       enemyWanderIdle: '{{enemy}} listened in the dark and stayed put.',
       enemyOutOfRange: '{{enemy}} is still outside attack range.',
+      bossPatternDodged: '{{enemy}} missed with {{pattern}}.',
       passiveUsed: '{{item}} activated from the deck.',
       activeDiscarded: '{{item}} was discarded and permanently lost.',
       bombBlast: 'The bomb exploded at ({{x}}, {{y}}), hitting {{enemies}} enemies for {{damage}} damage.',
@@ -699,6 +731,15 @@ const zhCN = {
     language: { label: '语言', switchTo: 'EN', current: '中文' },
     header: {
       floor: '第 {{current}} / {{total}} 层',
+      save: '保存',
+      saveAndExit: '保存并返回主界面',
+      saveStatus: {
+        [SaveStatus.Idle]: '自动存档已开启',
+        [SaveStatus.Saving]: '正在保存…',
+        [SaveStatus.Saved]: '已保存',
+        [SaveStatus.LocalOnly]: '已保存到本机',
+        [SaveStatus.Failed]: '保存失败',
+      } satisfies Record<SaveStatus, string>,
       abandon: '放弃本局',
       abandonConfirm: '确定要放弃本局吗？当前下潜将被记录为失败。',
     },
@@ -710,6 +751,13 @@ const zhCN = {
       rerollSeed: '生成新种子',
       begin: '开始下潜',
       continue: '继续第 {{floor}} 层',
+      saveSummary: '存档 · {{seed}} · {{time}}',
+      newRunEyebrow: '检测到未完成存档',
+      newRunTitle: '仍要开始新一局吗？',
+      newRunMessage: '新游戏会占用“继续游戏”槽位。如果想保留当前进度，请先继续或放弃当前存档。',
+      currentSave: '当前继续游戏存档',
+      savedRun: '第 {{floor}} 层 · {{seed}}',
+      startNewRun: '开始新游戏',
       achievements: '成就与秘密',
       momKills: '击败妈妈',
       bestScore: '最高分',
@@ -1001,6 +1049,18 @@ const zhCN = {
       [IntentKind.Summon]: '召唤 {{value}} 只小怪',
       [IntentKind.Idle]: '无法行动',
     } satisfies Record<IntentKind, string>,
+    bossPatterns: {
+      [BossAttackPattern.Contact]: '接触攻击 {{value}}',
+      [BossAttackPattern.ProjectileSpread]: '扇形弹幕 {{value}} → ({{x}},{{y}}) ±{{radius}}格',
+      [BossAttackPattern.RadialBurst]: '环形爆发 {{value}} · 半径{{radius}}格',
+      [BossAttackPattern.SpiralBarrage]: '螺旋弹幕 {{value}} · {{inner}}–{{radius}}格',
+      [BossAttackPattern.LaserLine]: '十字激光 {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.LeapSlam]: '跳砸 {{value}} → ({{x}},{{y}}) ±{{radius}}格',
+      [BossAttackPattern.GroundStomp]: '落脚踩踏 {{value}} → ({{x}},{{y}}) ±{{radius}}格',
+      [BossAttackPattern.ChargeLane]: '十字冲锋 {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.RockWave]: '落石十字波 {{value}} → ({{x}},{{y}})',
+      [BossAttackPattern.ProjectileRain]: '定点弹雨 {{value}} → ({{x}},{{y}}) ±{{radius}}格',
+    } satisfies Record<BossAttackPattern, string>,
     cardTypes: {
       [CardType.Attack]: '攻击',
       [CardType.Skill]: '主动道具',
@@ -1239,6 +1299,7 @@ const zhCN = {
       enemyWandered: '{{enemy}}没有发现以撒，随机游走到了 ({{x}}, {{y}})。',
       enemyWanderIdle: '{{enemy}}在黑暗中倾听动静，留在原地。',
       enemyOutOfRange: '{{enemy}}仍在攻击射程之外。',
+      bossPatternDodged: '{{enemy}}的{{pattern}}没有命中以撒。',
       passiveUsed: '道具卡{{item}}已发动。',
       activeDiscarded: '主动道具{{item}}被弃掉并永久失去。',
       bombBlast: '炸弹在 ({{x}}, {{y}}) 爆炸，命中 {{enemies}} 个敌人，共造成 {{damage}} 点伤害。',

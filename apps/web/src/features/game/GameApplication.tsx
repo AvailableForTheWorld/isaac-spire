@@ -98,7 +98,13 @@ export function GameApplication() {
 
   return (
     <div className={`game-shell antialiased phase-${showingRoomReward ? RunPhase.Combat : run.phase}`}>
-      <GameHeader run={run} onAbandon={onAbandon} />
+      <GameHeader
+        run={run}
+        saveStatus={session.saveStatus}
+        onSave={session.saveNow}
+        onSaveAndExit={session.saveAndGoHome}
+        onAbandon={onAbandon}
+      />
       <PocketItemBar run={run} commit={session.commit} />
       {session.notice && (
         <button className="toast" onClick={session.dismissNotice}>

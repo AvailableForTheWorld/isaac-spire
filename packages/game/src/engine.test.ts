@@ -38,6 +38,7 @@ import { addPocketHeart, createCard, equipItem } from './player.js';
 import {
   AchievementMetric,
   AttackMode,
+  BossAttackPattern,
   CardType,
   ChoiceAction,
   ChoiceKind,
@@ -420,15 +421,15 @@ describe('combat', () => {
     expect(run.player.bombs).toBe(1);
     expect(run.achievementState.lifetimeCounters[AchievementMetric.BombsUsed]).toBe(1);
     expect(run.combat!.vitality).toBe(run.player.stats.maxVitality);
-    expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(800);
+    expect(run.combat!.enemies.find((enemy) => enemy.instanceId === target.instanceId)!.hp).toBe(915);
     expect(run.combat!.animationEvents.slice(-2)).toMatchObject([
-      { kind: CombatAnimationKind.BombBlast, toX: 5, toY: 3, value: 50 },
+      { kind: CombatAnimationKind.BombBlast, toX: 5, toY: 3, value: 30 },
       {
         kind: CombatAnimationKind.BombHit,
         targetId: target.instanceId,
-        value: 200,
+        value: 85,
         secondaryValue: 0,
-        rawValue: 200,
+        rawValue: 85,
         armorValue: 0,
         hitCount: 4,
       },
@@ -559,7 +560,10 @@ describe('combat', () => {
       }
       const capacity = Math.max(3, Math.floor(roomCells.length / 50));
       expect(combat.enemies.length).toBeLessThanOrEqual(capacity);
-      if (combat.roomLayout.unitCount > 1) expect(combat.enemies.length).toBeGreaterThan(3);
+      if (combat.roomLayout.unitCount > 1) {
+        if (run.floorIndex < 2) expect(combat.enemies.length).toBeGreaterThanOrEqual(3);
+        else expect(combat.enemies.length).toBeGreaterThan(3);
+      }
     }
 
     expect(shapes).toEqual(new Set(['standard', 'wide', 'tall', 'large', 'l-shaped']));
@@ -1233,6 +1237,52 @@ describe('combat', () => {
       run.combat!.animationEvents.filter((event) => event.kind === CombatAnimationKind.EnemyAttack),
     ).toHaveLength(2);
     expect(run.combat!.enemies[0]!.intent.actions).toHaveLength(2);
+  });
+
+  it('lets Isaac dodge a boss attack by leaving its telegraphed target cells', () => {
+    let run = createRun('BOSS-TELEGRAPH-DODGE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const boss = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
+    Object.assign(boss, {
+      boss: true,
+      alerted: true,
+      position: { x: 8, y: 3 },
+      intent: {
+        kind: IntentKind.Attack,
+        value: 20,
+        label: 'ground-stomp 20 @ (0, 4)',
+        actions: [
+          {
+            kind: IntentKind.Attack,
+            value: 20,
+            pattern: BossAttackPattern.GroundStomp,
+            targetX: 0,
+            targetY: 4,
+            radius: 1,
+          },
+        ],
+      },
+    });
+    run.combat!.playerPosition = { x: 3, y: 4 };
+    run.combat!.playerShield = 0;
+    run.combat!.hand = [];
+    const hpBefore = run.player.redHp;
+
+    run = finishDiscard(endTurn(run));
+
+    expect(run.player.redHp).toBe(hpBefore);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'bossPatternDodged')).toBe(true);
+    expect(
+      run.combat!.animationEvents.some(
+        (event) =>
+          event.kind === CombatAnimationKind.EnemyAttack &&
+          event.bossPattern === BossAttackPattern.GroundStomp &&
+          event.value === 0,
+      ),
+    ).toBe(true);
   });
 
   it('uses a boss charge as a doubled first attack on the following turn', () => {

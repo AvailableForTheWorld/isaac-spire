@@ -1,5 +1,6 @@
 import type {
   AttackMode,
+  BossAttackPattern,
   CombatSelectionKind,
   CombatAnimationKind,
   CombatLogTone,
@@ -40,6 +41,12 @@ export interface EnemyIntent {
 export interface EnemyAction {
   kind: IntentKind;
   value: number;
+  pattern?: BossAttackPattern;
+  targetX?: number;
+  targetY?: number;
+  radius?: number;
+  innerRadius?: number;
+  range?: number;
 }
 
 export interface EnemyState extends EnemyDefinition {
@@ -91,6 +98,7 @@ export interface CombatAnimationEvent {
   poisonTurns?: number;
   slowTurns?: number;
   movementStyle?: CombatMovementStyle;
+  bossPattern?: BossAttackPattern;
 }
 
 export interface CombatLogEntry {

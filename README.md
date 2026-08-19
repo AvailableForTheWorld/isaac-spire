@@ -34,7 +34,9 @@ fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
 
 Open `http://localhost:5173`. The API listens on `http://localhost:3001/api`.
 
-Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and production builds. See [architecture](docs/architecture.md), [achievements and Steam-ready unlock progression](docs/achievement-system.md), [reward balance and card pools](docs/reward-balance.md), [storage](docs/storage.md), [development](docs/development.md), and the [change log](CHANGELOG.md).
+Progress auto-saves to the browser and SQLite. The in-game header also provides **Save** and **Save & main menu** controls; the main menu's **Continue** button loads the newest unfinished local or server snapshot. Offline saves remain resumable from the same browser.
+
+Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and production builds. See [architecture](docs/architecture.md), [boss combat and floor difficulty](docs/boss-combat.md), [achievements and Steam-ready unlock progression](docs/achievement-system.md), [reward balance and card pools](docs/reward-balance.md), [storage](docs/storage.md), [development](docs/development.md), and the [change log](CHANGELOG.md).
 
 ## First-run rules
 
@@ -42,6 +44,9 @@ Use `pnpm check` to run ESLint, TypeScript checks, rule/API tests, and productio
 - A turn ends immediately when requested, but hands above five cards must first be discarded down to five. Active skill cards stay equipped and consume their original item's round-based charge.
 - Fire rate is a tear-echo accumulator. At `1.25`, every fourth attack card creates a free repeat hit; at `1.5`, every second attack does so. This preserves the five-vitality economy while making tears-up items meaningful.
 - Enemies telegraph attack, shield, curse, recovery, preparation, or idle intents. Prepared champion attacks deal double damage on the next action.
+- Bosses compose two telegraphed instructions from spread, radial, spiral, laser, leap, stomp, charge, rock-wave, rain, summon, and defense patterns; their move sets escalate at 66% and 33% HP.
+- Floor pressure rises in six explicit steps through enemy durability, attack, armor, mobility/range, encounter density, and boss support rather than boss HP alone.
+- Combat bombs deal 30 damage at the center, 20 on cardinal neighbors, and 15 on diagonal neighbors for each occupied enemy cell.
 - Damage consumes shield, then soul/black hearts, then red hearts. When a black heart empties, normal enemies die and elites/bosses take 100 damage.
 - Each map contains three connected branches. Every branch has one Shop, Treasure Room, Secret Room, and Super Secret Room. Secret rooms are optional bomb-gated detours, so running out of bombs never blocks progress.
 - Bosses award a boss-pool item, then independently roll the cumulative Devil/Angel gate. The two rooms are mutually exclusive. Skipping a Devil room builds Angel favor for later floors.

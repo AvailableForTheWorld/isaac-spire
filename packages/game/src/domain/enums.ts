@@ -458,6 +458,23 @@ export enum IntentKind {
   Idle = 'idle',
 }
 
+/**
+ * Reusable grid-combat adaptations of Isaac boss attacks. Boss profiles compose
+ * these primitives instead of adding boss-specific branches to the engine.
+ */
+export enum BossAttackPattern {
+  Contact = 'contact',
+  ProjectileSpread = 'projectile-spread',
+  RadialBurst = 'radial-burst',
+  SpiralBarrage = 'spiral-barrage',
+  LaserLine = 'laser-line',
+  LeapSlam = 'leap-slam',
+  GroundStomp = 'ground-stomp',
+  ChargeLane = 'charge-lane',
+  RockWave = 'rock-wave',
+  ProjectileRain = 'projectile-rain',
+}
+
 export enum EnemyBehavior {
   Swarm = 'swarm',
   Hunter = 'hunter',

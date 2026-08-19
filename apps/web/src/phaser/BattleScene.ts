@@ -1,9 +1,12 @@
 import * as Phaser from 'phaser';
 import {
   AttackMode,
+  BossAttackPattern,
   CombatAnimationKind,
   CombatMovementStyle,
   DEFAULT_COMBAT_ROOM_LAYOUT,
+  enemyChebyshevDistanceToPosition,
+  getCombatRoomCells,
   isCombatCellAvailable,
   type CombatAnimationEvent,
   type EnemyState,
@@ -146,6 +149,7 @@ export class BattleScene extends Phaser.Scene {
         );
       }
     }
+    this.drawBossTelegraphs(run);
     const leftDoorRows = Array.from({ length: this.gridRows }, (_, row) => row).filter((row) =>
       isCombatCellAvailable(run.combat!, { x: 0, y: row }),
     );
@@ -225,6 +229,54 @@ export class BattleScene extends Phaser.Scene {
 
   private actor(id?: string): ActorVisual | undefined {
     return id === 'isaac' ? this.isaac : id ? this.enemies.get(id) : undefined;
+  }
+
+  private drawBossTelegraphs(run: RunState): void {
+    if (!run.combat || run.combat.deploymentPending) return;
+    const cellWidth = this.gridWidth / this.gridColumns;
+    const cellHeight = this.gridHeight / this.gridRows;
+    const markedCells = new Set<string>();
+    for (const enemy of run.combat.enemies.filter((entry) => entry.hp > 0 && entry.boss)) {
+      for (const action of enemy.intent.actions ?? []) {
+        if (!action.pattern || action.pattern === BossAttackPattern.Contact) continue;
+        const target = {
+          x: action.targetX ?? run.combat.playerPosition.x,
+          y: action.targetY ?? run.combat.playerPosition.y,
+        };
+        const cells = getCombatRoomCells(run.combat).filter((cell) => {
+          const targetDistance = Math.max(Math.abs(cell.x - target.x), Math.abs(cell.y - target.y));
+          switch (action.pattern) {
+            case BossAttackPattern.ProjectileSpread:
+            case BossAttackPattern.LeapSlam:
+            case BossAttackPattern.GroundStomp:
+            case BossAttackPattern.ProjectileRain:
+              return targetDistance <= (action.radius ?? 0);
+            case BossAttackPattern.RadialBurst:
+              return enemyChebyshevDistanceToPosition(enemy, cell) <= (action.radius ?? enemy.attackRange);
+            case BossAttackPattern.SpiralBarrage: {
+              const distance = enemyChebyshevDistanceToPosition(enemy, cell);
+              return distance > (action.innerRadius ?? 0) && distance <= (action.radius ?? 6);
+            }
+            case BossAttackPattern.LaserLine:
+            case BossAttackPattern.ChargeLane:
+            case BossAttackPattern.RockWave:
+              return cell.x === target.x || cell.y === target.y;
+            default:
+              return false;
+          }
+        });
+        for (const cell of cells) {
+          const key = `${cell.x}:${cell.y}`;
+          if (markedCells.has(key)) continue;
+          markedCells.add(key);
+          const point = this.gridPoint(cell.x, cell.y);
+          this.add
+            .rectangle(point.x, point.y, cellWidth * 0.9, cellHeight * 0.9, 0xc3424d, 0.13)
+            .setStrokeStyle(2, 0xef7880, 0.48)
+            .setDepth(2);
+        }
+      }
+    }
   }
 
   private configureGrid(run: RunState): void {
@@ -644,7 +696,7 @@ export class BattleScene extends Phaser.Scene {
     const cells = Math.max(1, event.hitCount ?? 1);
     const labelPosition = this.floatingLabelPosition(target.y, 88);
     const label = this.add
-      .text(target.x, labelPosition.y, `50 × ${cells}`, {
+      .text(target.x, labelPosition.y, `✹ ${event.rawValue ?? 0} · ×${cells}`, {
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
         fontStyle: 'bold',
@@ -696,6 +748,7 @@ export class BattleScene extends Phaser.Scene {
     const source = this.actor(event.sourceId);
     const target = this.actor('isaac');
     if (!source || !target) return;
+    await this.animateBossPattern(event, source);
     this.tweens.add({
       targets: source.parts,
       x: '-=16',
@@ -708,6 +761,10 @@ export class BattleScene extends Phaser.Scene {
     const shot = this.add
       .circle(source.x - 16, source.y, 8, 0xd45b54, 0.95)
       .setStrokeStyle(3, 0xffb09d, 0.75);
+    const shotDestination =
+      event.bossPattern && (event.value ?? 0) <= 0 && event.toX !== undefined && event.toY !== undefined
+        ? this.gridPoint(event.toX, event.toY)
+        : { x: target.x + 10, y: target.y };
     const rawPosition = this.floatingLabelPosition(source.y, 75);
     const raw = this.add
       .text(source.x - 10, rawPosition.y, `⚔ ${event.rawValue ?? 0}`, {
@@ -726,8 +783,29 @@ export class BattleScene extends Phaser.Scene {
       duration: 950,
       onComplete: () => raw.destroy(),
     });
-    await this.tween(shot, { x: target.x + 10, y: target.y, duration: 240, ease: 'Cubic.easeIn' });
+    await this.tween(shot, {
+      x: shotDestination.x,
+      y: shotDestination.y,
+      duration: 240,
+      ease: 'Cubic.easeIn',
+    });
     shot.destroy();
+    if (event.bossPattern && (event.value ?? 0) <= 0) {
+      const miss = this.add
+        .text(shotDestination.x, shotDestination.y - 12, '◇ 0', {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '20px',
+          fontStyle: 'bold',
+          color: '#9ed8df',
+          stroke: '#15363d',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5)
+        .setDepth(78);
+      await this.tween(miss, { y: miss.y - 26, alpha: 0, duration: 420, ease: 'Quad.easeOut' });
+      miss.destroy();
+      return;
+    }
     if ((event.armorValue ?? 0) > 0) await this.animateArmorBlock(target, event.armorValue ?? 0);
     if ((event.secondaryValue ?? 0) > 0) await this.animateShieldLoss(target, event.secondaryValue ?? 0);
     await this.impact(
@@ -739,6 +817,112 @@ export class BattleScene extends Phaser.Scene {
       event.rawValue,
     );
     if ((event.value ?? 0) > 0) this.bloodDrop(target, event.value ?? 0);
+  }
+
+  private async animateBossPattern(event: CombatAnimationEvent, source: ActorVisual): Promise<void> {
+    if (!event.bossPattern || event.bossPattern === BossAttackPattern.Contact) return;
+    const marked =
+      event.toX === undefined || event.toY === undefined
+        ? { x: source.x, y: source.y }
+        : this.gridPoint(event.toX, event.toY);
+    const cellWidth = this.gridWidth / this.gridColumns;
+    const cellHeight = this.gridHeight / this.gridRows;
+    switch (event.bossPattern) {
+      case BossAttackPattern.LeapSlam:
+      case BossAttackPattern.GroundStomp:
+      case BossAttackPattern.ProjectileRain: {
+        const color =
+          event.bossPattern === BossAttackPattern.ProjectileRain
+            ? 0x8b6bb5
+            : event.bossPattern === BossAttackPattern.LeapSlam
+              ? 0xd45b54
+              : 0xa86c43;
+        const zone = this.add
+          .ellipse(marked.x, marked.y, cellWidth * 2.4, cellHeight * 2.4, color, 0.2)
+          .setStrokeStyle(5, color, 0.85)
+          .setDepth(64);
+        await this.tween(zone, { scale: 0.45, alpha: 0.9, duration: 240, ease: 'Cubic.easeIn' });
+        zone.destroy();
+        this.cameras.main.shake(160, 0.008);
+        return;
+      }
+      case BossAttackPattern.RadialBurst:
+      case BossAttackPattern.SpiralBarrage: {
+        const ring = this.add
+          .circle(source.x, source.y, 22, 0x8f4f79, 0.08)
+          .setStrokeStyle(7, 0xda82bf, 0.9)
+          .setDepth(64);
+        await this.tween(ring, {
+          scale: event.bossPattern === BossAttackPattern.SpiralBarrage ? 7.5 : 5.5,
+          angle: event.bossPattern === BossAttackPattern.SpiralBarrage ? 300 : 0,
+          alpha: 0,
+          duration: 320,
+          ease: 'Quad.easeOut',
+        });
+        ring.destroy();
+        return;
+      }
+      case BossAttackPattern.LaserLine:
+      case BossAttackPattern.ChargeLane:
+      case BossAttackPattern.RockWave: {
+        const color =
+          event.bossPattern === BossAttackPattern.LaserLine
+            ? 0xe45d68
+            : event.bossPattern === BossAttackPattern.ChargeLane
+              ? 0xe09a4f
+              : 0x9b7654;
+        const horizontal = this.add
+          .rectangle(
+            this.gridLeft + this.gridWidth / 2,
+            marked.y,
+            this.gridWidth,
+            cellHeight * 0.62,
+            color,
+            0.18,
+          )
+          .setDepth(63);
+        const vertical = this.add
+          .rectangle(
+            marked.x,
+            this.gridTop + this.gridHeight / 2,
+            cellWidth * 0.62,
+            this.gridHeight,
+            color,
+            0.18,
+          )
+          .setDepth(63);
+        await this.tween([horizontal, vertical], {
+          alpha: 0.82,
+          scaleX: event.bossPattern === BossAttackPattern.RockWave ? 0.92 : 1,
+          duration: 220,
+          yoyo: true,
+          hold: 70,
+        });
+        horizontal.destroy();
+        vertical.destroy();
+        return;
+      }
+      case BossAttackPattern.ProjectileSpread: {
+        const pellets = [-2, -1, 0, 1, 2].map((offset) =>
+          this.add.circle(source.x, source.y, 5, 0xd45b54, 0.8).setDepth(66 + Math.abs(offset)),
+        );
+        await Promise.all(
+          pellets.map((pellet, index) =>
+            this.tween(pellet, {
+              x: marked.x,
+              y: marked.y + (index - 2) * 14,
+              alpha: 0,
+              duration: 220,
+              ease: 'Cubic.easeIn',
+            }),
+          ),
+        );
+        pellets.forEach((pellet) => pellet.destroy());
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   private async animateArmorBlock(target: ActorVisual, amount: number): Promise<void> {

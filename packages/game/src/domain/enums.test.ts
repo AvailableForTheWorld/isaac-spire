@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BossAttackPattern,
   CardTarget,
   CardType,
   ChoiceKind,
@@ -20,6 +21,7 @@ describe('stable domain enum wire values', () => {
     expect(ItemKind.Active).toBe('active');
     expect(RoomKind.SuperSecret).toBe('super-secret');
     expect(IntentKind.Prepare).toBe('prepare');
+    expect(BossAttackPattern.LeapSlam).toBe('leap-slam');
     expect(CombatAnimationKind.PlayerAttack).toBe('player-attack');
     expect(ChoiceKind.Loot).toBe('loot');
     expect(RewardOptionType.Resource).toBe('resource');

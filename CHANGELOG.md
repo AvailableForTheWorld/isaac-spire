@@ -6,6 +6,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Added
 
+- Visible auto-save state, manual save, save-and-return controls, local page-exit preservation, and a main-menu Continue slot with seed/time details.
+- Serialized server-save requests, offline local-save fallback, save failure states, and a React warning before a new run replaces the Continue slot.
+- A reusable Isaac boss-attack archetype catalog with telegraphed spread, radial, spiral, laser, leap, stomp, charge, rock-wave, and projectile-rain grid resolvers.
+- Three-phase, two-instruction profiles for all six first-run bosses, bilingual intent details, dodge feedback, pattern-specific Phaser effects, and coverage tests.
+- An explicit six-floor difficulty curve covering HP, attack, armor, movement, range, encounter density, and boss support pressure.
 - A 36-entry bilingual achievement compendium covering boss progression through ???, combat mastery, sacrifice, shop spending, exploration, deckbuilding, and Slay-the-Spire-style run challenges.
 - Typed lifetime/run achievement metrics and domain events, indexed condition evaluation, item-unlock rewards, bounded in-run notices, legacy save migration, and idempotent profile merging.
 - A Steam-ready platform port with stable achievement keys, pending-sync diffing, and acknowledged-sync tracking for future Steamworks integration and offline retries.
@@ -39,6 +44,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- Combat bombs now deal 30 damage on the center cell, 20 on each cardinal neighbor, and 15 on each diagonal cell; multi-cell enemies accumulate the covered cell values.
 - Achievement completion is now shown inside the blocking room-reward reveal and then queued as a persistent, explicitly acknowledged notice; saved unacknowledged achievements reappear after resuming instead of expiring behind another overlay.
 - Resume selection now compares local and server snapshot timestamps instead of always preferring any stale local snapshot.
 - Authored and curated collectible definitions now override generated records by both project ID and original `isaacId`; generated aliases can no longer create a second runtime item, and existing R Key/Damocles-style project definitions remain authoritative.
