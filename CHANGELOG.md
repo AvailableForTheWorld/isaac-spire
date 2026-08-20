@@ -6,6 +6,9 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Added
 
+- A deterministic item-unlock progression allocator: fresh profiles now begin with 242 of 726 items (one third), every remaining item belongs to exactly one achievement bundle, completed achievements backfill expanded bundles, and achievement UI previews stay compact.
+- First-run reward guarantees across every obtainable special-room pool, including a deliberately limited set of four quality-4 items and enough damage, sustain, deck-flow, familiar, and utility options to complete the Mom route.
+- Versioned profile and active-run migrations that detect legacy near-open catalogs, rebuild reward eligibility from the new initial pool plus actually completed achievement bundles, and preserve scores, held items, decks, run records, counters, and genuinely versioned unlock progress.
 - Interactive draw-pile selection: explicit Draw effects now open the pile and let the player choose the requested cards instead of taking the top cards automatically.
 - Visible auto-save state, manual save, save-and-return controls, local page-exit preservation, and a main-menu Continue slot with seed/time details.
 - Serialized server-save requests, offline local-save fallback, save failure states, and a React warning before a new run replaces the Continue slot.
@@ -45,6 +48,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- Achievement unlocks now use only the persistent, explicitly acknowledged top notice during a run; the redundant permanent bottom-right unlock label was removed so it cannot cover End Turn or discard controls.
 - All passive familiar collectibles now stay out of combat piles and deploy as non-blocking assistants around Isaac's eight directions. They automatically attack the nearest living enemy every player round, preserve trait-driven multishot/attack-form/status/explosion behavior, animate independently in Phaser, and migrate legacy familiar cards out of existing saves.
 - The D6 now exchanges every other Item card in hand with random physical cards from the existing draw and discard piles instead of silently rewriting card definitions in place; it preserves pile positions, reports each source count, blocks empty activations, and plays a dedicated exchange animation.
 - Key-locked Shops and Treasure Rooms can now be passed without entering when Isaac has no key, advancing to their outgoing route nodes without spending a key or granting room rewards and preventing mandatory-route softlocks.

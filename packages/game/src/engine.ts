@@ -4,6 +4,7 @@ import {
   FLOORS,
   ITEMS,
   bossForFloor,
+  completedAchievementItemUnlocks,
   eliteForFloor,
   enemyPoolForFloor,
   itemUsesCombatCard,
@@ -397,6 +398,9 @@ export function createRun(
   const unlockedItemIds = Array.isArray(progression)
     ? progression
     : (profile?.unlockedItemIds ?? DEFAULT_UNLOCKS);
+  const completedAchievementUnlocks = profile
+    ? completedAchievementItemUnlocks(profile.achievementProgress.completedIds)
+    : [];
   const run = {
     id: `run-${hashSeed(cleanSeed).toString(36)}-${Date.now().toString(36)}`,
     seed: cleanSeed,
@@ -413,7 +417,7 @@ export function createRun(
     devilChance: 0.35,
     angelFavor: 0,
     tookDevilDeal: false,
-    unlocks: [...new Set([...DEFAULT_UNLOCKS, ...unlockedItemIds])],
+    unlocks: [...new Set([...DEFAULT_UNLOCKS, ...unlockedItemIds, ...completedAchievementUnlocks])],
     unlockNotices: [],
     lastReward: [],
     floorBombSearches: [],

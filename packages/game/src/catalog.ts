@@ -1,14 +1,19 @@
 import type {
+  AchievementId,
   CardDefinition,
   EnemyDefinition,
   FloorDefinition,
   ItemDefinition,
   ProfileState,
 } from './types.js';
-import { ACHIEVEMENT_REWARD_ITEM_IDS } from './achievements/catalog.js';
+import { ACHIEVEMENT_DEFINITIONS } from './achievements/catalog.js';
 import { isFamiliarItem } from './combat/familiars.js';
 import { CUSTOM_ITEM_DEFINITIONS } from './content/custom-items.js';
 import { FULL_ISAAC_ITEMS } from './content/isaac-items.generated.js';
+import {
+  CURRENT_ITEM_UNLOCK_PROGRESSION_VERSION,
+  buildItemUnlockProgression,
+} from './progression/item-unlocks.js';
 import {
   AttackMode,
   CardEffectOpcode,
@@ -1145,11 +1150,20 @@ for (const item of Object.values(ITEMS).filter(
   };
 }
 
-export const DEFAULT_UNLOCKS = Object.values(ITEMS)
-  .filter((item) => !item.unlock && !ACHIEVEMENT_REWARD_ITEM_IDS.has(item.id))
-  .map((item) => item.id);
+export const ITEM_UNLOCK_PROGRESSION = buildItemUnlockProgression(ITEMS, ACHIEVEMENT_DEFINITIONS);
+
+export const DEFAULT_UNLOCKS = [...ITEM_UNLOCK_PROGRESSION.initialItemIds];
+
+export function achievementItemUnlocks(achievementId: AchievementId): readonly string[] {
+  return ITEM_UNLOCK_PROGRESSION.achievementItemIds[achievementId] ?? [];
+}
+
+export function completedAchievementItemUnlocks(achievementIds: readonly AchievementId[]): readonly string[] {
+  return [...new Set(achievementIds.flatMap((achievementId) => achievementItemUnlocks(achievementId)))];
+}
 
 export const DEFAULT_PROFILE: ProfileState = {
+  itemUnlockProgressionVersion: CURRENT_ITEM_UNLOCK_PROGRESSION_VERSION,
   wins: 0,
   losses: 0,
   bestScore: 0,

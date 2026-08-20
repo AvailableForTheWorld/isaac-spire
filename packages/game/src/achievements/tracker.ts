@@ -1,4 +1,4 @@
-import { CARDS, ITEMS } from '../catalog.js';
+import { CARDS, ITEMS, achievementItemUnlocks } from '../catalog.js';
 import type {
   AchievementDefinition,
   AchievementEvent,
@@ -120,7 +120,7 @@ function unlockAchievement(run: RunState, definition: AchievementDefinition): vo
   const completedAt = new Date().toISOString();
   run.achievementState.completedIds.push(definition.id);
   run.achievementState.completedAt[definition.id] = completedAt;
-  const newRewards = definition.rewardItemIds.filter((id) => !run.unlocks.includes(id));
+  const newRewards = achievementItemUnlocks(definition.id).filter((id) => !run.unlocks.includes(id));
   run.unlocks.push(...newRewards);
   run.achievementNotices.push({
     achievementId: definition.id,

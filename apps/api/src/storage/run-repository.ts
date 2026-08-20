@@ -17,6 +17,7 @@ export interface RetentionPolicy {
 export abstract class RunRepository {
   abstract initialize(): Promise<void>;
   abstract getProfile(): Promise<ProfileState>;
+  abstract saveProfile(profile: ProfileState): Promise<void>;
   abstract listRuns(limit?: number): Promise<RunSummary[]>;
   abstract findRun(id: string): Promise<PersistedRun | undefined>;
   abstract findLatestActiveRun(): Promise<PersistedRun | undefined>;

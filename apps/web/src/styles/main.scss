@@ -829,21 +829,6 @@ input:focus-visible {
   cursor: pointer;
   font-size: 0.75rem;
 }
-.unlock-toast {
-  position: fixed;
-  z-index: 30;
-  right: 1.2rem;
-  bottom: 1.2rem;
-  max-width: 25rem;
-  padding: 0.8rem 1rem;
-  border: 1px solid rgba(222, 184, 117, 0.35);
-  background: #2d271d;
-  color: #dfc28d;
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-
 html[lang^='zh']
   :is(
     .home-logo h1,
@@ -4816,7 +4801,7 @@ html[lang^='zh']
 .achievement-toast {
   position: fixed;
   z-index: 240;
-  top: 22px;
+  top: 5.15rem;
   left: 50%;
   width: min(520px, calc(100vw - 24px));
   display: grid;
@@ -4831,6 +4816,10 @@ html[lang^='zh']
   box-shadow: 0 15px 45px rgb(0 0 0 / 48%);
   transform: translateX(-50%);
   animation: achievement-arrive 0.32s ease-out both;
+}
+
+.game-shell:is(.phase-combat, .phase-discard) .achievement-toast {
+  pointer-events: none;
 }
 
 .achievement-toast-icon {
@@ -4890,6 +4879,7 @@ html[lang^='zh']
   background: rgb(218 174 100 / 8%);
   font-size: 12px;
   white-space: nowrap;
+  pointer-events: auto;
 }
 
 @keyframes achievement-arrive {
@@ -4905,7 +4895,7 @@ html[lang^='zh']
 
 @media (max-width: 760px) {
   .achievement-toast {
-    top: 10px;
+    top: 4.85rem;
     grid-template-columns: 42px minmax(0, 1fr);
   }
 

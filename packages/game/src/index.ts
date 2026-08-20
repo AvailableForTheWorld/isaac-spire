@@ -13,6 +13,7 @@ export * from './combat/projectile.js';
 export * from './combat/familiars.js';
 export * from './content/registry.js';
 export * from './content/catalog.js';
+export * from './progression/item-unlocks.js';
 export * from './state/migrations.js';
 export * from './rewards/room-rewards.js';
 export * from './achievements/catalog.js';

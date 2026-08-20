@@ -1,12 +1,19 @@
-import { ITEMS, itemUsesCombatCard, passiveCardId } from '../catalog.js';
+import {
+  DEFAULT_UNLOCKS,
+  ITEMS,
+  completedAchievementItemUnlocks,
+  itemUsesCombatCard,
+  passiveCardId,
+} from '../catalog.js';
 import { createAchievementProgress, createRunAchievementState } from '../achievements/tracker.js';
 import { createFamiliarState, isFamiliarItem } from '../combat/familiars.js';
 import { DEFAULT_HEART_SIZE, MAX_RED_CONTAINERS } from '../domain/player.js';
 import { addRedContainers, clampPlayerHealth, increaseHeartSize } from '../player.js';
+import { CURRENT_ITEM_UNLOCK_PROGRESSION_VERSION } from '../progression/item-unlocks.js';
 import type { CombatState, PlayerState, ProfileState, RunState } from '../types.js';
 import { AttackMode, ItemKind } from '../types.js';
 
-export const CURRENT_RUN_VERSION = 4;
+export const CURRENT_RUN_VERSION = 5;
 const LEGACY_HEART_SIZE = 30;
 
 const LEGACY_CARD_IDS: Readonly<Record<string, string>> = {
@@ -74,6 +81,14 @@ export function migrateRunSnapshot(state: RunState): RunState {
   if (previousVersion < 3) {
     migratePermanentHeartSizeItems(run.player);
     if (run.roomCheckpoint) migratePermanentHeartSizeItems(run.roomCheckpoint.player);
+  }
+  if (previousVersion < 5 && run.unlocks.length >= Math.floor(Object.keys(ITEMS).length * 0.8)) {
+    run.unlocks = [
+      ...new Set([
+        ...DEFAULT_UNLOCKS,
+        ...completedAchievementItemUnlocks(run.achievementState?.completedIds ?? []),
+      ]),
+    ];
   }
   clampPlayerHealth(run.player);
   if (run.roomCheckpoint) clampPlayerHealth(run.roomCheckpoint.player);
@@ -176,5 +191,17 @@ export function migrateProfileState(state: ProfileState): ProfileState {
   profile.discoveredItemIds ??= [];
   profile.eventFlags ??= [];
   profile.achievementProgress = createAchievementProgress(profile.achievementProgress);
+  const completedUnlocks = completedAchievementItemUnlocks(profile.achievementProgress.completedIds);
+  const legacyOpenCatalog =
+    (profile.itemUnlockProgressionVersion ?? 0) < CURRENT_ITEM_UNLOCK_PROGRESSION_VERSION &&
+    profile.unlockedItemIds.length >= Math.floor(Object.keys(ITEMS).length * 0.8);
+  profile.unlockedItemIds = [
+    ...new Set([
+      ...DEFAULT_UNLOCKS,
+      ...(legacyOpenCatalog ? [] : profile.unlockedItemIds),
+      ...completedUnlocks,
+    ]),
+  ];
+  profile.itemUnlockProgressionVersion = CURRENT_ITEM_UNLOCK_PROGRESSION_VERSION;
   return profile;
 }

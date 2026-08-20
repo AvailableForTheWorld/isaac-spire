@@ -82,6 +82,11 @@ export class SqliteRunRepository extends RunRepository {
     return decodeSnapshot<ProfileState>(row.payload);
   }
 
+  async saveProfile(profile: ProfileState): Promise<void> {
+    await this.initialize();
+    this.transaction(() => this.upsertProfile(profile, new Date().toISOString()));
+  }
+
   async listRuns(limit = 20): Promise<RunSummary[]> {
     await this.initialize();
     const rows = this.db

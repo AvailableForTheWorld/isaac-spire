@@ -5,6 +5,7 @@ import {
   ITEMS,
   AchievementCategory,
   AchievementTier,
+  achievementItemUnlocks,
   achievementRequirementValue,
   type AchievementDefinition,
   type ProfileState,
@@ -107,6 +108,14 @@ export function AchievementPanel({ profile, onClose }: { profile: ProfileState; 
             const percentage = unlocked
               ? 100
               : Math.min(100, (progress.current / Math.max(1, progress.target)) * 100);
+            const rewardItemIds = achievementItemUnlocks(achievement.id);
+            const rewardNames = rewardItemIds
+              .map((itemId) => {
+                const item = ITEMS[itemId];
+                return chinese ? item?.nameZh : item?.name;
+              })
+              .filter(Boolean)
+              .join('、');
             return (
               <article
                 key={achievement.id}
@@ -129,7 +138,7 @@ export function AchievementPanel({ profile, onClose }: { profile: ProfileState; 
                     {!hidden && (
                       <span className="achievement-rewards">
                         {t('achievements.rewards')}:{' '}
-                        {achievement.rewardItemIds.map((itemId) => {
+                        {rewardItemIds.slice(0, 3).map((itemId) => {
                           const item = ITEMS[itemId];
                           const itemName = chinese ? item?.nameZh : item?.name;
                           return (
@@ -139,6 +148,12 @@ export function AchievementPanel({ profile, onClose }: { profile: ProfileState; 
                             </b>
                           );
                         })}
+                        {rewardItemIds.length > 3 && (
+                          <b title={rewardNames}>
+                            <i>＋</i>
+                            <span>+{rewardItemIds.length - 3}</span>
+                          </b>
+                        )}
                       </span>
                     )}
                   </div>

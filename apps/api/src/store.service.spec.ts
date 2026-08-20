@@ -4,13 +4,17 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   AchievementEventType,
+  AchievementId,
   AchievementMetric,
   DEFAULT_PROFILE,
+  ITEMS,
   RunPhase,
   RunStatus,
+  achievementItemUnlocks,
   createRun,
   recordAchievementEvent,
   type PersistedRun,
+  type ProfileState,
 } from '@isaac-spire/game';
 import { StoreService } from './store.service.js';
 
@@ -81,6 +85,34 @@ describe('StoreService', () => {
     await expect(access(legacyFile)).rejects.toBeDefined();
     await expect(access(`${legacyFile}.migrated.json.gz`)).resolves.toBeUndefined();
     expect((await readFile(`${legacyFile}.migrated.json.gz`)).byteLength).toBeGreaterThan(0);
+  });
+
+  it('persists the versioned rebase of a legacy near-open item catalog', async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), 'isaac-spire-progression-'));
+    const legacyFile = join(temporaryDirectory, 'store.json');
+    const databaseFile = join(temporaryDirectory, 'runs.sqlite');
+    const legacyProfile = structuredClone(DEFAULT_PROFILE);
+    delete (legacyProfile as Partial<ProfileState>).itemUnlockProgressionVersion;
+    legacyProfile.bestScore = 1170;
+    legacyProfile.unlockedItemIds = Object.keys(ITEMS).slice(0, 724);
+    legacyProfile.achievementProgress.completedIds = [AchievementId.BasementAwakening];
+    await writeFile(legacyFile, JSON.stringify({ runs: {}, profile: legacyProfile }));
+    process.env.ISAAC_SPIRE_DATA_FILE = legacyFile;
+    process.env.ISAAC_SPIRE_DB_FILE = databaseFile;
+    store = new StoreService();
+    await store.onModuleInit();
+
+    const migrated = await store.profile();
+    const expectedCount =
+      DEFAULT_PROFILE.unlockedItemIds.length + achievementItemUnlocks(AchievementId.BasementAwakening).length;
+    expect(migrated.unlockedItemIds).toHaveLength(expectedCount);
+    expect(migrated.bestScore).toBe(1170);
+
+    const saved = await store.saveRun(createRun('PERSIST-PROGRESSION-MIGRATION'));
+    expect(saved.snapshot.unlocks).toHaveLength(expectedCount);
+    const persisted = await store.profile();
+    expect(persisted.unlockedItemIds).toHaveLength(expectedCount);
+    expect(persisted.itemUnlockProgressionVersion).toBe(1);
   });
 
   it('keeps only the newest active snapshots during compaction', async () => {

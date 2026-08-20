@@ -95,6 +95,7 @@ export interface RunState {
 }
 
 export interface ProfileState {
+  itemUnlockProgressionVersion: number;
   wins: number;
   losses: number;
   bestScore: number;

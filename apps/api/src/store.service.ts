@@ -1,11 +1,11 @@
 import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
-  DEFAULT_PROFILE,
   RunPhase,
   RunStatus,
   mergeAchievementProgress,
   migrateProfileState,
+  migrateRunSnapshot,
   type PersistedRun,
   type ProfileState,
   type RunState,
@@ -32,6 +32,11 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     await this.repository.initialize();
+    const storedProfile = await this.repository.getProfile();
+    const migratedProfile = migrateProfileState(storedProfile);
+    if (JSON.stringify(storedProfile) !== JSON.stringify(migratedProfile)) {
+      await this.repository.saveProfile(migratedProfile);
+    }
     await this.repository.compact(this.retentionPolicy);
   }
 
@@ -53,24 +58,25 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
     await this.writeQueue;
     const run = await this.repository.findRun(id);
     if (!run) throw new NotFoundException(`Run ${id} was not found`);
-    return run;
+    return this.applyProfileProgression(run);
   }
 
   async latestActiveRun(): Promise<PersistedRun | undefined> {
     await this.writeQueue;
-    return this.repository.findLatestActiveRun();
+    const run = await this.repository.findLatestActiveRun();
+    return run ? this.applyProfileProgression(run) : undefined;
   }
 
   async saveRun(snapshot: RunState): Promise<PersistedRun> {
+    // Old clients may still submit a pre-progression run; normalize it before profile merging.
+    snapshot = migrateRunSnapshot(snapshot);
     this.assertSnapshot(snapshot);
     let result!: PersistedRun;
     await this.enqueue(async () => {
       const timestamp = new Date().toISOString();
       const previous = await this.repository.findRun(snapshot.id);
-      const profile = migrateProfileState({
-        ...structuredClone(DEFAULT_PROFILE),
-        ...(await this.repository.getProfile()),
-      });
+      const profile = migrateProfileState(await this.repository.getProfile());
+      snapshot.unlocks = [...new Set([...profile.unlockedItemIds, ...snapshot.unlocks])];
       result = {
         id: snapshot.id,
         status:
@@ -113,6 +119,13 @@ export class StoreService implements OnModuleInit, OnModuleDestroy {
   private enqueue(operation: () => Promise<void>): Promise<void> {
     this.writeQueue = this.writeQueue.then(operation, operation);
     return this.writeQueue;
+  }
+
+  private async applyProfileProgression(run: PersistedRun): Promise<PersistedRun> {
+    const profile = migrateProfileState(await this.repository.getProfile());
+    const snapshot = migrateRunSnapshot(run.snapshot);
+    snapshot.unlocks = [...new Set([...profile.unlockedItemIds, ...snapshot.unlocks])];
+    return { ...run, snapshot };
   }
 
   private assertSnapshot(snapshot: RunState): void {

@@ -14,7 +14,6 @@ import {
   type AchievementNotice,
 } from '@isaac-spire/game';
 import { GameHeader } from '../../components/game/GameHeader';
-import { unlockText } from '../../localize';
 import { HomePage } from '../home/HomePage';
 import { PocketItemBar } from '../items/PocketItemBar';
 import { RoomRewardReveal } from '../rewards/RoomRewardReveal';
@@ -53,7 +52,7 @@ function AchievementUnlockNotice({
         {notice.rewardItemIds.length > 0 && (
           <div className="achievement-toast-rewards">
             <em>{t('achievements.newItems')}</em>
-            {notice.rewardItemIds.map((itemId) => {
+            {notice.rewardItemIds.slice(0, 5).map((itemId) => {
               const item = ITEMS[itemId];
               return (
                 <b key={itemId}>
@@ -61,6 +60,7 @@ function AchievementUnlockNotice({
                 </b>
               );
             })}
+            {notice.rewardItemIds.length > 5 && <b>＋{notice.rewardItemIds.length - 5}</b>}
           </div>
         )}
       </div>
@@ -122,11 +122,6 @@ export function GameApplication() {
             session.commit((state) => acknowledgeAchievementNotice(state, pendingAchievement.achievementId))
           }
         />
-      )}
-      {!showingRoomReward && run.unlockNotices.length > 0 && run.phase !== RunPhase.Victory && (
-        <div className="unlock-toast">
-          {t('result.newUnlock', { message: unlockText(t, run.unlockNotices.at(-1)!.itemId) })}
-        </div>
       )}
       <Suspense fallback={<main className="stage-loading">{t('combat.preparing')}</main>}>
         {run.phase === RunPhase.Map && (
