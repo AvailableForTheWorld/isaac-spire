@@ -8,6 +8,7 @@ export enum CardType {
   Skill = 'skill',
   Item = 'item',
   Recovery = 'recovery',
+  Vitality = 'vitality',
   Shield = 'shield',
   Hex = 'hex',
   Tarot = 'tarot',
@@ -20,6 +21,11 @@ export enum CardTarget {
   AllEnemies = 'all-enemies',
   Self = 'self',
   None = 'none',
+}
+
+export enum CardPileKind {
+  Draw = 'draw',
+  Discard = 'discard',
 }
 
 export enum AttackMode {
@@ -191,6 +197,7 @@ export enum CardEffectOpcode {
   GainFireRate = 'gain-fire-rate',
   GainArmor = 'gain-armor',
   GainShield = 'gain-shield',
+  GainShieldCapacity = 'gain-shield-capacity',
   Heal = 'heal',
   GainRange = 'gain-range',
   GainMovement = 'gain-movement',
@@ -238,6 +245,7 @@ export enum PocketItemAction {
 
 export enum CombatSelectionKind {
   Draw = 'draw',
+  Cycle = 'cycle',
   Transposition = 'transposition',
   BlankImitation = 'blank-imitation',
 }
@@ -489,9 +497,22 @@ export enum EnemyMovementPattern {
   DiagonalJump = 'diagonal-jump',
 }
 
+/** Stable clockwise slots used by non-blocking familiar assistants around Isaac. */
+export enum FamiliarDirection {
+  North = 'north',
+  NorthEast = 'north-east',
+  East = 'east',
+  SouthEast = 'south-east',
+  South = 'south',
+  SouthWest = 'south-west',
+  West = 'west',
+  NorthWest = 'north-west',
+}
+
 export enum CombatAnimationKind {
   CardPlay = 'card-play',
   CardDiscard = 'card-discard',
+  CardExchange = 'card-exchange',
   DiscardPhase = 'discard-phase',
   EnemyPhase = 'enemy-phase',
   RoundStart = 'round-start',
@@ -509,6 +530,8 @@ export enum CombatAnimationKind {
   BombBlast = 'bomb-blast',
   BombHit = 'bomb-hit',
   BlackHeart = 'black-heart',
+  FamiliarSpawn = 'familiar-spawn',
+  FamiliarAttack = 'familiar-attack',
 }
 
 export enum CombatMovementStyle {
@@ -576,8 +599,10 @@ export enum ResourceKind {
 }
 
 export enum UpgradeKind {
+  Card = 'card',
   Damage = 'damage',
   Heart = 'heart',
+  Shield = 'shield',
   Armor = 'armor',
   Vitality = 'vitality',
   Speed = 'speed',

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { CARDS, DEFAULT_UNLOCKS, ITEMS, bossForFloor, getEnemy, itemUsesCombatCard } from './catalog.js';
 import {
   acknowledgeRoomReward,
+  bypassLockedRoom,
+  cancelCombatSelection,
   canPlayCard,
   canPlayFusedAttack,
   chooseOption,
@@ -20,6 +22,7 @@ import {
   getEnemyOccupiedCells,
   getPlayerDeploymentCells,
   getPlayerMovementSpeed,
+  getPlayerShieldCapacity,
   getReachablePlayerCells,
   hydrateRunState,
   isPlayerInEnemyVision,
@@ -27,6 +30,7 @@ import {
   placePlayerForDeployment,
   playCard,
   playFusedAttack,
+  purchaseShopCardUpgrade,
   resolveCombatSelection,
   selectEnemy,
   skipChoice,
@@ -36,8 +40,10 @@ import {
 } from './engine.js';
 import { createFloorMap } from './map.js';
 import { addPocketHeart, createCard, equipItem } from './player.js';
+import { CURRENT_RUN_VERSION } from './state/migrations.js';
 import {
   AchievementMetric,
+  ARMOR_UPGRADE_AMOUNT,
   AttackMode,
   BossAttackPattern,
   CardType,
@@ -50,14 +56,18 @@ import {
   CombatSelectionKind,
   EnemyMovementPattern,
   HeartKind,
+  HEART_SIZE_UPGRADE_AMOUNT,
   IntentKind,
   ItemKind,
+  MAX_RED_CONTAINERS,
   ResourceKind,
   RewardContext,
   RewardOptionType,
   RewardPool,
   RoomKind,
   RunPhase,
+  SHIELD_CAPACITY_UPGRADE_AMOUNT,
+  UpgradeKind,
 } from './types.js';
 
 function createRun(seed?: string, unlockedItemIds = DEFAULT_UNLOCKS) {
@@ -78,7 +88,7 @@ function settleChoice(
     if (choice.requiresRewardConfirmation) {
       next = acknowledgeRoomReward(next);
     } else if (choice.kind === ChoiceKind.Shop) {
-      next = chooseOption(next, choice.options.find((option) => option.action === ChoiceAction.Leave)!.id);
+      next = skipChoice(next);
     } else if (choice.kind === ChoiceKind.Deal) {
       next = chooseOption(next, choice.options.find((option) => option.action === ChoiceAction.SkipDeal)!.id);
     } else if (choice.canSkip && (choice.kind === ChoiceKind.Card || choice.kind === ChoiceKind.Sacrifice)) {
@@ -157,7 +167,8 @@ describe('run generation', () => {
     const right = createRun('MOM-1001', DEFAULT_UNLOCKS);
     expect(left.floorMap.nodes).toEqual(right.floorMap.nodes);
     expect(left.player.redContainers).toBe(3);
-    expect(left.player.redHp).toBe(90);
+    expect(left.player.redHp).toBe(30);
+    expect(left.player.stats.heartSize).toBe(10);
     expect(left.player.stats.maxVitality).toBe(5);
     expect(left.player.stats.baseShield).toBe(10);
     expect(left.player.stats.movementSpeed).toBe(3);
@@ -291,6 +302,30 @@ describe('run generation', () => {
     expect(laterFloor.player.keys).toBe(0);
   });
 
+  it('passes a mandatory locked room without rewards when no key is available', () => {
+    let run = createRun('LOCKED-ROOM-BYPASS');
+    run.floorIndex = 1;
+    run.floorMap = createFloorMap(1, run.seed);
+    const lockedShop = run.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
+    const anchor = run.floorMap.nodes.find((node) => node.connections.includes(lockedShop.id))!;
+    run.floorMap.currentNodeId = anchor.id;
+    run.player.keys = 0;
+    run.lastReward = ['stale reward'];
+
+    run = bypassLockedRoom(run, lockedShop.id);
+
+    expect(run.phase).toBe(RunPhase.Map);
+    expect(run.player.keys).toBe(0);
+    expect(run.floorMap.currentNodeId).toBe(lockedShop.id);
+    expect(run.floorMap.nodes.find((node) => node.id === lockedShop.id)).toMatchObject({
+      visited: true,
+      bypassed: true,
+    });
+    expect(run.currentRoomId).toBeUndefined();
+    expect(run.lastReward).toEqual([]);
+    expect(getAvailableNodes(run)).toEqual(lockedShop.connections);
+  });
+
   it('makes high-quality rewards rarer and more expensive to play', () => {
     let qualityTwoOffers = 0;
     let qualityFourOffers = 0;
@@ -320,17 +355,112 @@ describe('run generation', () => {
     run.floorMap.currentNodeId = anchor.id;
     run.player.coins = 100;
     run = enterRoom(run, shop.id);
-    const purchase = run.choice!.options.find((option) => option.action !== ChoiceAction.Leave)!;
+    const purchase = run.choice!.options.find((option) => option.upgrade === UpgradeKind.Heart)!;
     const purchasePrice = purchase.price!;
     run = chooseOption(run, purchase.id);
     expect(run.phase).toBe(RunPhase.Choice);
     expect(run.choice!.options.find((option) => option.id === purchase.id)?.sold).toBe(true);
     expect(run.achievementState.lifetimeCounters[AchievementMetric.CoinsSpent]).toBe(purchasePrice);
 
-    const leave = run.choice!.options.find((option) => option.action === ChoiceAction.Leave)!;
-    run = chooseOption(run, leave.id);
+    run = skipChoice(run);
     expect(run.phase).toBe(RunPhase.Map);
     expect(run.choice).toBeUndefined();
+  });
+
+  it('offers four upgrade services and three new item-card slots in every shop', () => {
+    let run = createRun('SHOP-SEVEN-SLOTS');
+    const shop = run.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
+    run.floorMap.currentNodeId = run.floorMap.nodes.find((node) => node.connections.includes(shop.id))!.id;
+    run = enterRoom(run, shop.id);
+
+    const upgrades = run.choice!.options.filter((option) => option.type === RewardOptionType.Upgrade);
+    const items = run.choice!.options.filter((option) => option.type === RewardOptionType.Item);
+
+    expect(run.choice!.options).toHaveLength(7);
+    expect(upgrades.map((option) => option.upgrade)).toEqual([
+      UpgradeKind.Card,
+      UpgradeKind.Heart,
+      UpgradeKind.Shield,
+      UpgradeKind.Armor,
+    ]);
+    expect(
+      upgrades
+        .filter((option) =>
+          [UpgradeKind.Heart, UpgradeKind.Shield, UpgradeKind.Armor].includes(option.upgrade!),
+        )
+        .map((option) => option.price),
+    ).toEqual([5, 5, 5]);
+    expect(items).toHaveLength(3);
+    for (const option of items) {
+      const item = ITEMS[option.itemId!]!;
+      expect(
+        itemUsesCombatCard(item) || (item.kind === ItemKind.Active && Boolean(item.skillCardId)),
+        item.id,
+      ).toBe(true);
+    }
+  });
+
+  it('prices every permanent stat-upgrade service at 15 coins after the first floor', () => {
+    let run = createRun('SHOP-LATER-FLOOR-STAT-PRICES');
+    const shop = run.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
+    run.floorMap.currentNodeId = run.floorMap.nodes.find((node) => node.connections.includes(shop.id))!.id;
+    run.floorIndex = 1;
+    run.player.stats.shopDiscount = 0.5;
+
+    run = enterRoom(run, shop.id);
+
+    for (const upgrade of [UpgradeKind.Heart, UpgradeKind.Shield, UpgradeKind.Armor]) {
+      expect(run.choice!.options.find((option) => option.upgrade === upgrade)?.price).toBe(15);
+    }
+  });
+
+  it('purchases a targeted deck-card upgrade only after a card is selected', () => {
+    let run = createRun('SHOP-CARD-UPGRADE');
+    const shop = run.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
+    run.floorMap.currentNodeId = run.floorMap.nodes.find((node) => node.connections.includes(shop.id))!.id;
+    run.player.coins = 100;
+    run = enterRoom(run, shop.id);
+    const option = run.choice!.options.find((entry) => entry.upgrade === UpgradeKind.Card)!;
+    const card = run.player.deck.find((entry) => entry.definitionId === 'item:sad-onion')!;
+    const attack = run.player.deck.find((entry) => entry.definitionId === 'basic-attack')!;
+    const baseFusion = getAttackFusionPreview(run, attack.instanceId, [card.instanceId])!;
+    const coinsBefore = run.player.coins;
+
+    expect(() => chooseOption(run, option.id)).toThrow(/choose a deck card/i);
+    expect(run.player.coins).toBe(coinsBefore);
+
+    run = purchaseShopCardUpgrade(run, option.id, card.instanceId);
+
+    expect(run.player.deck.find((entry) => entry.instanceId === card.instanceId)?.upgraded).toBe(true);
+    expect(run.player.coins).toBe(coinsBefore - option.price!);
+    expect(run.choice!.options.find((entry) => entry.id === option.id)?.sold).toBe(true);
+    expect(run.achievementState.lifetimeCounters[AchievementMetric.CoinsSpent]).toBe(option.price);
+    expect(
+      getAttackFusionPreview(run, attack.instanceId, [card.instanceId])!.damageMultiplier,
+    ).toBeGreaterThan(baseFusion.damageMultiplier);
+    expect(() => purchaseShopCardUpgrade(run, option.id, card.instanceId)).toThrow(/unavailable/i);
+  });
+
+  it('sells permanent heart, shield-capacity, and armor upgrades', () => {
+    let run = createRun('SHOP-STAT-UPGRADES');
+    const shop = run.floorMap.nodes.find((node) => node.kind === RoomKind.Shop)!;
+    run.floorMap.currentNodeId = run.floorMap.nodes.find((node) => node.connections.includes(shop.id))!.id;
+    run.player.coins = 200;
+    run.player.redHp = 1;
+    run = enterRoom(run, shop.id);
+    const heartSize = run.player.stats.heartSize;
+    const shieldCapacity = run.player.stats.maxShield;
+    const armor = run.player.stats.armor;
+
+    for (const upgrade of [UpgradeKind.Heart, UpgradeKind.Shield, UpgradeKind.Armor]) {
+      const option = run.choice!.options.find((entry) => entry.upgrade === upgrade)!;
+      run = chooseOption(run, option.id);
+    }
+
+    expect(run.player.stats.heartSize).toBe(heartSize + HEART_SIZE_UPGRADE_AMOUNT);
+    expect(run.player.redHp).toBe(run.player.redContainers * run.player.stats.heartSize);
+    expect(run.player.stats.maxShield).toBe(shieldCapacity + SHIELD_CAPACITY_UPGRADE_AMOUNT);
+    expect(run.player.stats.armor).toBe(armor + ARMOR_UPGRADE_AMOUNT);
   });
 
   it('records health offered through the real sacrifice-room command', () => {
@@ -469,6 +599,63 @@ describe('combat', () => {
     expect(hydrated.combat!.enemies[0]!.visionRange).toBeGreaterThan(1);
     expect(hydrated.combat!.enemies[0]!.footprintWidth).toBeGreaterThanOrEqual(1);
     expect(hydrated.combat!.enemies[0]!.alerted).toBe(false);
+  });
+
+  it('migrates 30-HP hearts and newly permanent health pickups into the compact health model', () => {
+    const run = createRun('LEGACY-HEART-SCALE');
+    run.version = 1;
+    run.player.stats.heartSize = 30;
+    run.player.redHp = 45;
+    run.player.pocketHearts = [{ id: 'legacy-soul', kind: HeartKind.Soul, hp: 15, maxHp: 30 }];
+    run.player.items.push('breakfast');
+    run.player.deck.push(createCard(run, 'item:breakfast'));
+
+    const hydrated = hydrateRunState(run);
+
+    expect(hydrated.version).toBe(CURRENT_RUN_VERSION);
+    expect(hydrated.player.stats.heartSize).toBe(10);
+    expect(hydrated.player.redContainers).toBe(4);
+    expect(hydrated.player.redHp).toBe(25);
+    expect(hydrated.player.pocketHearts[0]).toMatchObject({ hp: 5, maxHp: 10 });
+    expect(hydrated.player.deck.some((card) => card.definitionId === 'item:breakfast')).toBe(false);
+  });
+
+  it('migrates newly permanent heart-capacity items without replaying the version-two health migration', () => {
+    const run = createRun('LEGACY-HEART-CAPACITY');
+    run.version = 2;
+    run.player.redHp = 17;
+    run.player.pocketHearts = [{ id: 'legacy-black', kind: HeartKind.Black, hp: 5, maxHp: 10 }];
+    run.player.items.push('placenta');
+    run.player.deck.push(createCard(run, 'item:placenta'));
+
+    const hydrated = hydrateRunState(run);
+
+    expect(hydrated.version).toBe(CURRENT_RUN_VERSION);
+    expect(hydrated.player.redContainers).toBe(3);
+    expect(hydrated.player.stats.heartSize).toBe(13);
+    expect(hydrated.player.redHp).toBe(26);
+    expect(hydrated.player.pocketHearts[0]).toMatchObject({ hp: 8, maxHp: 13 });
+    expect(hydrated.player.deck.some((card) => card.definitionId === 'item:placenta')).toBe(false);
+  });
+
+  it('migrates legacy familiar cards into autonomous combat assistants', () => {
+    let run = createRun('LEGACY-FAMILIAR-CARD');
+    equipItem(run, 'harlequin-baby');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const legacyCard = createCard(run, 'item:harlequin-baby');
+    run.player.deck.push(legacyCard);
+    run.combat!.drawPile.push(legacyCard.instanceId);
+    run.version = 3;
+    delete (run.combat as Partial<typeof run.combat>).familiars;
+
+    const hydrated = hydrateRunState(run);
+
+    expect(hydrated.version).toBe(CURRENT_RUN_VERSION);
+    expect(hydrated.player.deck.some((card) => card.definitionId === 'item:harlequin-baby')).toBe(false);
+    expect(hydrated.combat!.drawPile).not.toContain(legacyCard.instanceId);
+    expect(hydrated.combat!.familiars).toEqual([
+      expect.objectContaining({ itemId: 'harlequin-baby', hits: 2 }),
+    ]);
   });
 
   it('migrates legacy tear-named combat data to attack semantics', () => {
@@ -697,6 +884,93 @@ describe('combat', () => {
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
     run.combat!.hand = [attack.instanceId];
     expect(canPlayCard(run, attack.instanceId, target.instanceId)).toEqual({ ok: true });
+  });
+
+  it('caps shield at 15 and disables shield or recovery cards when their resource is full', () => {
+    let run = createRun('PLAYER-RESOURCE-CAPS');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const crosses = run.player.deck.filter((card) => card.definitionId === 'wooden-cross');
+    const treatment = run.player.deck.find((card) => card.definitionId === 'half-heart')!;
+    run.combat!.hand = [crosses[0]!.instanceId, crosses[1]!.instanceId, treatment.instanceId];
+    run.combat!.vitality = 5;
+
+    expect(getPlayerShieldCapacity(run)).toBe(15);
+    expect(run.combat!.playerShield).toBe(10);
+    expect(canPlayCard(run, treatment.instanceId)).toEqual({
+      ok: false,
+      reason: 'Red-heart HP is already full',
+    });
+
+    run = playCard(run, crosses[0]!.instanceId);
+    expect(run.combat!.playerShield).toBe(15);
+    expect(canPlayCard(run, crosses[1]!.instanceId)).toEqual({
+      ok: false,
+      reason: 'Shield is already at maximum',
+    });
+
+    run.player.stats.maxShield += 5;
+    expect(getPlayerShieldCapacity(run)).toBe(20);
+    expect(canPlayCard(run, crosses[1]!.instanceId)).toEqual({ ok: true });
+
+    run.player.redHp -= 4;
+    expect(canPlayCard(run, treatment.instanceId)).toEqual({ ok: true });
+    run = playCard(run, treatment.instanceId);
+    expect(run.player.redHp).toBe(30);
+    expect(run.combat!.log[0]).toMatchObject({ messageKey: 'heal', params: { amount: 4 } });
+  });
+
+  it('makes an upgraded Treatment heal exactly three more HP', () => {
+    let run = createRun('UPGRADED-TREATMENT');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const treatment = run.player.deck.find((card) => card.definitionId === 'half-heart')!;
+    treatment.upgraded = true;
+    run.player.redHp = 10;
+    run.combat!.hand = [treatment.instanceId];
+    run.combat!.vitality = 5;
+
+    run = playCard(run, treatment.instanceId);
+
+    expect(run.player.redHp).toBe(23);
+    expect(run.combat!.log[0]).toMatchObject({ messageKey: 'heal', params: { amount: 13 } });
+  });
+
+  it('uses the zero-cost starter Vitality Shot once to gain two vitality for the current turn', () => {
+    let run = createRun('STARTER-VITALITY-SHOT');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const shot = run.player.deck.find((card) => card.definitionId === 'vitality-shot')!;
+    const maxVitality = run.player.stats.maxVitality;
+    run.combat!.hand = [shot.instanceId];
+    run.combat!.vitality = maxVitality;
+
+    run = playCard(run, shot.instanceId);
+
+    expect(run.combat!.vitality).toBe(maxVitality + 2);
+    expect(run.player.stats.maxVitality).toBe(maxVitality);
+    expect(run.player.deck.some((card) => card.instanceId === shot.instanceId)).toBe(false);
+    expect(run.combat!.discardPile).not.toContain(shot.instanceId);
+    expect(run.combat!.exhausted).toContain(shot.instanceId);
+    expect(run.combat!.log[0]).toMatchObject({ messageKey: 'vitality', params: { amount: 2 } });
+  });
+
+  it('lets item cards overflow the shield capacity while Wooden Cross remains capped', () => {
+    let run = createRun('ITEM-SHIELD-OVERFLOW');
+    equipItem(run, 'holy-mantle');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const mantle = run.player.deck.find((card) => card.definitionId === 'item:holy-mantle')!;
+    const cross = run.player.deck.find((card) => card.definitionId === 'wooden-cross')!;
+    run.combat!.hand = [mantle.instanceId, cross.instanceId];
+    run.combat!.playerShield = getPlayerShieldCapacity(run);
+    run.combat!.vitality = 5;
+
+    expect(canPlayCard(run, mantle.instanceId)).toEqual({ ok: true });
+    run = playCard(run, mantle.instanceId);
+
+    expect(getPlayerShieldCapacity(run)).toBe(15);
+    expect(run.combat!.playerShield).toBe(45);
+    expect(canPlayCard(run, cross.instanceId)).toEqual({
+      ok: false,
+      reason: 'Shield is already at maximum',
+    });
   });
 
   it('wanders randomly instead of attacking while Isaac is outside sight and it has not been hit', () => {
@@ -940,7 +1214,12 @@ describe('combat', () => {
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const first = run.combat!.enemies[0]!;
     const second = run.combat!.enemies[1]!;
-    first.position = { x: 4, y: 4 };
+    run.combat!.playerPosition = { x: 0, y: 4 };
+    first.footprintWidth = 1;
+    first.footprintHeight = 1;
+    second.footprintWidth = 1;
+    second.footprintHeight = 1;
+    first.position = { x: 0, y: 1 };
     second.position = { x: 5, y: 4 };
     run.combat!.enemies.slice(2).forEach((enemy) => {
       enemy.hp = 0;
@@ -958,6 +1237,41 @@ describe('combat', () => {
     expect(run.combat!.enemies[0]!.hp).toBe(firstHp);
     expect(run.combat!.enemies[1]!.hp).toBeLessThan(secondHp);
     expect(run.combat!.selectedEnemyId).toBe(second.instanceId);
+  });
+
+  it('deals reduced contact damage to an enemy crossed before the selected target', () => {
+    let run = createRun('PROJECTILE-GRAZE-CONTACT');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const crossed = run.combat!.enemies[0]!;
+    const target = run.combat!.enemies[1]!;
+    run.combat!.playerPosition = { x: 0, y: 4 };
+    [crossed, target].forEach((enemy) => {
+      enemy.maxHp = 100;
+      enemy.hp = 100;
+      enemy.armor = 0;
+      enemy.shield = 0;
+      enemy.footprintWidth = 1;
+      enemy.footprintHeight = 1;
+    });
+    crossed.position = { x: 3, y: 4 };
+    target.position = { x: 5, y: 4 };
+    run.combat!.enemies.slice(2).forEach((enemy) => {
+      enemy.hp = 0;
+    });
+    run.player.stats.critChance = 0;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [attack.instanceId];
+
+    run = playCard(run, attack.instanceId, target.instanceId);
+
+    expect(run.combat!.enemies[0]!.hp).toBe(97);
+    expect(run.combat!.enemies[1]!.hp).toBe(94);
+    expect(run.combat!.log.some((entry) => entry.messageKey === 'projectileGraze')).toBe(true);
+    expect(
+      run.combat!.animationEvents.some(
+        (event) => event.targetId === crossed.instanceId && event.contactDamageScale === 0.5,
+      ),
+    ).toBe(true);
   });
 
   it('fuses an item card into one attack while only charging the attack vitality', () => {
@@ -986,6 +1300,8 @@ describe('combat', () => {
       totalCost: 1,
       flatDamage: 3,
       projectileScale: 1.35,
+      projectileDiameter: 0.4 * 1.35,
+      contactDamageRatio: 0.5,
       knockback: 2,
     });
     run = playFusedAttack(run, attack.instanceId, [terra.instanceId], target.instanceId);
@@ -1043,6 +1359,9 @@ describe('combat', () => {
     const preview = getAttackFusionPreview(run, attack.instanceId, fusedItems)!;
     expect(preview.totalCost).toBe(1);
     expect(preview.damageMultiplier).toBeCloseTo(1.32);
+    expect(preview.projectileScale).toBeCloseTo(1.3);
+    expect(preview.projectileDiameter).toBeCloseTo(0.4 * 1.3);
+    expect(preview.contactDamageRatio).toBe(0.5);
     expect(preview).toMatchObject({ poisonTurns: 2, poisonDamage: 3, slowTurns: 2 });
     combat.vitality = 0;
     expect(canPlayFusedAttack(run, attack.instanceId, fusedItems, target.instanceId)).toMatchObject({
@@ -1476,7 +1795,7 @@ describe('combat', () => {
     run = endTurn(run);
     run = finishDiscard(run);
 
-    expect(run.player.redHp).toBe(78);
+    expect(run.player.redHp).toBe(18);
     expect(run.combat!.enemies[0]!.shield).toBe(0);
     expect(run.combat!.enemies[0]!.cursedTurns).toBe(1);
     expect(run.combat!.log.some((entry) => entry.messageKey === 'enemyWeakened')).toBe(true);
@@ -1501,6 +1820,109 @@ describe('combat', () => {
     run = finishDiscard(run);
     expect(run.phase).toBe(RunPhase.Choice);
     expect(run.combat!.enemies.every((enemy) => enemy.hp === 0)).toBe(true);
+  });
+
+  it('keeps a player with empty red containers alive while a soul heart remains', () => {
+    let run = createRun('SOUL-HEART-SURVIVAL');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const attacker = run.combat!.enemies[0]!;
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
+    run.player.redHp = 0;
+    addPocketHeart(run, HeartKind.Soul);
+    run.player.stats.armor = 0;
+    run.combat!.playerShield = 0;
+    run.combat!.hand = run.combat!.hand.slice(0, 5);
+    attacker.position = { x: 1, y: 4 };
+    attacker.alerted = true;
+    attacker.attackRange = 5;
+    attacker.intent = { kind: IntentKind.Attack, value: 5, label: 'Attack 5' };
+
+    run = finishDiscard(endTurn(run));
+
+    expect(run.phase).toBe(RunPhase.Combat);
+    expect(run.player.redHp).toBe(0);
+    expect(run.player.pocketHearts[0]?.hp).toBe(5);
+    expect(run.combat!.log.find((entry) => entry.messageKey === 'enemyAttack')?.params).toMatchObject({
+      damage: 5,
+      remainingHp: 5,
+      maximumHp: 40,
+    });
+  });
+
+  it('applies permanent health pickups outside combat without adding them to the deck', () => {
+    const run = createRun('PERMANENT-HEALTH-PICKUP');
+    const deckSize = run.player.deck.length;
+
+    equipItem(run, 'raw-liver');
+
+    expect(run.player.redContainers).toBe(5);
+    expect(run.player.redHp).toBe(50);
+    expect(run.player.deck).toHaveLength(deckSize);
+    expect(run.player.deck.some((card) => card.definitionId === 'item:raw-liver')).toBe(false);
+
+    equipItem(run, 'raw-liver');
+    expect(run.player.redContainers).toBe(5);
+    expect(run.player.redHp).toBe(50);
+  });
+
+  it('caps red-heart containers at twelve', () => {
+    const run = createRun('RED-CONTAINER-CAP');
+    run.player.redContainers = MAX_RED_CONTAINERS - 1;
+    run.player.redHp = (MAX_RED_CONTAINERS - 1) * run.player.stats.heartSize;
+
+    equipItem(run, 'raw-liver');
+
+    expect(run.player.redContainers).toBe(MAX_RED_CONTAINERS);
+    expect(run.player.redHp).toBe(MAX_RED_CONTAINERS * run.player.stats.heartSize);
+  });
+
+  it('uses permanent items to add three HP to every heart without adding combat cards', () => {
+    const run = createRun('PERMANENT-HEART-CAPACITY');
+    const deckSize = run.player.deck.length;
+    run.player.redHp = 15;
+    run.player.pocketHearts = [{ id: 'capacity-soul', kind: HeartKind.Soul, hp: 5, maxHp: 10 }];
+
+    equipItem(run, 'stem-cells');
+
+    expect(run.player.stats.heartSize).toBe(13);
+    expect(run.player.redContainers).toBe(3);
+    expect(run.player.redHp).toBe(24);
+    expect(run.player.pocketHearts[0]).toMatchObject({ hp: 8, maxHp: 13 });
+    expect(run.player.deck).toHaveLength(deckSize);
+    expect(run.player.deck.some((card) => card.definitionId === 'item:stem-cells')).toBe(false);
+
+    equipItem(run, 'stem-cells');
+    expect(run.player.stats.heartSize).toBe(13);
+  });
+
+  it('makes Heart Training use the same three-HP heart-capacity increment', () => {
+    const run = createRun('HEART-TRAINING-INCREMENT');
+    run.player.redHp = 1;
+    run.phase = RunPhase.Choice;
+    run.choice = {
+      kind: ChoiceKind.Upgrade,
+      title: 'Heart Training',
+      subtitle: '',
+      options: [
+        {
+          id: 'heart-training',
+          type: RewardOptionType.Upgrade,
+          upgrade: UpgradeKind.Heart,
+          label: 'Heart Training',
+          description: '',
+          icon: '♥',
+        },
+      ],
+      canSkip: false,
+      next: ChoiceNext.Map,
+    };
+
+    const upgraded = chooseOption(run, 'heart-training');
+
+    expect(upgraded.player.stats.heartSize).toBe(13);
+    expect(upgraded.player.redHp).toBe(39);
   });
 
   it('adds passive pickups as reusable cards instead of permanent stat boosts', () => {
@@ -1591,8 +2013,8 @@ describe('combat', () => {
     expect(run.combat!.cooldowns[activeCard.instanceId]).toBe(2);
   });
 
-  it('protects active item cards from automatic cycle effects', () => {
-    let run = createRun('ACTIVE-AUTO-CYCLE');
+  it('lets the player choose which hand card to cycle, including the active item card', () => {
+    let run = createRun('CHOOSE-HAND-CYCLE');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const activeCard = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
     const cycleCard = run.player.deck.find((card) => card.definitionId === 'item:starter-deck')!;
@@ -1606,9 +2028,77 @@ describe('combat', () => {
 
     run = playCard(run, cycleCard.instanceId);
 
-    expect(run.combat!.hand).toContain(activeCard.instanceId);
-    expect(run.combat!.discardPile).not.toContain(activeCard.instanceId);
+    const drawSelection = run.combat!.pendingSelection!;
+    expect(drawSelection.kind).toBe(CombatSelectionKind.Draw);
+    expect(drawSelection.min).toBe(0);
+    run = resolveCombatSelection(run, [drawSelection.candidateInstanceIds[0]!]);
+
+    const cycleSelection = run.combat!.pendingSelection!;
+    expect(cycleSelection.kind).toBe(CombatSelectionKind.Cycle);
+    expect(cycleSelection.min).toBe(0);
+    expect(cycleSelection.max).toBe(1);
+    expect(cycleSelection.candidateInstanceIds).toEqual(
+      expect.arrayContaining([activeCard.instanceId, attack.instanceId]),
+    );
+
+    run = resolveCombatSelection(run, [activeCard.instanceId]);
+
+    expect(run.combat!.pendingSelection).toBeUndefined();
+    expect(run.combat!.hand).not.toContain(activeCard.instanceId);
+    expect(run.combat!.discardPile).toContain(activeCard.instanceId);
+    expect(run.combat!.hand).toContain(attack.instanceId);
+    expect(run.combat!.discardPile).not.toContain(attack.instanceId);
     expect(run.player.activeItemId).toBe('d6');
+  });
+
+  it('can skip a draw choice and therefore skips its dependent cycle choice', () => {
+    let run = createRun('SKIP-DRAW-AND-CYCLE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const cycleCard = run.player.deck.find((card) => card.definitionId === 'item:starter-deck')!;
+    const retained = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    run.combat!.hand = [cycleCard.instanceId, retained.instanceId];
+    run.combat!.drawPile = run.player.deck
+      .filter((card) => !run.combat!.hand.includes(card.instanceId))
+      .map((card) => card.instanceId);
+    run.combat!.discardPile = [];
+
+    run = playCard(run, cycleCard.instanceId);
+    expect(run.combat!.pendingSelection).toMatchObject({ kind: CombatSelectionKind.Draw, min: 0 });
+
+    run = cancelCombatSelection(run);
+
+    expect(run.combat!.pendingSelection).toBeUndefined();
+    expect(run.combat!.hand).toContain(retained.instanceId);
+    expect(run.combat!.discardPile).not.toContain(retained.instanceId);
+  });
+
+  it('accepts fewer cycle cards than the maximum offered', () => {
+    let run = createRun('PARTIAL-HAND-CYCLE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const cycleCard = run.player.deck.find((card) => card.definitionId === 'item:starter-deck')!;
+    const retainedCards = run.player.deck
+      .filter((card) => card.instanceId !== cycleCard.instanceId)
+      .slice(0, 3);
+    run.combat!.hand = [cycleCard.instanceId, ...retainedCards.map((card) => card.instanceId)];
+    run.combat!.drawPile = run.player.deck
+      .filter((card) => !run.combat!.hand.includes(card.instanceId))
+      .map((card) => card.instanceId);
+    run.combat!.discardPile = [];
+
+    run = playCard(run, cycleCard.instanceId);
+    const drawSelection = run.combat!.pendingSelection!;
+    const selectedDrawCards = drawSelection.candidateInstanceIds.slice(0, drawSelection.max);
+    run = resolveCombatSelection(run, selectedDrawCards);
+    const cycleSelection = run.combat!.pendingSelection!;
+    expect(cycleSelection.kind).toBe(CombatSelectionKind.Cycle);
+    expect(cycleSelection.max).toBe(selectedDrawCards.length);
+    expect(cycleSelection.max).toBeGreaterThan(1);
+
+    const cycledCard = cycleSelection.candidateInstanceIds[0]!;
+    run = resolveCombatSelection(run, [cycledCard]);
+
+    expect(run.combat!.pendingSelection).toBeUndefined();
+    expect(run.combat!.discardPile).toContain(cycledCard);
   });
 
   it('opens the draw pile and lets the player choose cards for explicit draw effects', () => {
@@ -1630,7 +2120,7 @@ describe('combat', () => {
     expect(run.combat!.pendingSelection).toMatchObject({
       kind: CombatSelectionKind.Draw,
       candidateInstanceIds: candidates.map((card) => card.instanceId),
-      min: 1,
+      min: 0,
       max: 1,
     });
     expect(run.combat!.hand).not.toContain(candidates[1]!.instanceId);
@@ -1643,61 +2133,66 @@ describe('combat', () => {
     expect(run.combat!.discardPile).toContain(drawCard.instanceId);
   });
 
-  it('reshuffles the discard pile before an interactive draw when the draw pile is empty', () => {
-    let run = createRun('CHOOSE-DRAW-RESHUFFLE');
+  it('limits interactive draw choices to the current draw pile without exposing discarded cards', () => {
+    let run = createRun('CHOOSE-DRAW-PILE-ONLY');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
-    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:battery-pack')!;
+    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:starter-deck')!;
+    const available = run.player.deck.find(
+      (card) =>
+        card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type === CardType.Recovery,
+    )!;
     const discarded = run.player.deck.find(
-      (card) => card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type === CardType.Attack,
+      (card) =>
+        card.instanceId !== drawCard.instanceId &&
+        card.instanceId !== available.instanceId &&
+        CARDS[card.definitionId]?.type === CardType.Attack,
     )!;
     run.combat!.hand = [drawCard.instanceId];
-    run.combat!.drawPile = [];
+    run.combat!.drawPile = [available.instanceId];
     run.combat!.discardPile = [discarded.instanceId];
 
     run = playCard(run, drawCard.instanceId);
 
     expect(run.combat!.pendingSelection).toMatchObject({
       kind: CombatSelectionKind.Draw,
-      candidateInstanceIds: [discarded.instanceId],
-      min: 1,
+      candidateInstanceIds: [available.instanceId],
+      min: 0,
       max: 1,
     });
-    expect(run.combat!.discardPile).toEqual([drawCard.instanceId]);
-
-    run = resolveCombatSelection(run, [discarded.instanceId]);
-    expect(run.combat!.hand).toContain(discarded.instanceId);
+    expect(run.combat!.pendingSelection!.candidateInstanceIds).not.toContain(discarded.instanceId);
+    expect(run.combat!.discardPile).toContain(discarded.instanceId);
+    expect(run.combat!.discardPile).toContain(drawCard.instanceId);
   });
 
-  it('resumes card effects after the interactive draw choice is resolved', () => {
-    let run = createRun('CHOOSE-DRAW-CONTINUATION');
+  it('deploys a familiar as an autonomous assistant instead of adding its item card to the deck', () => {
+    let run = createRun('FAMILIAR-AUTO-ATTACK');
     equipItem(run, 'harlequin-baby');
+    expect(run.player.deck.some((card) => card.definitionId === 'item:harlequin-baby')).toBe(false);
+
     run = enterRoom(run, getAvailableNodes(run)[0]!);
-    const drawCard = run.player.deck.find((card) => card.definitionId === 'item:harlequin-baby')!;
-    const selected = run.player.deck.find(
-      (card) => card.instanceId !== drawCard.instanceId && CARDS[card.definitionId]?.type === CardType.Attack,
-    )!;
     const target = run.combat!.enemies[0]!;
-    target.position = { x: 4, y: 4 };
-    target.footprintWidth = 1;
-    target.footprintHeight = 1;
     target.hp = 100;
     target.maxHp = 100;
     target.armor = 0;
     target.shield = 0;
-    run.combat!.hand = [drawCard.instanceId];
-    run.combat!.drawPile = [selected.instanceId];
-    run.combat!.discardPile = [];
+    run.combat!.enemies.slice(1).forEach((enemy) => {
+      enemy.hp = 0;
+    });
 
-    run = playCard(run, drawCard.instanceId);
+    run = confirmPlayerDeployment(run);
 
-    expect(run.combat!.pendingSelection?.kind).toBe(CombatSelectionKind.Draw);
-    expect(run.combat!.enemies[0]!.hp).toBe(100);
-
-    run = resolveCombatSelection(run, [selected.instanceId]);
-
-    expect(run.combat!.pendingSelection).toBeUndefined();
-    expect(run.combat!.enemies[0]!.hp).toBe(95);
-    expect(run.combat!.hand).toContain(selected.instanceId);
+    expect(run.combat!.familiars).toEqual([
+      expect.objectContaining({ itemId: 'harlequin-baby', hits: 2, ring: 1 }),
+    ]);
+    expect(target.hp).toBe(100);
+    expect(run.combat!.enemies[0]!.hp).toBeLessThan(100);
+    expect(run.combat!.animationEvents).toContainEqual(
+      expect.objectContaining({
+        kind: CombatAnimationKind.FamiliarAttack,
+        sourceId: 'familiar:harlequin-baby',
+        targetId: target.instanceId,
+      }),
+    );
   });
 
   it('keeps exactly one active item card when a new active item replaces it', () => {
@@ -1714,34 +2209,67 @@ describe('combat', () => {
     ]);
   });
 
-  it('makes The D6 transform every other Item card in hand without touching non-item cards', () => {
+  it('makes The D6 exchange hand Item cards with physical draw and discard pile cards', () => {
     let run = createRun('D6-TRUE-REROLL');
-    equipItem(run, 'terra');
-    equipItem(run, 'pentagram');
     run = enterRoom(run, getAvailableNodes(run)[0]!);
     const d6 = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
-    const itemCards = run.player.deck.filter((card) => CARDS[card.definitionId]?.type === CardType.Item);
+    const itemCards = run.player.deck
+      .filter((card) => CARDS[card.definitionId]?.type === CardType.Item)
+      .slice(0, 2);
     const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const recovery = run.player.deck.find((card) => card.definitionId === 'half-heart')!;
+    const shield = run.player.deck.find((card) => card.definitionId === 'wooden-cross')!;
     const hand = [d6.instanceId, attack.instanceId, ...itemCards.map((card) => card.instanceId)];
-    const definitionsBefore = new Map(itemCards.map((card) => [card.instanceId, card.definitionId]));
+    const definitionsBefore = new Map(run.player.deck.map((card) => [card.instanceId, card.definitionId]));
     run.combat!.hand = hand;
-    run.combat!.drawPile = run.combat!.drawPile.filter((id) => !hand.includes(id));
-    run.combat!.discardPile = run.combat!.discardPile.filter((id) => !hand.includes(id));
+    run.combat!.drawPile = [recovery.instanceId];
+    run.combat!.discardPile = [shield.instanceId];
 
     run = playCard(run, d6.instanceId);
 
-    expect(run.combat!.hand).toEqual(hand);
-    expect(run.player.deck.find((card) => card.instanceId === d6.instanceId)?.definitionId).toBe('skill-d6');
-    expect(run.player.deck.find((card) => card.instanceId === attack.instanceId)?.definitionId).toBe(
-      'basic-attack',
+    expect(run.combat!.hand.slice(0, 2)).toEqual([d6.instanceId, attack.instanceId]);
+    expect(new Set(run.combat!.hand.slice(2))).toEqual(new Set([recovery.instanceId, shield.instanceId]));
+    expect(new Set([...run.combat!.drawPile, ...run.combat!.discardPile])).toEqual(
+      new Set(itemCards.map((card) => card.instanceId)),
     );
-    for (const card of itemCards) {
-      const rerolled = run.player.deck.find((entry) => entry.instanceId === card.instanceId)!;
-      expect(rerolled.definitionId).not.toBe(definitionsBefore.get(card.instanceId));
-      expect(CARDS[rerolled.definitionId]!.type).toBe(CardType.Item);
-    }
-    expect(run.combat!.discardPile).toHaveLength(0);
+    expect(
+      run.player.deck.every((card) => card.definitionId === definitionsBefore.get(card.instanceId)),
+    ).toBe(true);
+    expect(run.combat!.log[0]).toMatchObject({
+      messageKey: 'd6Exchange',
+      params: { count: 2, draw: 1, discard: 1 },
+    });
+    expect(run.combat!.animationEvents.at(-1)).toMatchObject({
+      kind: CombatAnimationKind.CardExchange,
+      value: 2,
+      secondaryValue: 1,
+      rawValue: 1,
+    });
     expect(run.combat!.cooldowns[d6.instanceId]).toBe(3);
+  });
+
+  it('prevents The D6 from spending vitality when no exchange can occur', () => {
+    let run = createRun('D6-NO-EXCHANGE');
+    run = enterRoom(run, getAvailableNodes(run)[0]!);
+    const d6 = run.player.deck.find((card) => card.definitionId === 'skill-d6')!;
+    const attack = run.player.deck.find((card) => card.definitionId === 'basic-attack')!;
+    const item = run.player.deck.find((card) => CARDS[card.definitionId]?.type === CardType.Item)!;
+    const recovery = run.player.deck.find((card) => card.definitionId === 'half-heart')!;
+
+    run.combat!.hand = [d6.instanceId, attack.instanceId];
+    run.combat!.drawPile = [recovery.instanceId];
+    run.combat!.discardPile = [];
+    expect(canPlayCard(run, d6.instanceId)).toEqual({
+      ok: false,
+      reason: 'The D6 has no Item card in hand to exchange',
+    });
+
+    run.combat!.hand = [d6.instanceId, item.instanceId];
+    run.combat!.drawPile = [];
+    expect(canPlayCard(run, d6.instanceId)).toEqual({
+      ok: false,
+      reason: 'The D6 has no draw or discard pile card to exchange',
+    });
   });
 });
 

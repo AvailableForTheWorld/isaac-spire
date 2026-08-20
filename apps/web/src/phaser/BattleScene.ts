@@ -5,11 +5,14 @@ import {
   CombatAnimationKind,
   CombatMovementStyle,
   DEFAULT_COMBAT_ROOM_LAYOUT,
+  FAMILIAR_DIRECTION_OFFSETS,
+  ITEMS,
   enemyChebyshevDistanceToPosition,
   getCombatRoomCells,
   isCombatCellAvailable,
   type CombatAnimationEvent,
   type EnemyState,
+  type FamiliarState,
   type RunState,
 } from '@isaac-spire/game';
 import { takeNextCombatAnimationBatch } from './combatAnimationQueue';
@@ -26,9 +29,12 @@ interface BattleLabels {
   shieldBlocked: string;
   hpDamage: string;
   noHeartDamage: string;
+  grazeHit: string;
+  d6Exchange: string;
   targetLock: string;
   enemies: Record<string, string>;
   cards: Record<string, string>;
+  items: Record<string, string>;
 }
 
 interface ActorVisual {
@@ -52,6 +58,7 @@ export class BattleScene extends Phaser.Scene {
   private gridColumns = 17;
   private gridRows = 9;
   private isaac?: ActorVisual;
+  private familiars = new Map<string, ActorVisual>();
   private enemies = new Map<string, ActorVisual>();
   private latestRun?: RunState;
   private currentCombatId = '';
@@ -125,6 +132,7 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.killAll();
     this.children.removeAll(true);
     this.enemies.clear();
+    this.familiars.clear();
     this.isaac = undefined;
 
     const width = this.scale.width;
@@ -197,6 +205,18 @@ export class BattleScene extends Phaser.Scene {
     const playerPosition = run.combat!.playerPosition ?? { x: 0, y: 4 };
     const playerPoint = this.gridPoint(playerPosition.x, playerPosition.y);
     this.isaac = this.drawIsaac(playerPoint.x, playerPoint.y, run, labels);
+    run.combat!.familiars.forEach((familiar) => {
+      const point = this.familiarPoint(playerPoint, familiar);
+      const item = ITEMS[familiar.itemId];
+      const visual = this.drawFamiliar(
+        point.x,
+        point.y,
+        item?.icon ?? '♟',
+        labels?.items[familiar.itemId] ?? item?.name ?? familiar.itemId,
+        Number(item?.quality ?? 0),
+      );
+      this.familiars.set(familiar.instanceId, visual);
+    });
     const allEnemies = run.combat!.enemies;
     const highlightedEnemyId = this.registry.get('highlightedEnemyId') as string | undefined;
     allEnemies.forEach((enemy, index) => {
@@ -241,7 +261,18 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private actor(id?: string): ActorVisual | undefined {
-    return id === 'isaac' ? this.isaac : id ? this.enemies.get(id) : undefined;
+    return id === 'isaac' ? this.isaac : id ? (this.familiars.get(id) ?? this.enemies.get(id)) : undefined;
+  }
+
+  private familiarPoint(player: { x: number; y: number }, familiar: FamiliarState): { x: number; y: number } {
+    const offset = FAMILIAR_DIRECTION_OFFSETS[familiar.direction];
+    const diagonalScale = offset.x !== 0 && offset.y !== 0 ? 0.76 : 1;
+    const radiusX = 34 + familiar.ring * 17;
+    const radiusY = 30 + familiar.ring * 15;
+    return {
+      x: Phaser.Math.Clamp(player.x + offset.x * radiusX * diagonalScale, 34, this.scale.width - 34),
+      y: Phaser.Math.Clamp(player.y + offset.y * radiusY * diagonalScale, 34, this.scale.height - 34),
+    };
   }
 
   private drawBossTelegraphs(run: RunState): void {
@@ -348,6 +379,9 @@ export class BattleScene extends Phaser.Scene {
       case CombatAnimationKind.CardDiscard:
         await this.animateCard(event, true);
         break;
+      case CombatAnimationKind.CardExchange:
+        await this.animateCardExchange(event);
+        break;
       case CombatAnimationKind.DiscardPhase:
         await this.animatePhaseBanner(this.labels()?.discardPhase ?? 'DISCARD PHASE', 0xc67a64);
         break;
@@ -365,6 +399,12 @@ export class BattleScene extends Phaser.Scene {
         break;
       case CombatAnimationKind.PlayerAttack:
         await this.animatePlayerAttack(event);
+        break;
+      case CombatAnimationKind.FamiliarAttack:
+        await this.animatePlayerAttack(event);
+        break;
+      case CombatAnimationKind.FamiliarSpawn:
+        await this.animateFamiliarSpawn(event);
         break;
       case CombatAnimationKind.EnemyAttack:
         await this.animateEnemyAttack(event, batchIndex, batchSize);
@@ -486,6 +526,59 @@ export class BattleScene extends Phaser.Scene {
     pieces.forEach((piece) => piece.destroy());
   }
 
+  private async animateCardExchange(event: CombatAnimationEvent): Promise<void> {
+    const centerX = this.scale.width / 2;
+    const centerY = this.scale.height / 2;
+    const veil = this.add
+      .rectangle(centerX, centerY, this.scale.width, this.scale.height, 0x111421, 0.48)
+      .setDepth(78);
+    const dice = this.add
+      .text(centerX, centerY - 34, '⚅', {
+        fontFamily: 'Georgia, serif',
+        fontSize: '68px',
+        color: '#f4d77e',
+        stroke: '#302415',
+        strokeThickness: 7,
+      })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setScale(0.55);
+    const title = this.add
+      .text(centerX, centerY + 45, `${this.labels()?.d6Exchange ?? 'D6 EXCHANGE'} ×${event.value ?? 0}`, {
+        fontFamily: 'Georgia, "Microsoft YaHei", serif',
+        fontSize: '23px',
+        fontStyle: 'bold',
+        color: '#f4e7c5',
+        stroke: '#1e1714',
+        strokeThickness: 5,
+        letterSpacing: 3,
+      })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setResolution(2);
+    const leftCards = [-2, -1, 0].map((offset) =>
+      this.add
+        .rectangle(centerX - 170 + offset * 8, centerY + offset * 3, 54, 76, 0x54738c, 0.94)
+        .setStrokeStyle(2, 0x9fcbe0, 0.8)
+        .setDepth(80 + offset),
+    );
+    const rightCards = [-2, -1, 0].map((offset) =>
+      this.add
+        .rectangle(centerX + 170 + offset * 8, centerY + offset * 3, 54, 76, 0x765f45, 0.94)
+        .setStrokeStyle(2, 0xe6c682, 0.8)
+        .setDepth(80 + offset),
+    );
+    await Promise.all([
+      this.tween(dice, { angle: 360, scale: 1, duration: 480, ease: 'Back.easeOut' }),
+      this.tween(leftCards, { x: '+=330', duration: 480, ease: 'Cubic.easeInOut' }),
+      this.tween(rightCards, { x: '-=330', duration: 480, ease: 'Cubic.easeInOut' }),
+    ]);
+    await this.wait(180);
+    const pieces = [veil, dice, title, ...leftCards, ...rightCards];
+    await this.tween(pieces, { alpha: 0, duration: 180 });
+    pieces.forEach((piece) => piece.destroy());
+  }
+
   private async animateMove(event: CombatAnimationEvent): Promise<void> {
     const actor = this.actor(event.targetId ?? event.sourceId);
     if (!actor || event.toX === undefined || event.toY === undefined) return;
@@ -541,14 +634,70 @@ export class BattleScene extends Phaser.Scene {
     actor.y = destination.y;
   }
 
+  private async animateFamiliarSpawn(event: CombatAnimationEvent): Promise<void> {
+    const familiar = this.actor(event.sourceId);
+    if (!familiar) return;
+    const halo = this.add
+      .circle(familiar.x, familiar.y, 13, 0xf0cf79, 0.2)
+      .setStrokeStyle(3, 0xffe6a3, 0.9)
+      .setDepth(68);
+    await Promise.all([
+      this.tween(familiar.parts, {
+        scale: { from: 0.25, to: 1 },
+        alpha: { from: 0.25, to: 1 },
+        duration: 280,
+        ease: 'Back.easeOut',
+      }),
+      this.tween(halo, { scale: 2.6, alpha: 0, duration: 360, ease: 'Quad.easeOut' }),
+    ]);
+    halo.destroy();
+  }
+
   private async animatePlayerAttack(event: CombatAnimationEvent): Promise<void> {
-    const source = this.actor('isaac');
+    const source = this.actor(event.sourceId || 'isaac');
     const target = this.actor(event.targetId);
     if (!source || !target) return;
     this.tweens.add({ targets: source.parts, x: '+=8', duration: 100, yoyo: true, ease: 'Quad.easeOut' });
 
     const projectileScale = Math.max(0.7, event.projectileScale ?? 1);
-    if (event.attackMode === AttackMode.Brimstone) {
+    if (event.contactDamageScale !== undefined) {
+      const graze = this.add
+        .ellipse(
+          target.x,
+          target.y,
+          Math.max(24, (this.gridWidth / this.gridColumns) * projectileScale * 0.4),
+          Math.max(18, (this.gridHeight / this.gridRows) * projectileScale * 0.4),
+          0x93dff3,
+          0.12,
+        )
+        .setStrokeStyle(3, 0xd8f8ff, 0.82)
+        .setDepth(75);
+      const label = this.add
+        .text(
+          target.x,
+          target.y - 34,
+          `${this.labels()?.grazeHit ?? 'GRAZE'} · ${Math.round(event.contactDamageScale * 100)}%`,
+          {
+            fontFamily: 'Arial, "Microsoft YaHei", sans-serif',
+            fontSize: '15px',
+            fontStyle: 'bold',
+            color: '#d8f8ff',
+            backgroundColor: '#241d1bcc',
+            padding: { x: 7, y: 4 },
+          },
+        )
+        .setOrigin(0.5)
+        .setDepth(76)
+        .setResolution(2);
+      await this.tween([graze, label], {
+        alpha: 0,
+        scale: 1.35,
+        duration: 260,
+        ease: 'Quad.easeOut',
+      });
+      graze.destroy();
+      label.destroy();
+    } else if (event.attackMode === AttackMode.Brimstone) {
       const beam = this.add.graphics();
       beam.lineStyle(12 * projectileScale, 0xb82135, 0.22);
       beam.lineBetween(source.x + 16, source.y, target.x - 12, target.y);
@@ -558,7 +707,13 @@ export class BattleScene extends Phaser.Scene {
       beam.destroy();
     } else {
       const projectileColor =
-        (event.poisonTurns ?? 0) > 0 ? 0x8bd36f : (event.slowTurns ?? 0) > 0 ? 0x70cbe4 : 0x93dff3;
+        (event.poisonTurns ?? 0) > 0
+          ? 0x8bd36f
+          : (event.slowTurns ?? 0) > 0
+            ? 0x70cbe4
+            : event.kind === CombatAnimationKind.FamiliarAttack
+              ? 0xf0c86f
+              : 0x93dff3;
       const projectile =
         event.attackMode === AttackMode.Knife
           ? this.add
@@ -573,7 +728,15 @@ export class BattleScene extends Phaser.Scene {
                 .circle(source.x + 16, source.y, 12 * projectileScale, projectileColor, 0.12)
                 .setStrokeStyle(4, projectileColor, 0.95)
             : this.add
-                .circle(source.x + 16, source.y, 7 * projectileScale, projectileColor, 0.95)
+                .circle(
+                  source.x + 16,
+                  source.y,
+                  Math.min(this.gridWidth / this.gridColumns, this.gridHeight / this.gridRows) *
+                    0.2 *
+                    projectileScale,
+                  projectileColor,
+                  0.95,
+                )
                 .setStrokeStyle(2, 0xd8f8ff, 0.8);
       if (event.attackMode === AttackMode.Knife) projectile.setScale(projectileScale);
       this.tweens.add({
@@ -1412,6 +1575,44 @@ export class BattleScene extends Phaser.Scene {
       ease: 'Sine.easeInOut',
     });
     return { parts: [shadow, body, label], x, y, footprintWidth: 1, footprintHeight: 1 };
+  }
+
+  private drawFamiliar(x: number, y: number, icon: string, name: string, quality: number): ActorVisual {
+    const qualityColors = [0x8d8d8d, 0x67ad72, 0x5a9ed0, 0x9a68c7, 0xdfbb56];
+    const color = qualityColors[Phaser.Math.Clamp(Math.round(quality), 0, qualityColors.length - 1)]!;
+    const shadow = this.add.ellipse(x, y + 13, 28, 8, 0x080707, 0.3).setDepth(18);
+    const body = this.add.circle(x, y, 16, 0xd7bba9, 1).setStrokeStyle(3, color, 0.95).setDepth(20);
+    const symbol = this.add
+      .text(x, y - 1, icon, {
+        fontFamily: 'Georgia, "Microsoft YaHei", serif',
+        fontSize: '15px',
+        fontStyle: 'bold',
+        color: '#352724',
+      })
+      .setOrigin(0.5)
+      .setDepth(21)
+      .setResolution(2);
+    const label = this.add
+      .text(x, y + 23, name.length > 9 ? `${name.slice(0, 8)}…` : name, {
+        fontFamily: 'Arial, "Microsoft YaHei", sans-serif',
+        fontSize: '9px',
+        fontStyle: 'bold',
+        color: '#f2dec8',
+        stroke: '#211816',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5)
+      .setDepth(21)
+      .setResolution(2);
+    this.tweens.add({
+      targets: [body, symbol],
+      y: '-=2.5',
+      duration: 760 + quality * 80,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    return { parts: [shadow, body, symbol, label], x, y, footprintWidth: 1, footprintHeight: 1 };
   }
 
   private drawEnemy(

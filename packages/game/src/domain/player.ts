@@ -19,11 +19,21 @@ import type {
   UnlockEvent,
 } from './enums.js';
 
+export const DEFAULT_HEART_SIZE = 10;
+export const MAX_RED_CONTAINERS = 12;
+export const HEART_SIZE_UPGRADE_AMOUNT = 3;
+export const TREATMENT_BASE_HEAL = 10;
+export const TREATMENT_UPGRADE_HEAL = 3;
+export const SHIELD_CAPACITY_UPGRADE_AMOUNT = 5;
+export const ARMOR_UPGRADE_AMOUNT = 1;
+export const CARD_UPGRADE_EFFECT_MULTIPLIER = 1.25;
+
 export interface CharacterStats {
   baseDamage: number;
   damageMultiplier: number;
   armor: number;
   baseShield: number;
+  maxShield: number;
   heartSize: number;
   maxVitality: number;
   drawCount: number;
@@ -105,6 +115,7 @@ export interface ItemEffect {
   multiplier?: number;
   attackMode?: AttackMode;
   redContainers?: number;
+  heartSize?: number;
   soulHearts?: number;
   blackHearts?: number;
   revealSecrets?: boolean;
@@ -142,6 +153,8 @@ export interface AttackFusionPreview {
   damageMultiplier: number;
   flatDamage: number;
   projectileScale: number;
+  projectileDiameter: number;
+  contactDamageRatio: number;
   knockback: number;
   poisonTurns: number;
   poisonDamage: number;

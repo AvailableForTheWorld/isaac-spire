@@ -4,6 +4,7 @@ import {
   FLOORS,
   RoomKind,
   getAvailableNodes,
+  roomRequiresKey,
   type MapConnectionStyle,
   type MapNode,
   type RunState,
@@ -73,10 +74,12 @@ function routeInkStyle(style: MapConnectionStyle): CSSProperties {
 export function RouteMap({
   run,
   onEnter,
+  onBypass,
   onBombSearch,
 }: {
   run: RunState;
   onEnter: (id: string) => void;
+  onBypass: (id: string) => void;
   onBombSearch: () => void;
 }) {
   const { t } = useTranslation();
@@ -175,32 +178,45 @@ export function RouteMap({
             const meta = ROOM_META[node.kind];
             const canEnter = available.has(node.id);
             const sealedSecret = node.optional && !node.doorOpened;
-            const needsKey =
-              run.floorIndex > 0 && (node.kind === RoomKind.Shop || node.kind === RoomKind.Treasure);
+            const needsKey = roomRequiresKey(run.floorIndex, node.kind);
             const noKey = canEnter && needsKey && run.player.keys < 1;
             const hidden = node.optional && !node.revealed;
             return (
               <button
                 key={node.id}
-                className={`map-node ${node.kind} ${node.visited ? 'visited' : ''} ${canEnter ? 'available' : ''} ${hidden ? 'hidden' : ''} ${enteringNode === node.id ? 'choosing' : ''}`}
+                className={`map-node ${node.kind} ${node.visited ? 'visited' : ''} ${node.bypassed ? 'bypassed' : ''} ${canEnter ? 'available' : ''} ${noKey ? 'bypassable' : ''} ${hidden ? 'hidden' : ''} ${enteringNode === node.id ? 'choosing' : ''}`}
                 style={{ left: `${point.x}%`, top: `${point.y}%` }}
-                disabled={!canEnter || noKey}
+                disabled={!canEnter}
                 onClick={() => {
                   if (enteringNode) return;
                   setEnteringNode(node.id);
-                  window.setTimeout(() => onEnter(node.id), 420);
+                  window.setTimeout(() => {
+                    if (noKey) {
+                      onBypass(node.id);
+                      setEnteringNode(undefined);
+                    } else {
+                      onEnter(node.id);
+                    }
+                  }, 420);
                 }}
                 title={
                   hidden
                     ? t('map.hidden')
-                    : `${roomName(t, node.kind)}：${roomHint(t, node.kind)}${sealedSecret ? ` ${t('map.needBomb')}` : ''}${needsKey ? ` ${t('map.needKey')}` : ''}`
+                    : `${roomName(t, node.kind)}：${roomHint(t, node.kind)}${sealedSecret ? ` ${t('map.needBomb')}` : ''}${noKey ? ` ${t('map.bypassLocked')}` : needsKey ? ` ${t('map.needKey')}` : ''}`
                 }
-                aria-label={hidden ? t('map.hiddenLabel') : roomName(t, node.kind)}
+                aria-label={
+                  hidden
+                    ? t('map.hiddenLabel')
+                    : noKey
+                      ? t('map.bypassRoom', { room: roomName(t, node.kind) })
+                      : roomName(t, node.kind)
+                }
               >
                 <span>{hidden ? '?' : meta.icon}</span>
                 {!hidden && <small>{roomName(t, node.kind)}</small>}
                 {sealedSecret && <em>{t('map.sealed')}</em>}
-                {noKey && <em>{t('map.noKey')}</em>}
+                {noKey && <em>{t('map.noKeyBypass')}</em>}
+                {node.bypassed && <em>{t('map.bypassed')}</em>}
                 {canEnter && needsKey && !noKey && <em className="key-cost">⚿ 1</em>}
               </button>
             );

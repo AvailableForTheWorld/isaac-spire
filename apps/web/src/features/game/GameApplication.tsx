@@ -8,6 +8,7 @@ import {
   acknowledgeRoomReward,
   abandonRun,
   enterRoom,
+  bypassLockedRoom,
   useMapBomb,
   type AchievementDefinition,
   type AchievementNotice,
@@ -132,6 +133,7 @@ export function GameApplication() {
           <RouteMap
             run={run}
             onEnter={(id) => session.commit((state) => enterRoom(state, id))}
+            onBypass={(id) => session.commit((state) => bypassLockedRoom(state, id))}
             onBombSearch={() => session.commit(useMapBomb)}
           />
         )}

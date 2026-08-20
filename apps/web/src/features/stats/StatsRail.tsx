@@ -23,7 +23,10 @@ export function StatsRail({ run }: { run: RunState }) {
             {t('stats.armor')} <b>{stats.armor}</b>
           </span>
           <span>
-            {t('stats.startShield')} <b>{stats.baseShield}</b>
+            {t('stats.startShield')}{' '}
+            <b>
+              {stats.baseShield}/{stats.maxShield}
+            </b>
           </span>
           <span>
             {t('stats.fireRate')} <b>{stats.fireRate.toFixed(2)}</b>

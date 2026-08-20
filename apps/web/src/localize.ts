@@ -209,6 +209,10 @@ export function errorText(t: TFunction, message: string): string {
     'Curse cards are unplayable': 'curseUnplayable',
     'Not enough vitality': 'vitality',
     'Active item is recharging': 'recharging',
+    'The D6 has no Item card in hand to exchange': 'd6NoItems',
+    'The D6 has no draw or discard pile card to exchange': 'd6NoPileCards',
+    'Shield is already at maximum': 'shieldFull',
+    'Red-heart HP is already full': 'redHeartFull',
     'Not enough coins': 'coins',
     'Choose an enemy target': 'chooseTarget',
     'Target is outside attack range': 'range',
@@ -263,6 +267,12 @@ export function logText(
     if (typeof localizedParams.echoCount === 'number' && localizedParams.echoCount > 0)
       localizedParams.echo = t('logs.echo', { count: localizedParams.echoCount });
     else localizedParams.echo = '';
+    if (typeof localizedParams.remainingHp === 'number' && typeof localizedParams.maximumHp === 'number')
+      localizedParams.health = t('logs.remainingHealth', {
+        current: localizedParams.remainingHp,
+        maximum: localizedParams.maximumHp,
+      });
+    else localizedParams.health = '';
     return t(`logs.${key}`, localizedParams);
   }
 
@@ -290,6 +300,13 @@ export function logText(
     });
   match = message.match(/^The D6 rerolled (\d+) cards\.$/);
   if (match) return logText(t, run, message, 'reroll', { count: Number(match[1]) });
+  match = message.match(/^The D6 exchanged (\d+) Item cards: (\d+) from draw, (\d+) from discard\.$/);
+  if (match)
+    return logText(t, run, message, 'd6Exchange', {
+      count: Number(match[1]),
+      draw: Number(match[2]),
+      discard: Number(match[3]),
+    });
   match = message.match(/^(.+?) recovered (\d+) HP\.$/);
   if (match)
     return logText(t, run, message, 'heal', {

@@ -118,13 +118,27 @@ describe('authored Isaac item actions', () => {
     expect(hpBefore - run.combat!.enemies[0]!.hp).toBe(100);
   });
 
-  it('dispatches on-damage retaliation only after its passive card has been activated', () => {
+  it('repeats only half of the previous numeric effect with Placebo', () => {
+    let run = leaveFloorProvisionChoice(createRun('PLACEBO-BALANCE'));
+    equipItem(run, 'placebo');
+    run = enterFirstCombat(run);
+    run.player.redHp = 10;
+
+    const treatment = putCardInHand(run, 'half-heart');
+    run = playCard(run, treatment);
+    expect(run.player.redHp).toBe(20);
+
+    const placebo = putCardInHand(run, ITEMS.placebo!.skillCardId!);
+    run = playCard(run, placebo);
+    expect(run.player.redHp).toBe(25);
+    expect(run.combat!.cooldowns[placebo]).toBe(4);
+  });
+
+  it('combines a permanent familiar retaliation with its automatic next-round attack', () => {
     let run = leaveFloorProvisionChoice(createRun('DEAD-BIRD-ACTIONS'));
     equipItem(run, 'dead-bird');
     run = enterFirstCombat(run);
     isolateEnemy(run, 120);
-    const bird = putCardInHand(run, 'item:dead-bird');
-    run = playCard(run, bird);
     run.combat!.playerShield = 0;
     const enemy = run.combat!.enemies[0]!;
     enemy.intent = {
@@ -136,7 +150,8 @@ describe('authored Isaac item actions', () => {
     const hpBefore = enemy.hp;
     run.combat!.hand = [];
     run = finishDiscard(endTurn(run));
-    expect(hpBefore - run.combat!.enemies[0]!.hp).toBe(8);
+    const familiarDamage = run.combat!.familiars[0]!.damage * run.combat!.familiars[0]!.hits;
+    expect(hpBefore - run.combat!.enemies[0]!.hp).toBe(8 + familiarDamage);
   });
 
   it('lets Dull Razor invoke damage-listener methods without removing player health', () => {
@@ -145,7 +160,6 @@ describe('authored Isaac item actions', () => {
     equipItem(run, 'dull-razor');
     run = enterFirstCombat(run);
     isolateEnemy(run, 120);
-    run = playCard(run, putCardInHand(run, 'item:dead-bird'));
     const hpBefore = run.player.redHp;
     const enemyHpBefore = run.combat!.enemies[0]!.hp;
     run = playCard(run, putCardInHand(run, ITEMS['dull-razor']!.skillCardId!));

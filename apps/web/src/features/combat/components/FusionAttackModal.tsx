@@ -40,6 +40,28 @@ export function FusionAttackModal({
   const preview = getAttackFusionPreview(run, attackInstanceId, selectedItemIds);
   const playable = canPlayFusedAttack(run, attackInstanceId, selectedItemIds);
   if (!attackDefinition || !preview) return null;
+  const fusionDescription = (itemId: string) => {
+    const fusion = ITEMS[itemId]?.fusion;
+    if (!fusion) return '';
+    const effects = [
+      fusion.damageMultiplier && fusion.damageMultiplier !== 1
+        ? t('fusion.damage', { value: fusion.damageMultiplier.toFixed(2) })
+        : undefined,
+      fusion.flatDamage ? t('fusion.flatDamage', { value: fusion.flatDamage }) : undefined,
+      fusion.projectileScale && fusion.projectileScale !== 1
+        ? t('fusion.size', { value: fusion.projectileScale.toFixed(2) })
+        : undefined,
+      fusion.knockback ? t('fusion.knockback', { value: fusion.knockback }) : undefined,
+      fusion.poisonTurns
+        ? t('fusion.poison', { turns: fusion.poisonTurns, damage: fusion.poisonDamage })
+        : undefined,
+      fusion.slowTurns ? t('fusion.slow', { turns: fusion.slowTurns }) : undefined,
+      fusion.curvedShots ? t('fusion.homing') : undefined,
+      fusion.attackMode ? t('fusion.form', { form: t(`attackModes.${fusion.attackMode}`) }) : undefined,
+    ].filter((value): value is string => Boolean(value));
+    const description = t(`fusion.items.${itemId}`, { defaultValue: effects.join(' · ') });
+    return description;
+  };
   const summary = [
     preview.damageMultiplier !== 1
       ? t('fusion.damage', { value: preview.damageMultiplier.toFixed(2) })
@@ -48,6 +70,8 @@ export function FusionAttackModal({
     preview.projectileScale !== 1
       ? t('fusion.size', { value: preview.projectileScale.toFixed(2) })
       : undefined,
+    t('fusion.diameter', { value: preview.projectileDiameter.toFixed(2) }),
+    t('fusion.contactDamage', { value: Math.round(preview.contactDamageRatio * 100) }),
     preview.knockback ? t('fusion.knockback', { value: preview.knockback }) : undefined,
     preview.poisonTurns
       ? t('fusion.poison', { turns: preview.poisonTurns, damage: preview.poisonDamage })
@@ -111,7 +135,7 @@ export function FusionAttackModal({
                     {t('choice.quality', { quality: item.quality })} · {t('fusion.free')}
                   </small>
                 </span>
-                <em>{t(`fusion.items.${item.id}`)}</em>
+                <em>{fusionDescription(item.id)}</em>
               </button>
             );
           })}

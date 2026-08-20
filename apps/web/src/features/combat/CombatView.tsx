@@ -593,6 +593,7 @@ export function CombatView({
       {viewingPile && <PileViewer run={run} pile={viewingPile} onClose={() => setViewingPile(undefined)} />}
       {combat.pendingSelection && (
         <CombatCardSelectionModal
+          key={`${combat.pendingSelection.kind}:${combat.pendingSelection.sourceInstanceId}:${combat.pendingSelection.candidateInstanceIds.join(',')}`}
           run={run}
           onResolve={(selectedIds) => commit((state) => resolveCombatSelection(state, selectedIds))}
           onCancel={() => commit(cancelCombatSelection)}

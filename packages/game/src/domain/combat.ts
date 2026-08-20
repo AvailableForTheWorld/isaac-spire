@@ -8,6 +8,7 @@ import type {
   CombatRoomShape,
   EnemyBehavior,
   EnemyMovementPattern,
+  FamiliarDirection,
   IntentKind,
   RoomKind,
   RoomMissingQuadrant,
@@ -70,6 +71,22 @@ export interface EnemyState extends EnemyDefinition {
   intent: EnemyIntent;
 }
 
+/** A passive collectible represented by an autonomous, non-blocking combat assistant. */
+export interface FamiliarState {
+  instanceId: string;
+  itemId: string;
+  direction: FamiliarDirection;
+  ring: number;
+  damage: number;
+  hits: number;
+  attackMode: AttackMode;
+  projectileScale: number;
+  splashDamageRatio: number;
+  poisonTurns: number;
+  poisonDamage: number;
+  slowTurns: number;
+}
+
 export interface PendingCombatSelection {
   kind: CombatSelectionKind;
   sourceInstanceId: string;
@@ -97,6 +114,8 @@ export interface CombatAnimationEvent {
   toY?: number;
   attackMode?: AttackMode;
   projectileScale?: number;
+  /** Effective normal-damage fraction for a non-primary projectile graze. */
+  contactDamageScale?: number;
   poisonTurns?: number;
   slowTurns?: number;
   movementStyle?: CombatMovementStyle;
@@ -126,6 +145,7 @@ export interface CombatState {
   round: number;
   vitality: number;
   playerShield: number;
+  playerShieldCapacityBuff: number;
   playerArmorBuff: number;
   playerDamageBuff: number;
   playerDamageMultiplier: number;
@@ -161,6 +181,7 @@ export interface CombatState {
   discardPile: string[];
   exhausted: string[];
   cooldowns: Record<string, number>;
+  familiars: FamiliarState[];
   enemies: EnemyState[];
   selectedEnemyId?: string;
   log: CombatLogEntry[];

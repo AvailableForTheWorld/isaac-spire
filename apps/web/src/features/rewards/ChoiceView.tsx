@@ -9,8 +9,10 @@ import {
   ItemKind,
   RewardContext,
   RewardOptionType,
+  UpgradeKind,
   chooseOption,
   itemUsesCombatCard,
+  purchaseShopCardUpgrade,
   skipChoice,
   type RewardOption,
   type RunState,
@@ -26,6 +28,7 @@ import {
   rewardsText,
 } from '../../localize';
 import { cardAppearanceClass, itemForCard } from '../cards/cardAppearance';
+import { ShopCardUpgradeModal } from './ShopCardUpgradeModal';
 
 function ChoiceCard({
   option,
@@ -43,6 +46,8 @@ function ChoiceCard({
   const unaffordable =
     (option.price ?? 0) > run.player.coins ||
     (dealType === DealType.Devil && option.type === RewardOptionType.Item && run.player.redContainers <= 1);
+  const noUpgradeTargets =
+    option.upgrade === UpgradeKind.Card && run.player.deck.every((card) => card.upgraded);
   const offeredCard = option.cardId ? CARDS[option.cardId] : undefined;
   const offeredCardItem = offeredCard ? itemForCard(offeredCard) : undefined;
   const offeredItem = option.itemId ? ITEMS[option.itemId] : undefined;
@@ -50,7 +55,7 @@ function ChoiceCard({
   return (
     <button
       className={`choice-card ${option.type} ${appearance} ${option.sold ? 'sold' : ''}`}
-      disabled={option.sold || unaffordable}
+      disabled={option.sold || unaffordable || noUpgradeTargets}
       onClick={onChoose}
     >
       {option.price !== undefined && <span className="price">{option.price}¢</span>}
@@ -76,13 +81,14 @@ function ChoiceCard({
         <small>{t('choice.assetPack')}</small>
       )}
       {option.sold && <em>{t('choice.sold')}</em>}
-      {unaffordable && !option.sold && (
+      {unaffordable && !option.sold && !noUpgradeTargets && (
         <em>
           {dealType === DealType.Devil && run.player.redContainers <= 1
             ? t('choice.needContainers')
             : t('choice.notEnoughCoins')}
         </em>
       )}
+      {noUpgradeTargets && !option.sold && <em>{t('choice.noUpgradeableCards')}</em>}
     </button>
   );
 }
@@ -97,6 +103,7 @@ export function ChoiceView({
   const { t } = useTranslation();
   const [choosingId, setChoosingId] = useState<string>();
   const [pendingActiveChoice, setPendingActiveChoice] = useState<RewardOption>();
+  const [pendingCardUpgrade, setPendingCardUpgrade] = useState<RewardOption>();
   const choice = run.choice!;
   const beginChoice = (option: RewardOption) => {
     if (choosingId) return;
@@ -108,6 +115,10 @@ export function ChoiceView({
   };
   const requestChoice = (option: RewardOption) => {
     if (choosingId) return;
+    if (option.upgrade === UpgradeKind.Card) {
+      setPendingCardUpgrade(option);
+      return;
+    }
     const offeredItem = option.itemId ? ITEMS[option.itemId] : undefined;
     if (offeredItem?.kind === ItemKind.Active && run.player.activeItemId) {
       setPendingActiveChoice(option);
@@ -145,7 +156,8 @@ export function ChoiceView({
       </section>
       {choice.canSkip && !hasExplicitLeaveOption && (
         <button className="text-button choice-skip" onClick={() => commit(skipChoice)}>
-          {t('choice.leaveEmpty')} <span>→</span>
+          {t(choice.kind === ChoiceKind.Shop ? 'options.leaveShop.label' : 'choice.leaveEmpty')}{' '}
+          <span>→</span>
         </button>
       )}
       {choice.kind === ChoiceKind.Shop && (
@@ -179,6 +191,18 @@ export function ChoiceView({
             const option = pendingActiveChoice;
             setPendingActiveChoice(undefined);
             beginChoice(option);
+          }}
+        />
+      )}
+      {pendingCardUpgrade && (
+        <ShopCardUpgradeModal
+          run={run}
+          option={pendingCardUpgrade}
+          onCancel={() => setPendingCardUpgrade(undefined)}
+          onConfirm={(cardInstanceId) => {
+            const option = pendingCardUpgrade;
+            setPendingCardUpgrade(undefined);
+            commit((state) => purchaseShopCardUpgrade(state, option.id, cardInstanceId));
           }}
         />
       )}

@@ -211,9 +211,20 @@ export const ISAAC_ACTION_ITEM_DEFINITIONS: Record<string, ItemDefinition> = {
     methodAction('unknown-map', ItemActionTrigger.Activate, ItemActionMethod.RevealMap),
     methodAction('unknown-hand', ItemActionTrigger.Activate, ItemActionMethod.TransformHand),
   ]),
-  placebo: specialize('placebo', '免费重复上一张非主动牌的效果，用于模拟复制药丸效果。', [
-    methodAction('repeat-consumable', ItemActionTrigger.Activate, ItemActionMethod.ReplayPreviousCard),
-  ]),
+  placebo: specialize(
+    'placebo',
+    '以50%数值重复上一张非主动牌的效果；状态持续时间至少为1回合。',
+    [
+      methodAction('repeat-consumable', ItemActionTrigger.Activate, ItemActionMethod.ReplayPreviousCard, {
+        amount: 0.5,
+      }),
+    ],
+    {
+      chargeRounds: 4,
+      description:
+        'Repeat the previous non-active card at 50% numeric power. Status duration remains at least one turn.',
+    },
+  ),
   'book-of-secrets': specialize('book-of-secrets', '揭示当前层全部普通、隐藏与特殊房间。', [
     methodAction('read-floor-map', ItemActionTrigger.Activate, ItemActionMethod.RevealMap),
   ]),

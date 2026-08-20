@@ -1,19 +1,35 @@
 import { CARDS, ITEMS, itemUsesCombatCard, passiveCardId } from './catalog.js';
-import type { CardInstance, HeartKind, PlayerState, RunState } from './types.js';
-import { AttackMode, CardEffectOpcode, CharacterId, ItemKind } from './types.js';
+import type { CardInstance, PlayerState, RunState } from './types.js';
+import {
+  AttackMode,
+  CardEffectOpcode,
+  CharacterId,
+  DEFAULT_HEART_SIZE,
+  HEART_SIZE_UPGRADE_AMOUNT,
+  HeartKind,
+  ItemKind,
+  MAX_RED_CONTAINERS,
+} from './types.js';
 import { randomInt } from './random.js';
 
-export const ISAAC_STARTER_PASSIVE_ITEM_IDS = ['battery-pack', 'starter-deck', 'the-common-cold'] as const;
+export const ISAAC_STARTER_PASSIVE_ITEM_IDS = [
+  'battery-pack',
+  'starter-deck',
+  'the-common-cold',
+  'sad-onion',
+] as const;
+export const DEFAULT_MAX_SHIELD = 15;
 
 export const ISAAC_STARTER_DECK_RECIPE = [
   { definitionId: 'basic-attack', count: 4 },
-  { definitionId: 'wooden-cross', count: 4 },
+  { definitionId: 'wooden-cross', count: 3 },
   ...ISAAC_STARTER_PASSIVE_ITEM_IDS.map((itemId) => ({
     definitionId: passiveCardId(itemId),
     count: 1,
   })),
   { definitionId: 'skill-d6', count: 1 },
-  { definitionId: 'half-heart', count: 2 },
+  { definitionId: 'half-heart', count: 1 },
+  { definitionId: 'vitality-shot', count: 1 },
   { definitionId: 'the-empress', count: 1 },
 ] as const;
 
@@ -30,14 +46,15 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
   const player: PlayerState = {
     character: CharacterId.Isaac,
     redContainers: 3,
-    redHp: 90,
+    redHp: 3 * DEFAULT_HEART_SIZE,
     pocketHearts: [],
     stats: {
       baseDamage: 6,
       damageMultiplier: 1,
       armor: 3,
       baseShield: 10,
-      heartSize: 30,
+      maxShield: DEFAULT_MAX_SHIELD,
+      heartSize: DEFAULT_HEART_SIZE,
       maxVitality: 5,
       drawCount: 7,
       maxRetain: 5,
@@ -68,6 +85,66 @@ export function createIsaac(run: Pick<RunState, 'rngState'>): PlayerState {
 
 export function maxRedHp(player: PlayerState): number {
   return player.redContainers * player.stats.heartSize;
+}
+
+export function clampPlayerHealth(player: PlayerState): void {
+  if (!Number.isFinite(player.stats.heartSize) || player.stats.heartSize <= 0) {
+    player.stats.heartSize = DEFAULT_HEART_SIZE;
+  }
+  player.redContainers = Math.max(0, Math.min(MAX_RED_CONTAINERS, Math.round(player.redContainers)));
+  player.redHp = Math.max(0, Math.min(maxRedHp(player), player.redHp));
+}
+
+export function addRedContainers(player: PlayerState, requested: number): number {
+  const before = Math.max(0, Math.min(MAX_RED_CONTAINERS, Math.round(player.redContainers)));
+  player.redContainers = before;
+  player.redContainers = Math.min(MAX_RED_CONTAINERS, before + Math.max(0, Math.round(requested)));
+  const added = player.redContainers - before;
+  player.redHp = Math.min(maxRedHp(player), player.redHp + added * player.stats.heartSize);
+  return added;
+}
+
+export function increaseHeartSize(player: PlayerState, requested = HEART_SIZE_UPGRADE_AMOUNT): number {
+  const added = Math.max(0, Math.round(requested));
+  if (!added) return 0;
+  player.stats.heartSize += added;
+  player.redHp = Math.min(maxRedHp(player), player.redHp + player.redContainers * added);
+  player.pocketHearts.forEach((heart) => {
+    heart.maxHp += added;
+    heart.hp = Math.min(heart.maxHp, heart.hp + added);
+  });
+  return added;
+}
+
+export interface PlayerHealth {
+  current: number;
+  maximum: number;
+  redCurrent: number;
+  redMaximum: number;
+  pocketCurrent: number;
+  pocketMaximum: number;
+}
+
+export function getPlayerHealth(player: PlayerState): PlayerHealth {
+  const redMaximum = Math.max(0, maxRedHp(player));
+  const redCurrent = Math.max(0, Math.min(redMaximum, player.redHp));
+  const pocketCurrent = player.pocketHearts.reduce(
+    (total, heart) => total + Math.max(0, Math.min(heart.maxHp, heart.hp)),
+    0,
+  );
+  const pocketMaximum = player.pocketHearts.reduce((total, heart) => total + Math.max(0, heart.maxHp), 0);
+  return {
+    current: redCurrent + pocketCurrent,
+    maximum: redMaximum + pocketMaximum,
+    redCurrent,
+    redMaximum,
+    pocketCurrent,
+    pocketMaximum,
+  };
+}
+
+export function isPlayerAlive(player: PlayerState): boolean {
+  return getPlayerHealth(player).current > 0;
 }
 
 export function healRed(player: PlayerState, amount: number): number {
@@ -134,6 +211,13 @@ export function equipItem(run: RunState, itemId: string): void {
   if (newlyEquipped && item.kind === ItemKind.Passive) run.player.items.push(item.id);
   if (newlyEquipped && item.kind === ItemKind.Passive && !itemUsesCombatCard(item)) {
     for (const effect of item.effects ?? []) {
+      if (effect.redContainers) {
+        addRedContainers(run.player, effect.redContainers);
+      }
+      if (effect.heartSize) increaseHeartSize(run.player, effect.heartSize);
+      if (effect.soulHearts) addPocketHeart(run, HeartKind.Soul, Math.max(0, Math.round(effect.soulHearts)));
+      if (effect.blackHearts)
+        addPocketHeart(run, HeartKind.Black, Math.max(0, Math.round(effect.blackHearts)));
       if (!effect.stat) continue;
       const stat = effect.stat;
       const current = run.player.stats[stat];

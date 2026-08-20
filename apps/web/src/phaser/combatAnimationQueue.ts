@@ -12,6 +12,7 @@ const PARALLEL_STATUS_KINDS = new Set<CombatAnimationKind>([
   CombatAnimationKind.Summon,
   CombatAnimationKind.Idle,
   CombatAnimationKind.Defeat,
+  CombatAnimationKind.FamiliarSpawn,
 ]);
 
 function isEnemyMovement(event: CombatAnimationEvent): boolean {
@@ -28,6 +29,10 @@ function isParallelEnemyAttack(event: CombatAnimationEvent): boolean {
     event.sourceId !== 'isaac' &&
     event.bossPattern === undefined
   );
+}
+
+function isParallelFamiliarAttack(event: CombatAnimationEvent): boolean {
+  return event.kind === CombatAnimationKind.FamiliarAttack;
 }
 
 function eventActors(event: CombatAnimationEvent): string[] {
@@ -49,7 +54,7 @@ export function takeNextCombatAnimationBatch(queue: CombatAnimationEvent[]): Com
 
   const movementBatch = isEnemyMovement(first);
   const statusBatch = isParallelEnemyStatus(first);
-  const attackBatch = isParallelEnemyAttack(first);
+  const attackBatch = isParallelEnemyAttack(first) || isParallelFamiliarAttack(first);
   if (!movementBatch && !statusBatch && !attackBatch) return [first];
 
   const batch = [first];
@@ -63,7 +68,7 @@ export function takeNextCombatAnimationBatch(queue: CombatAnimationEvent[]): Com
       ? isEnemyMovement(candidate)
       : statusBatch
         ? isParallelEnemyStatus(candidate)
-        : isParallelEnemyAttack(candidate);
+        : isParallelEnemyAttack(candidate) || isParallelFamiliarAttack(candidate);
     if (!compatible) {
       if (statusBatch || attackBatch) break;
       index += 1;

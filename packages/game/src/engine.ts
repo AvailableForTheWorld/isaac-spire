@@ -8,8 +8,19 @@ import {
   enemyPoolForFloor,
   itemUsesCombatCard,
 } from './catalog.js';
-import { availableNodeIds, createFloorMap, getMapNode, revealFromCurrent } from './map.js';
-import { addPocketHeart, createCard, createIsaac, equipItem, healRed, maxRedHp } from './player.js';
+import { availableNodeIds, createFloorMap, getMapNode, revealFromCurrent, roomRequiresKey } from './map.js';
+import {
+  addPocketHeart,
+  createCard,
+  createIsaac,
+  DEFAULT_MAX_SHIELD,
+  equipItem,
+  getPlayerHealth,
+  healRed,
+  increaseHeartSize,
+  isPlayerAlive,
+  maxRedHp,
+} from './player.js';
 import { hashSeed, nextRandom, pickOne, randomInt, shuffle, weightedPick } from './random.js';
 import {
   DEFAULT_COMBAT_ROOM_LAYOUT,
@@ -41,9 +52,15 @@ import {
   rollEnemyIntent as rollIntent,
 } from './combat/enemy-ai.js';
 import { difficultyForFloor } from './combat/difficulty.js';
+import {
+  PROJECTILE_CONTACT_DAMAGE_RATIO,
+  getProjectileContacts,
+  projectileDiameterInCells,
+} from './combat/projectile.js';
+import { createFamiliarState, isFamiliarItem } from './combat/familiars.js';
 import { pushCombatAnimation as pushAnimation, pushCombatLog as pushLog } from './combat/events.js';
 import { rewardQualityWeight } from './rewards/room-rewards.js';
-import { migrateRunSnapshot } from './state/migrations.js';
+import { CURRENT_RUN_VERSION, migrateRunSnapshot } from './state/migrations.js';
 import {
   createRunAchievementState,
   evaluateAchievementSnapshot,
@@ -53,11 +70,14 @@ import {
 import {
   AchievementEventType,
   AchievementBossId,
+  ARMOR_UPGRADE_AMOUNT,
   AttackMode,
   BossAttackPattern,
+  CardPileKind,
   CardEffectOpcode,
   CardTarget,
   CardType,
+  CARD_UPGRADE_EFFECT_MULTIPLIER,
   ChoiceAction,
   ChoiceKind,
   ChoiceNext,
@@ -67,13 +87,16 @@ import {
   CombatRoomShape,
   CombatSelectionKind,
   DealType,
+  DEFAULT_HEART_SIZE,
   EnemyMovementPattern,
   HeartKind,
+  HEART_SIZE_UPGRADE_AMOUNT,
   IntentKind,
   ItemActionMethod,
   ItemActionTrigger,
   ItemKind,
   ItemUseTiming,
+  MAX_RED_CONTAINERS,
   PocketItemAction,
   ResourceKind,
   RewardContext,
@@ -82,7 +105,10 @@ import {
   RoomKind,
   RoomMissingQuadrant,
   RunPhase,
+  SHIELD_CAPACITY_UPGRADE_AMOUNT,
   StatusKind,
+  TREATMENT_BASE_HEAL,
+  TREATMENT_UPGRADE_HEAL,
   UpgradeKind,
 } from './types.js';
 
@@ -98,6 +124,12 @@ export {
   getEnemyOccupiedCells,
   isCombatCellAvailable,
 } from './combat/grid.js';
+export {
+  BASE_PROJECTILE_DIAMETER_CELLS,
+  PROJECTILE_CONTACT_DAMAGE_RATIO,
+  getProjectileContacts,
+  projectileDiameterInCells,
+} from './combat/projectile.js';
 import type {
   AttackFusionPreview,
   CardEffect,
@@ -119,6 +151,39 @@ import type {
 
 const clone = <T>(value: T): T => structuredClone(value);
 
+function familiarsForPlayer(run: RunState): CombatState['familiars'] {
+  return run.player.items
+    .map((itemId) => ITEMS[itemId])
+    .filter(isFamiliarItem)
+    .map((item, index) =>
+      createFamiliarState(item, index, run.player.stats.baseDamage, run.player.stats.damageMultiplier),
+    );
+}
+
+export function getPlayerShieldCapacity(run: RunState): number {
+  return Math.max(
+    0,
+    (run.player.stats.maxShield ?? DEFAULT_MAX_SHIELD) + (run.combat?.playerShieldCapacityBuff ?? 0),
+  );
+}
+
+function gainPlayerShield(
+  run: RunState,
+  combat: CombatState,
+  amount: number,
+  allowCapacityOverflow = false,
+): number {
+  const before = Math.max(0, combat.playerShield);
+  if (allowCapacityOverflow) {
+    combat.playerShield = before + Math.max(0, amount);
+    return combat.playerShield - before;
+  }
+  const capacity = getPlayerShieldCapacity(run);
+  const cappedBefore = Math.min(capacity, before);
+  combat.playerShield = Math.min(capacity, cappedBefore + Math.max(0, amount));
+  return combat.playerShield - cappedBefore;
+}
+
 function ensureCombatGrid(run: RunState): void {
   const combat = run.combat;
   if (!combat) return;
@@ -138,6 +203,8 @@ function ensureCombatGrid(run: RunState): void {
   combat.observedDefeatIds ??= [];
   combat.statFloorLocked ??= false;
   combat.activeEffectRepeats ??= 0;
+  combat.familiars ??= familiarsForPlayer(run);
+  combat.playerShieldCapacityBuff ??= 0;
   combat.enemies.forEach((enemy) => {
     enemy.statuses ??= {};
   });
@@ -146,7 +213,8 @@ function ensureCombatGrid(run: RunState): void {
   stats.damageMultiplier ??= 1;
   stats.armor ??= 3;
   stats.baseShield ??= 10;
-  stats.heartSize ??= 30;
+  stats.maxShield ??= DEFAULT_MAX_SHIELD;
+  stats.heartSize ??= DEFAULT_HEART_SIZE;
   stats.maxVitality ??= 5;
   stats.drawCount ??= 7;
   stats.maxRetain ??= 5;
@@ -158,6 +226,7 @@ function ensureCombatGrid(run: RunState): void {
   stats.movementSpeed ??= 3;
   stats.attackRange ??= 5;
   stats.attackMode ??= AttackMode.Basic;
+  combat.playerShield = Math.max(0, combat.playerShield);
   combat.playerPosition ??= { ...ISAAC_DOOR_POSITION };
   combat.deploymentPending ??= false;
   combat.playerDamageMultiplier ??= 1;
@@ -332,7 +401,7 @@ export function createRun(
     id: `run-${hashSeed(cleanSeed).toString(36)}-${Date.now().toString(36)}`,
     seed: cleanSeed,
     rngState: hashSeed(cleanSeed),
-    version: 1,
+    version: CURRENT_RUN_VERSION,
     createdAt,
     updatedAt: createdAt,
     phase: RunPhase.Map,
@@ -510,6 +579,8 @@ export function getAttackFusionPreview(
     damageMultiplier: 1,
     flatDamage: 0,
     projectileScale: 1,
+    projectileDiameter: projectileDiameterInCells(1),
+    contactDamageRatio: PROJECTILE_CONTACT_DAMAGE_RATIO,
     knockback: 0,
     poisonTurns: 0,
     poisonDamage: 0,
@@ -520,7 +591,8 @@ export function getAttackFusionPreview(
     const card = getCardDefinition(run, instanceId);
     const item = card?.type === CardType.Item && card.itemId ? ITEMS[card.itemId] : undefined;
     if (!card || !item?.fusion) continue;
-    const scale = run.combat?.damoclesActive && !run.combat.damoclesFallen ? 2 : 1;
+    const itemUpgradeScale = getCard(run, instanceId)?.upgraded ? CARD_UPGRADE_EFFECT_MULTIPLIER : 1;
+    const scale = (run.combat?.damoclesActive && !run.combat.damoclesFallen ? 2 : 1) * itemUpgradeScale;
     preview.damageMultiplier *= Math.pow(item.fusion.damageMultiplier ?? 1, scale);
     preview.flatDamage += (item.fusion.flatDamage ?? 0) * scale;
     preview.projectileScale *= Math.pow(item.fusion.projectileScale ?? 1, scale);
@@ -531,20 +603,42 @@ export function getAttackFusionPreview(
     preview.curvedShots ||= item.fusion.curvedShots === true;
     if (item.fusion.attackMode) preview.attackMode = item.fusion.attackMode;
   }
+  preview.projectileDiameter = projectileDiameterInCells(preview.projectileScale);
   return preview;
 }
 
 function unlockedPool(run: RunState, pool: RewardPool): ItemDefinition[] {
   const pocketItemIds = new Set(run.player.pocketItems.map((item) => item.itemId));
+  const canBenefitFromItem = (item: ItemDefinition): boolean => {
+    const effects = item.effects ?? [];
+    const onlyAddsRedContainers =
+      effects.some((effect) => (effect.redContainers ?? 0) > 0) &&
+      !effects.some(
+        (effect) =>
+          effect.stat !== undefined ||
+          effect.heartSize !== undefined ||
+          effect.soulHearts !== undefined ||
+          effect.blackHearts !== undefined ||
+          effect.revealSecrets !== undefined ||
+          effect.revealAll !== undefined ||
+          effect.guaranteeDeal !== undefined ||
+          effect.damageCap !== undefined ||
+          effect.curvedShots !== undefined,
+      );
+    return !onlyAddsRedContainers || run.player.redContainers < MAX_RED_CONTAINERS;
+  };
   const eligible = Object.values(ITEMS).filter(
     (item) =>
       run.unlocks.includes(item.id) &&
       item.pool.includes(pool) &&
       !run.player.items.includes(item.id) &&
-      !pocketItemIds.has(item.id),
+      !pocketItemIds.has(item.id) &&
+      canBenefitFromItem(item),
   );
   if (eligible.length) return eligible;
-  return Object.values(ITEMS).filter((item) => run.unlocks.includes(item.id) && item.pool.includes(pool));
+  return Object.values(ITEMS).filter(
+    (item) => run.unlocks.includes(item.id) && item.pool.includes(pool) && canBenefitFromItem(item),
+  );
 }
 
 function weightedUnique<T>(
@@ -566,16 +660,27 @@ function weightedUnique<T>(
   return selected;
 }
 
-function pickUniqueItems(run: RunState, pool: RewardPool, count: number): ItemDefinition[] {
-  const candidates = unlockedPool(run, pool);
+function pickUniqueItems(
+  run: RunState,
+  pool: RewardPool,
+  count: number,
+  predicate: (item: ItemDefinition) => boolean = () => true,
+): ItemDefinition[] {
+  const candidates = unlockedPool(run, pool).filter(predicate);
   const weightedCandidates = candidates.filter((item) => rewardQualityWeight(pool, item.quality) > 0);
   return weightedUnique(run, weightedCandidates.length ? weightedCandidates : candidates, count, (item) =>
     Math.max(1, rewardQualityWeight(pool, item.quality)),
   );
 }
 
-function itemOptions(run: RunState, pool: RewardPool, count: number, price?: number): RewardOption[] {
-  return pickUniqueItems(run, pool, count).map((item) => ({
+function itemOptions(
+  run: RunState,
+  pool: RewardPool,
+  count: number,
+  price?: number,
+  predicate?: (item: ItemDefinition) => boolean,
+): RewardOption[] {
+  return pickUniqueItems(run, pool, count, predicate).map((item) => ({
     id: makeId('option', run),
     type: RewardOptionType.Item,
     itemId: item.id,
@@ -591,6 +696,7 @@ function cardOptions(run: RunState, rewardPool: RewardPool, count: number, price
     (card) =>
       ![CardType.Skill, CardType.Curse].includes(card.type) &&
       card.id !== 'basic-attack' &&
+      !(card.itemId && !itemUsesCombatCard(ITEMS[card.itemId]!)) &&
       card.rewardPools.includes(rewardPool),
   );
   const weightedPool = candidates.filter((card) => rewardQualityWeight(rewardPool, card.quality) > 0);
@@ -780,32 +886,61 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
   switch (kind) {
     case RoomKind.Shop: {
       const discount = 1 - run.player.stats.shopDiscount;
+      const permanentStatUpgradePrice = run.floorIndex === 0 ? 5 : 15;
+      const upgradeOption = (
+        upgrade: UpgradeKind,
+        label: string,
+        description: string,
+        icon: string,
+        price: number,
+      ): RewardOption => ({
+        id: makeId('shop-upgrade', run),
+        type: RewardOptionType.Upgrade,
+        upgrade,
+        label,
+        description,
+        icon,
+        price,
+      });
       const options = [
-        ...itemOptions(run, RewardPool.Shop, 3).map((option, index) => ({
+        upgradeOption(
+          UpgradeKind.Card,
+          'Deck Forge',
+          'Choose any unupgraded card in your deck and upgrade it.',
+          '✦',
+          Math.max(2, Math.round(5 * discount)),
+        ),
+        upgradeOption(
+          UpgradeKind.Heart,
+          'Heart Training',
+          `Each heart permanently holds ${HEART_SIZE_UPGRADE_AMOUNT} more HP.`,
+          '♥',
+          permanentStatUpgradePrice,
+        ),
+        upgradeOption(
+          UpgradeKind.Shield,
+          'Shield Capacity',
+          `+${SHIELD_CAPACITY_UPGRADE_AMOUNT} permanent shield capacity.`,
+          '⬡',
+          permanentStatUpgradePrice,
+        ),
+        upgradeOption(
+          UpgradeKind.Armor,
+          'Tough Skin',
+          `+${ARMOR_UPGRADE_AMOUNT} permanent armor.`,
+          '⛉',
+          permanentStatUpgradePrice,
+        ),
+        ...itemOptions(
+          run,
+          RewardPool.Shop,
+          3,
+          undefined,
+          (item) => itemUsesCombatCard(item) || (item.kind === ItemKind.Active && Boolean(item.skillCardId)),
+        ).map((option, index) => ({
           ...option,
           price: Math.max(3, Math.round((15 + index * 3) * discount)),
         })),
-        ...cardOptions(run, RewardPool.Shop, 2).map((option) => ({
-          ...option,
-          price: Math.max(2, Math.round(7 * discount)),
-        })),
-        resourceOption(
-          run,
-          ResourceKind.RedHeart,
-          1,
-          'Full Red Heart',
-          'Recover one heart container.',
-          '♥',
-          Math.max(1, Math.round(4 * discount)),
-        ),
-        {
-          id: makeId('leave', run),
-          type: RewardOptionType.Action,
-          action: ChoiceAction.Leave,
-          label: 'Leave shop',
-          description: 'Keep your coins and return to the route.',
-          icon: '↩',
-        } satisfies RewardOption,
       ];
       roomChoice(
         run,
@@ -918,7 +1053,7 @@ function resolveNonCombatRoom(run: RunState, kind: RoomKind): void {
         'Super Secret Room',
         'Something precious has been waiting here.',
         [
-          resourceOption(run, ResourceKind.SoulHeart, 1, 'Soul Heart', 'Add a 30 HP soul heart.', '♡'),
+          resourceOption(run, ResourceKind.SoulHeart, 1, 'Soul Heart', 'Add a 10 HP soul heart.', '♡'),
           resourceOption(run, ResourceKind.BlackHeart, 1, 'Black Heart', 'Explodes when emptied.', '🖤'),
           ...itemOptions(run, RewardPool.SuperSecret, 1),
         ],
@@ -936,7 +1071,7 @@ export function enterRoom(state: RunState, nodeId: string): RunState {
     throw new Error('That room is not connected to the current route');
   const node = getMapNode(run.floorMap, nodeId);
   if (node.visited) throw new Error('That room has already been cleared');
-  if ((node.kind === RoomKind.Shop || node.kind === RoomKind.Treasure) && run.floorIndex > 0) {
+  if (roomRequiresKey(run.floorIndex, node.kind)) {
     if (run.player.keys < 1) throw new Error('A key is required to open this room');
     run.player.keys -= 1;
   }
@@ -951,6 +1086,27 @@ export function enterRoom(state: RunState, nodeId: string): RunState {
   } else {
     resolveNonCombatRoom(run, node.kind);
   }
+  return touch(run);
+}
+
+/** Advances the route past an unopened Shop or Treasure Room when Isaac has no key. */
+export function bypassLockedRoom(state: RunState, nodeId: string): RunState {
+  const run = clone(state);
+  if (run.phase !== RunPhase.Map) throw new Error('A room can only be bypassed from the map');
+  if (!availableNodeIds(run.floorMap).includes(nodeId))
+    throw new Error('That room is not connected to the current route');
+  const node = getMapNode(run.floorMap, nodeId);
+  if (!roomRequiresKey(run.floorIndex, node.kind)) throw new Error('That room is not key-locked');
+  if (node.visited) throw new Error('That room has already been cleared');
+  if (run.player.keys > 0) throw new Error('A key is available to open this room');
+
+  node.visited = true;
+  node.bypassed = true;
+  run.floorMap.currentNodeId = node.id;
+  run.currentRoomId = undefined;
+  run.lastReward = [];
+  run.mapBombResult = undefined;
+  revealMap(run);
   return touch(run);
 }
 
@@ -1165,22 +1321,18 @@ function queueDrawSelection(
   const existing =
     combat.pendingSelection?.kind === CombatSelectionKind.Draw ? combat.pendingSelection : undefined;
   const totalRequested = requested + (existing?.max ?? 0);
-  if (combat.drawPile.length < totalRequested && combat.discardPile.length) {
-    combat.drawPile.push(...shuffle(run, combat.discardPile));
-    combat.discardPile = [];
-  }
   const selectable = Math.min(totalRequested, combat.drawPile.length);
   if (selectable <= 0) return 0;
   if (existing) {
     existing.candidateInstanceIds = [...combat.drawPile];
-    existing.min = selectable;
+    existing.min = 0;
     existing.max = selectable;
   } else {
     combat.pendingSelection = {
       kind: CombatSelectionKind.Draw,
       sourceInstanceId,
       candidateInstanceIds: [...combat.drawPile],
-      min: selectable,
+      min: 0,
       max: selectable,
     };
   }
@@ -1202,7 +1354,8 @@ function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite |
     deploymentPending: true,
     round: 1,
     vitality: run.player.stats.maxVitality,
-    playerShield: run.player.stats.baseShield,
+    playerShield: Math.max(0, Math.min(run.player.stats.baseShield, run.player.stats.maxShield)),
+    playerShieldCapacityBuff: 0,
     playerArmorBuff: 0,
     playerDamageBuff: 0,
     playerDamageMultiplier: 1,
@@ -1234,6 +1387,7 @@ function beginCombat(run: RunState, roomKind: RoomKind.Combat | RoomKind.Elite |
     discardPile: [],
     exhausted: [],
     cooldowns: Object.fromEntries(skills.map((id) => [id, 0])),
+    familiars: familiarsForPlayer(run),
     enemies: [],
     log: [],
     animationSequence: 0,
@@ -1299,6 +1453,95 @@ function hurtEnemy(enemy: EnemyState, rawDamage: number, armorPierce = 0): numbe
   enemy.hp = Math.max(0, enemy.hp - hpDamage);
   enemy.damageTakenThisRound += Math.max(0, durabilityBefore - enemy.hp - enemy.shield);
   return afterArmor;
+}
+
+function runFamiliarAttacks(run: RunState): void {
+  const combat = run.combat;
+  if (!combat || combat.deploymentPending || !combat.familiars.length) return;
+  let attacks = 0;
+  let totalHpDamage = 0;
+
+  const attackTarget = (familiar: CombatState['familiars'][number], target: EnemyState, scale = 1): void => {
+    const wasAlive = target.hp > 0;
+    const hpBefore = target.hp;
+    const shieldBefore = target.shield;
+    let rawTotal = 0;
+    let afterArmorTotal = 0;
+    const modeMultiplier =
+      familiar.attackMode === AttackMode.Knife ? 1.4 : familiar.attackMode === AttackMode.Brimstone ? 0.9 : 1;
+    const armorPierce = familiar.attackMode === AttackMode.Knife ? 2 : 0;
+    for (let hit = 0; hit < familiar.hits; hit += 1) {
+      const rawDamage = Math.max(1, Math.round(familiar.damage * modeMultiplier * scale));
+      rawTotal += rawDamage;
+      afterArmorTotal += hurtEnemy(target, rawDamage, armorPierce);
+    }
+    const hpDamage = hpBefore - target.hp;
+    const shieldDamage = shieldBefore - target.shield;
+    totalHpDamage += hpDamage;
+    attacks += 1;
+    if (target.hp > 0 && familiar.poisonTurns > 0) {
+      target.poisonTurns = Math.max(target.poisonTurns, familiar.poisonTurns);
+      target.poisonDamage = Math.max(target.poisonDamage, familiar.poisonDamage);
+    }
+    if (target.hp > 0 && familiar.slowTurns > 0) {
+      target.slowedTurns = Math.max(target.slowedTurns, familiar.slowTurns);
+    }
+    pushAnimation(combat, {
+      kind: CombatAnimationKind.FamiliarAttack,
+      sourceId: familiar.instanceId,
+      targetId: target.instanceId,
+      value: hpDamage,
+      secondaryValue: shieldDamage,
+      rawValue: rawTotal,
+      armorValue: Math.max(0, rawTotal - afterArmorTotal),
+      hitCount: familiar.hits,
+      attackMode: familiar.attackMode,
+      projectileScale: familiar.projectileScale,
+      poisonTurns: familiar.poisonTurns,
+      slowTurns: familiar.slowTurns,
+    });
+    if (wasAlive && target.hp <= 0) {
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.Defeat,
+        sourceId: target.instanceId,
+        targetId: target.instanceId,
+      });
+    }
+  };
+
+  for (const familiar of combat.familiars) {
+    const target = combat.enemies
+      .filter((enemy) => enemy.hp > 0)
+      .sort((left, right) => {
+        const distance =
+          enemyChebyshevDistanceToPosition(left, combat.playerPosition) -
+          enemyChebyshevDistanceToPosition(right, combat.playerPosition);
+        return distance || left.hp - right.hp || left.instanceId.localeCompare(right.instanceId);
+      })[0];
+    if (!target) break;
+    attackTarget(familiar, target);
+    if (familiar.splashDamageRatio > 0) {
+      combat.enemies
+        .filter(
+          (enemy) =>
+            enemy.hp > 0 &&
+            enemy.instanceId !== target.instanceId &&
+            enemyChebyshevDistanceToPosition(enemy, target.position) <= 1,
+        )
+        .forEach((enemy) => attackTarget(familiar, enemy, familiar.splashDamageRatio));
+    }
+  }
+
+  if (attacks > 0) {
+    pushLog(
+      combat,
+      `${combat.familiars.length} familiars attacked automatically for ${totalHpDamage} HP damage.`,
+      CombatLogTone.Good,
+      'familiarVolley',
+      { count: combat.familiars.length, damage: totalHpDamage },
+    );
+  }
+  notifyNewEnemyDeaths(run);
 }
 
 function attackDamage(
@@ -1372,6 +1615,8 @@ function playAttack(
       damageMultiplier: 1,
       flatDamage: 0,
       projectileScale: 1,
+      projectileDiameter: projectileDiameterInCells(1),
+      contactDamageRatio: PROJECTILE_CONTACT_DAMAGE_RATIO,
       knockback: 0,
       poisonTurns: 0,
       poisonDamage: 0,
@@ -1410,8 +1655,30 @@ function playAttack(
   const hits = (card.hits ?? 1) + echoHits;
   const base =
     attackDamage(run, combat, card, instance) * multiplier * modifier.damageMultiplier + modifier.flatDamage;
+
+  const projectileContacts = (() => {
+    if (attackMode !== AttackMode.Basic || card.target !== CardTarget.Enemy || targets.length !== 1)
+      return [];
+    const target = targets[0]!;
+    const aimedCell = getEnemyOccupiedCells(target)
+      .filter((cell) => isPositionInPlayerAttackRangeWithFusion(run, cell, modifier.curvedShots))
+      .sort(
+        (left, right) =>
+          gridDistance(combat.playerPosition, left) - gridDistance(combat.playerPosition, right),
+      )[0];
+    return aimedCell
+      ? getProjectileContacts(
+          combat.playerPosition,
+          aimedCell,
+          target,
+          combat.enemies,
+          modifier.projectileDiameter,
+        )
+      : [];
+  })();
+
   let total = 0;
-  for (const target of targets) {
+  const damageTarget = (target: EnemyState, damageScale = 1, contactDamageScale?: number): number => {
     target.alerted = true;
     const wasAlive = target.hp > 0;
     const hpBefore = target.hp;
@@ -1420,7 +1687,7 @@ function playAttack(
     let rawTotal = 0;
     for (let hit = 0; hit < hits; hit += 1) {
       const critical = nextRandom(run) < run.player.stats.critChance + combat.playerCritChanceBuff;
-      const rawHit = base * (critical ? 2 : 1);
+      const rawHit = base * damageScale * (critical ? 2 : 1);
       rawTotal += Math.round(rawHit);
       const dealt = hurtEnemy(target, rawHit, armorPierce);
       total += dealt;
@@ -1439,6 +1706,7 @@ function playAttack(
       hitCount: hits,
       attackMode,
       projectileScale: modifier.projectileScale,
+      contactDamageScale,
       poisonTurns: modifier.poisonTurns,
       slowTurns: modifier.slowTurns,
     });
@@ -1448,13 +1716,26 @@ function playAttack(
     }
     if (target.hp > 0 && modifier.slowTurns > 0)
       target.slowedTurns = Math.max(target.slowedTurns, modifier.slowTurns);
-    if (target.hp > 0) knockbackEnemy(combat, target, modifier.knockback);
+    if (target.hp > 0 && contactDamageScale === undefined) knockbackEnemy(combat, target, modifier.knockback);
     if (wasAlive && target.hp <= 0)
       pushAnimation(combat, {
         kind: CombatAnimationKind.Defeat,
         sourceId: target.instanceId,
         targetId: target.instanceId,
       });
+    return targetTotal;
+  };
+
+  for (const target of targets) damageTarget(target);
+
+  let grazeDamage = 0;
+  let grazeCount = 0;
+  for (const contact of projectileContacts) {
+    const target = combat.enemies.find((enemy) => enemy.instanceId === contact.enemyId && enemy.hp > 0);
+    if (!target) continue;
+    const contactDamageScale = modifier.contactDamageRatio * contact.areaRatio;
+    grazeDamage += damageTarget(target, contactDamageScale, contactDamageScale);
+    grazeCount += 1;
   }
   const mode = attackMode === AttackMode.Basic ? '' : ` ${attackMode}`;
   pushLog(
@@ -1469,22 +1750,91 @@ function playAttack(
       echoCount: echoHits,
     },
   );
-  if (fusedItemCount > 0)
+  if (fusedItemCount > 0) {
     pushLog(
       combat,
-      `Fusion attack used ${fusedItemCount} item cards for this attack only at ×${modifier.damageMultiplier.toFixed(2)} power.`,
+      `Fusion attack used ${fusedItemCount} item cards: ×${modifier.damageMultiplier.toFixed(2)} direct damage, ${modifier.projectileDiameter.toFixed(2)}-cell projectile, ${grazeCount} grazed.`,
       CombatLogTone.Special,
       'fusionAttack',
       {
         count: fusedItemCount,
         multiplier: modifier.damageMultiplier.toFixed(2),
+        diameter: modifier.projectileDiameter.toFixed(2),
+        grazeCount,
       },
     );
+  }
+  if (grazeCount > 0) {
+    pushLog(
+      combat,
+      `The projectile grazed ${grazeCount} enemies for ${grazeDamage} contact damage.`,
+      CombatLogTone.Good,
+      'projectileGraze',
+      { count: grazeCount, damage: grazeDamage },
+    );
+  }
 }
 
 function skillChargeRounds(run: RunState, instance: CardInstance): number {
   const item = Object.values(ITEMS).find((entry) => entry.skillCardId === instance.definitionId);
   return Math.max(1, (item?.chargeRounds ?? 3) - (instance.upgraded ? 1 : 0));
+}
+
+interface D6ExchangeResult {
+  count: number;
+  fromDraw: number;
+  fromDiscard: number;
+}
+
+function combatPile(combat: CombatState, kind: CardPileKind): string[] {
+  return kind === CardPileKind.Draw ? combat.drawPile : combat.discardPile;
+}
+
+function exchangeD6HandItems(run: RunState, combat: CombatState, sourceInstanceId: string): D6ExchangeResult {
+  const handItemIds = combat.hand.filter(
+    (id) => id !== sourceInstanceId && getCardDefinition(run, id)?.type === CardType.Item,
+  );
+  const availableSlots = [
+    ...combat.drawPile.map((instanceId, index) => ({ kind: CardPileKind.Draw, index, instanceId })),
+    ...combat.discardPile.map((instanceId, index) => ({ kind: CardPileKind.Discard, index, instanceId })),
+  ];
+  const result: D6ExchangeResult = { count: 0, fromDraw: 0, fromDiscard: 0 };
+
+  for (const outgoingId of handItemIds) {
+    if (!availableSlots.length) break;
+    const outgoing = getCardDefinition(run, outgoingId);
+    const differentSlots = availableSlots.filter(
+      (slot) => getCardDefinition(run, slot.instanceId)?.id !== outgoing?.id,
+    );
+    const candidates = differentSlots.length ? differentSlots : availableSlots;
+    const selected = pickOne(run, candidates);
+    const selectedIndex = availableSlots.indexOf(selected);
+    availableSlots.splice(selectedIndex, 1);
+
+    const pile = combatPile(combat, selected.kind);
+    const incomingId = pile[selected.index];
+    const handIndex = combat.hand.indexOf(outgoingId);
+    if (!incomingId || handIndex < 0) continue;
+    combat.hand[handIndex] = incomingId;
+    pile[selected.index] = outgoingId;
+    result.count += 1;
+    if (selected.kind === CardPileKind.Draw) result.fromDraw += 1;
+    else result.fromDiscard += 1;
+  }
+  return result;
+}
+
+function d6ExchangeAvailability(
+  run: RunState,
+  combat: CombatState,
+  sourceInstanceId: string,
+): { handItems: number; pileCards: number } {
+  return {
+    handItems: combat.hand.filter(
+      (id) => id !== sourceInstanceId && getCardDefinition(run, id)?.type === CardType.Item,
+    ).length,
+    pileCards: combat.drawPile.length + combat.discardPile.length,
+  };
 }
 
 function effectScale(combat: CombatState, opcode: CardEffectOpcode): number {
@@ -1525,7 +1875,8 @@ function rerollHandCards(
   const pool = Object.values(CARDS).filter(
     (card) =>
       ![CardType.Skill, CardType.Curse, CardType.Blank].includes(card.type) &&
-      (card.type !== CardType.Item || Boolean(card.itemId && run.unlocks.includes(card.itemId))),
+      (card.type !== CardType.Item ||
+        Boolean(card.itemId && run.unlocks.includes(card.itemId) && itemUsesCombatCard(ITEMS[card.itemId]!))),
   );
   for (const candidate of candidates) {
     const replacements = pool.filter((card) => card.id !== candidate.definitionId);
@@ -1535,23 +1886,25 @@ function rerollHandCards(
   return candidates.length;
 }
 
-function cycleCards(run: RunState, combat: CombatState, sourceInstanceId: string, amount: number): number {
+function queueCycleSelection(
+  run: RunState,
+  combat: CombatState,
+  sourceInstanceId: string,
+  amount: number,
+): number {
   const candidates = combat.hand
-    .filter((id) => id !== sourceInstanceId && getCardDefinition(run, id)?.type !== CardType.Skill)
-    .sort((left, right) => {
-      const leftType = getCardDefinition(run, left)?.type;
-      const rightType = getCardDefinition(run, right)?.type;
-      const priority = (type: CardType | undefined) =>
-        type === CardType.Blank ? 0 : type === CardType.Curse ? 1 : 2;
-      return priority(leftType) - priority(rightType);
-    })
-    .slice(0, Math.max(0, amount));
-  for (const id of candidates) {
-    combat.hand = combat.hand.filter((entry) => entry !== id);
-    combat.discardPile.push(id);
-  }
-  drawToHand(run, combat, combat.hand.length + candidates.length);
-  return candidates.length;
+    .filter((id) => id !== sourceInstanceId)
+    .filter((id) => Boolean(getCard(run, id)));
+  const selectable = Math.min(Math.max(0, Math.round(amount)), candidates.length);
+  if (selectable <= 0) return 0;
+  combat.pendingSelection = {
+    kind: CombatSelectionKind.Cycle,
+    sourceInstanceId,
+    candidateInstanceIds: candidates,
+    min: 0,
+    max: selectable,
+  };
+  return selectable;
 }
 
 function applyStatusToEnemy(
@@ -1581,12 +1934,25 @@ function applyCardEffects(
   effects: readonly CardEffect[],
   sourceInstanceId: string,
   targetId?: string,
+  allowShieldOverflow = false,
+  cycleSelectionLimit?: number,
 ): void {
+  const sourceType = getCardDefinition(run, sourceInstanceId)?.type;
+  const sourceUpgraded = getCard(run, sourceInstanceId)?.upgraded === true;
+  const cardUpgradeScale = sourceUpgraded ? CARD_UPGRADE_EFFECT_MULTIPLIER : 1;
+  const itemShieldOverflow =
+    allowShieldOverflow || sourceType === CardType.Item || sourceType === CardType.Skill;
   for (let effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
     const effect = effects[effectIndex]!;
     const scale = effectScale(combat, effect.opcode);
-    const amount = (effect.amount ?? 0) * scale;
-    const turns = Math.max(0, Math.round((effect.turns ?? 0) * scale));
+    const baseAmount = (effect.amount ?? 0) * scale;
+    const amountUpgradeScale =
+      sourceUpgraded && baseAmount > 0 && effect.opcode !== CardEffectOpcode.AddBlank ? cardUpgradeScale : 1;
+    const amount = baseAmount * amountUpgradeScale;
+    const turns = Math.max(
+      0,
+      Math.round((effect.turns ?? 0) * scale + (sourceUpgraded && effect.turns ? 1 : 0)),
+    );
     const target = selectedTarget(combat, targetId);
     switch (effect.opcode) {
       case CardEffectOpcode.GainDamage:
@@ -1594,7 +1960,10 @@ function applyCardEffects(
         combat.playerDamageBuff += amount;
         break;
       case CardEffectOpcode.MultiplyDamage:
-        combat.playerDamageMultiplier *= Math.pow(effect.amount ?? 1, scale);
+        combat.playerDamageMultiplier *= Math.pow(
+          1 + ((effect.amount ?? 1) - 1) * ((effect.amount ?? 1) >= 1 ? cardUpgradeScale : 1),
+          scale,
+        );
         break;
       case CardEffectOpcode.GainFireRate:
         if (combat.statFloorLocked && amount < 0) break;
@@ -1604,14 +1973,18 @@ function applyCardEffects(
         if (combat.statFloorLocked && amount < 0) break;
         combat.playerArmorBuff += amount;
         break;
-      case CardEffectOpcode.GainShield:
-        combat.playerShield += amount;
+      case CardEffectOpcode.GainShield: {
+        const gained = gainPlayerShield(run, combat, amount, itemShieldOverflow);
         pushAnimation(combat, {
           kind: CombatAnimationKind.Shield,
           sourceId: 'isaac',
           targetId: 'isaac',
-          value: amount,
+          value: gained,
         });
+        break;
+      }
+      case CardEffectOpcode.GainShieldCapacity:
+        combat.playerShieldCapacityBuff = Math.max(0, combat.playerShieldCapacityBuff + amount);
         break;
       case CardEffectOpcode.Heal: {
         const healed = healRed(run.player, amount);
@@ -1647,15 +2020,23 @@ function applyCardEffects(
         if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
         break;
       case CardEffectOpcode.Draw:
-        if (queueDrawSelection(run, combat, sourceInstanceId, amount) > 0) {
+        if (queueDrawSelection(run, combat, sourceInstanceId, Math.ceil(amount)) > 0) {
+          combat.pendingSelection!.remainingEffects = effects.slice(effectIndex + 1);
+          combat.pendingSelection!.targetId = targetId;
+          return;
+        }
+        cycleSelectionLimit = 0;
+        break;
+      case CardEffectOpcode.Cycle: {
+        const selectableAmount =
+          cycleSelectionLimit === undefined ? amount : Math.min(amount, cycleSelectionLimit);
+        if (queueCycleSelection(run, combat, sourceInstanceId, selectableAmount) > 0) {
           combat.pendingSelection!.remainingEffects = effects.slice(effectIndex + 1);
           combat.pendingSelection!.targetId = targetId;
           return;
         }
         break;
-      case CardEffectOpcode.Cycle:
-        cycleCards(run, combat, sourceInstanceId, Math.max(1, Math.round(amount)));
-        break;
+      }
       case CardEffectOpcode.DamageTarget:
         if (target) animateEnemyDamage(combat, target, amount);
         break;
@@ -1759,6 +2140,7 @@ function removeOwnedItem(run: RunState, item: ItemDefinition): void {
   );
   run.player.deck = run.player.deck.filter((instance) => !removed.has(instance.instanceId));
   if (!run.combat) return;
+  run.combat.familiars = run.combat.familiars.filter((familiar) => familiar.itemId !== item.id);
   run.combat.hand = run.combat.hand.filter((id) => !removed.has(id));
   run.combat.drawPile = run.combat.drawPile.filter((id) => !removed.has(id));
   run.combat.discardPile = run.combat.discardPile.filter((id) => !removed.has(id));
@@ -1795,7 +2177,7 @@ function executeItemActionMethod(
   const sourceInstanceId = context.sourceInstanceId ?? `action:${item.id}:${action.id}`;
   switch (action.method) {
     case ItemActionMethod.ApplyEffects:
-      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId);
+      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId, true);
       break;
     case ItemActionMethod.DuplicateRandomHandCard: {
       const candidates = combat.hand.filter((id) => id !== context.sourceInstanceId);
@@ -1814,20 +2196,32 @@ function executeItemActionMethod(
       }
       break;
     case ItemActionMethod.Revive:
-      if (run.player.redHp > 0) break;
-      run.player.redHp = Math.min(
-        maxRedHp(run.player),
-        Math.max(1, action.amount ?? run.player.stats.heartSize),
-      );
-      combat.playerShield += Math.max(0, action.secondaryAmount ?? 0);
+      if (isPlayerAlive(run.player)) break;
+      if (maxRedHp(run.player) > 0)
+        run.player.redHp = Math.min(
+          maxRedHp(run.player),
+          Math.max(1, action.amount ?? run.player.stats.heartSize),
+        );
+      else addPocketHeart(run, HeartKind.Soul);
+      gainPlayerShield(run, combat, action.secondaryAmount ?? 0, true);
       break;
     case ItemActionMethod.ReplayPreviousCard: {
       const previous = combat.previousCardDefinitionId ? CARDS[combat.previousCardDefinitionId] : undefined;
       if (!previous || previous.type === CardType.Skill || previous.itemId === item.id) break;
-      if (previous.effects?.length)
-        applyCardEffects(run, combat, previous.effects, sourceInstanceId, context.targetId);
-      if (previous.type === CardType.Shield) combat.playerShield += previous.value ?? 5;
-      if (previous.type === CardType.Recovery) healRed(run.player, previous.value ?? 10);
+      const replayScale = Math.max(0, action.amount ?? 1);
+      const replayEffects = previous.effects?.map((effect) => ({
+        ...effect,
+        amount: effect.amount === undefined ? undefined : Math.round(effect.amount * replayScale * 100) / 100,
+        turns: effect.turns === undefined ? undefined : Math.max(1, Math.round(effect.turns * replayScale)),
+      }));
+      if (replayEffects?.length)
+        applyCardEffects(run, combat, replayEffects, sourceInstanceId, context.targetId, true);
+      if (previous.type === CardType.Shield)
+        gainPlayerShield(run, combat, Math.max(1, Math.round((previous.value ?? 5) * replayScale)), true);
+      if (previous.type === CardType.Recovery)
+        healRed(run.player, Math.max(1, Math.round((previous.value ?? 10) * replayScale)));
+      if (previous.type === CardType.Vitality)
+        combat.vitality += Math.max(1, Math.round((previous.value ?? 2) * replayScale));
       break;
     }
     case ItemActionMethod.ExecuteWeakestEnemy: {
@@ -1853,7 +2247,11 @@ function executeItemActionMethod(
     }
     case ItemActionMethod.RerollItemCards: {
       const pool = Object.values(CARDS).filter(
-        (card) => card.type === CardType.Item && card.itemId && run.unlocks.includes(card.itemId),
+        (card) =>
+          card.type === CardType.Item &&
+          card.itemId &&
+          run.unlocks.includes(card.itemId) &&
+          itemUsesCombatCard(ITEMS[card.itemId]!),
       );
       rerollItemCardsBy(run, combat, (original) => {
         const candidates = pool.filter((card) => card.itemId !== original.id);
@@ -1864,8 +2262,7 @@ function executeItemActionMethod(
     case ItemActionMethod.SpindownItemCards:
       rerollItemCardsBy(run, combat, (original) => {
         const replacement = Object.values(ITEMS).find(
-          (candidate) =>
-            candidate.isaacId === (original.isaacId ?? 0) - 1 && candidate.kind === ItemKind.Passive,
+          (candidate) => candidate.isaacId === (original.isaacId ?? 0) - 1 && itemUsesCombatCard(candidate),
         );
         return replacement ? CARDS[`item:${replacement.id}`] : undefined;
       });
@@ -1904,6 +2301,7 @@ function executeItemActionMethod(
           card.type === CardType.Item &&
           card.itemId &&
           run.unlocks.includes(card.itemId) &&
+          itemUsesCombatCard(ITEMS[card.itemId]!) &&
           card.itemId !== item.id,
       );
       if (!pool.length) break;
@@ -1921,7 +2319,7 @@ function executeItemActionMethod(
       break;
     case ItemActionMethod.SacrificeHeart:
       loseDirectHeartHp(run, combat, action.amount ?? run.player.stats.heartSize, item.name);
-      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId);
+      applyCardEffects(run, combat, action.effects ?? [], sourceInstanceId, context.targetId, true);
       break;
     case ItemActionMethod.ConvertShieldToHealth: {
       const shieldCost = Math.max(1, action.amount ?? 10);
@@ -1972,6 +2370,8 @@ function executeItemActionMethod(
             },
           ],
           sourceInstanceId,
+          context.targetId,
+          true,
         );
       break;
     }
@@ -2009,7 +2409,7 @@ function executeItemActionMethod(
       );
       if (!candidates.length) break;
       const selected = pickOne(run, candidates);
-      applyCardEffects(run, combat, selected.cardEffects!, sourceInstanceId, context.targetId);
+      applyCardEffects(run, combat, selected.cardEffects!, sourceInstanceId, context.targetId, true);
       break;
     }
     case ItemActionMethod.RevealMap:
@@ -2021,7 +2421,7 @@ function executeItemActionMethod(
     action.method !== ItemActionMethod.ApplyEffects &&
     action.method !== ItemActionMethod.SacrificeHeart
   ) {
-    applyCardEffects(run, combat, action.effects, sourceInstanceId, context.targetId);
+    applyCardEffects(run, combat, action.effects, sourceInstanceId, context.targetId, true);
   }
 }
 
@@ -2106,27 +2506,26 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance, t
   }
   switch (instance.definitionId) {
     case 'skill-d6': {
-      const rerolled = combat.hand
-        .filter((id) => id !== instance.instanceId)
-        .map((id) => getCard(run, id))
-        .filter((card): card is CardInstance =>
-          Boolean(card && getCardDefinition(run, card.instanceId)?.type === CardType.Item),
-        );
-      const pool = Object.values(CARDS).filter(
-        (card) => card.type === CardType.Item && Boolean(card.itemId && run.unlocks.includes(card.itemId)),
-      );
-      for (const rerolledCard of rerolled) {
-        const candidates = pool.filter((card) => card.id !== rerolledCard.definitionId);
-        if (!candidates.length) continue;
-        rerolledCard.definitionId = weightedPick(
-          run,
-          candidates.map((card) => ({ value: card, weight: cardRewardWeight(card, RewardPool.Dice) })),
-        ).id;
-        rerolledCard.upgraded = false;
-      }
-      pushLog(combat, `The D6 rerolled ${rerolled.length} cards.`, CombatLogTone.Special, 'reroll', {
-        count: rerolled.length,
+      const exchanged = exchangeD6HandItems(run, combat, instance.instanceId);
+      pushAnimation(combat, {
+        kind: CombatAnimationKind.CardExchange,
+        sourceId: 'isaac',
+        cardId: instance.definitionId,
+        value: exchanged.count,
+        secondaryValue: exchanged.fromDraw,
+        rawValue: exchanged.fromDiscard,
       });
+      pushLog(
+        combat,
+        `The D6 exchanged ${exchanged.count} Item cards: ${exchanged.fromDraw} from draw, ${exchanged.fromDiscard} from discard.`,
+        CombatLogTone.Special,
+        'd6Exchange',
+        {
+          count: exchanged.count,
+          draw: exchanged.fromDraw,
+          discard: exchanged.fromDiscard,
+        },
+      );
       break;
     }
     case 'skill-yum-heart': {
@@ -2154,14 +2553,19 @@ function playSkill(run: RunState, combat: CombatState, instance: CardInstance, t
       pushLog(combat, `Book of Belial granted +${activeScale} room damage.`, CombatLogTone.Special, 'belial');
       break;
     case 'skill-shadows':
-      combat.playerShield += 12 * activeScale;
-      pushAnimation(combat, {
-        kind: CombatAnimationKind.Shield,
-        sourceId: 'isaac',
-        targetId: 'isaac',
-        value: 12 * activeScale,
-      });
-      pushLog(combat, `Book of Shadows granted ${12 * activeScale} shield.`, CombatLogTone.Good, 'shadows');
+      {
+        const gained = gainPlayerShield(run, combat, 12 * activeScale, true);
+        pushAnimation(combat, {
+          kind: CombatAnimationKind.Shield,
+          sourceId: 'isaac',
+          targetId: 'isaac',
+          value: gained,
+        });
+        pushLog(combat, `Book of Shadows granted ${gained} shield.`, CombatLogTone.Good, 'shield', {
+          sourceCardId: instance.definitionId,
+          amount: gained,
+        });
+      }
       break;
     case 'skill-tammy': {
       const damage =
@@ -2255,26 +2659,32 @@ function playPassiveItemCard(
   let shieldGained = 0;
   let healed = 0;
   let cardsToChoose = 0;
-  const scale = combat.damoclesActive && !combat.damoclesFallen && item.id !== 'damocles' ? 2 : 1;
+  const itemUpgradeScale = getCard(run, instanceId)?.upgraded ? CARD_UPGRADE_EFFECT_MULTIPLIER : 1;
+  const damoclesScale = combat.damoclesActive && !combat.damoclesFallen && item.id !== 'damocles' ? 2 : 1;
+  const scaledAmount = (amount: number): number =>
+    amount * damoclesScale * (amount > 0 ? itemUpgradeScale : 1);
   for (const effect of item.effects ?? []) {
-    if (effect.stat === 'baseDamage') combat.playerDamageBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'armor') combat.playerArmorBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'fireRate') combat.playerFireRateBuff += (effect.amount ?? 0) * scale;
+    if (effect.stat === 'baseDamage') combat.playerDamageBuff += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'armor') combat.playerArmorBuff += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'fireRate') combat.playerFireRateBuff += scaledAmount(effect.amount ?? 0);
     if (effect.stat === 'damageMultiplier')
-      combat.playerDamageMultiplier *= Math.pow(effect.multiplier ?? 1, scale);
-    if (effect.stat === 'critChance') combat.playerCritChanceBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'attackRange') combat.playerRangeBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'movementSpeed') combat.playerMovementBuff += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'drawCount') cardsToChoose += (effect.amount ?? 1) * scale;
-    if (effect.stat === 'baseShield') shieldGained += (effect.amount ?? 0) * scale;
-    if (effect.stat === 'shopDiscount') run.player.coins += 2 * scale;
+      combat.playerDamageMultiplier *= Math.pow(
+        effect.multiplier ?? 1,
+        damoclesScale * ((effect.multiplier ?? 1) >= 1 ? itemUpgradeScale : 1),
+      );
+    if (effect.stat === 'critChance') combat.playerCritChanceBuff += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'attackRange') combat.playerRangeBuff += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'movementSpeed') combat.playerMovementBuff += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'drawCount') cardsToChoose += Math.ceil(scaledAmount(effect.amount ?? 1));
+    if (effect.stat === 'baseShield') shieldGained += scaledAmount(effect.amount ?? 0);
+    if (effect.stat === 'shopDiscount') run.player.coins += Math.round(scaledAmount(2));
     if (effect.attackMode) combat.attackModeOverride = effect.attackMode;
-    if (effect.redContainers) healed += healRed(run.player, 15 * scale);
-    if (effect.soulHearts) shieldGained += effect.soulHearts * 10 * scale;
+    if (effect.redContainers) healed += healRed(run.player, Math.round(scaledAmount(15)));
+    if (effect.soulHearts) shieldGained += scaledAmount(effect.soulHearts * 10);
     if (effect.damageCap !== undefined)
       combat.damageCap = Math.min(combat.damageCap ?? Number.POSITIVE_INFINITY, effect.damageCap);
   }
-  if (card.effects?.length) applyCardEffects(run, combat, card.effects, instanceId, targetId);
+  if (card.effects?.length) applyCardEffects(run, combat, card.effects, instanceId, targetId, true);
   if (item.actions?.length) {
     runItemActions(run, ItemActionTrigger.Activate, {
       sourceItem: item,
@@ -2284,12 +2694,12 @@ function playPassiveItemCard(
   }
   if (cardsToChoose > 0) queueDrawSelection(run, combat, instanceId, cardsToChoose);
   if (shieldGained > 0) {
-    combat.playerShield += shieldGained;
+    const gained = gainPlayerShield(run, combat, Math.round(shieldGained), true);
     pushAnimation(combat, {
       kind: CombatAnimationKind.Shield,
       sourceId: 'isaac',
       targetId: 'isaac',
-      value: shieldGained,
+      value: gained,
     });
   }
   if (healed > 0)
@@ -2372,10 +2782,21 @@ export function canPlayCard(
     (run.combat.playerStatuses[StatusKind.ItemLock] ?? 0) > 0
   )
     return { ok: false, reason: 'Item Lock disables item cards' };
+  if (card.type === CardType.Shield && run.combat.playerShield >= getPlayerShieldCapacity(run))
+    return { ok: false, reason: 'Shield is already at maximum' };
+  if (card.type === CardType.Recovery && run.player.redHp >= maxRedHp(run.player))
+    return { ok: false, reason: 'Red-heart HP is already full' };
   if (run.combat.unlimitedVitalityTurns <= 0 && run.combat.vitality < card.cost)
     return { ok: false, reason: 'Not enough vitality' };
   if (card.type === CardType.Skill && (run.combat.cooldowns[instanceId] ?? 0) > 0)
     return { ok: false, reason: 'Active item is recharging' };
+  if (card.id === 'skill-d6') {
+    const availability = d6ExchangeAvailability(run, run.combat, instanceId);
+    if (availability.handItems <= 0)
+      return { ok: false, reason: 'The D6 has no Item card in hand to exchange' };
+    if (availability.pileCards <= 0)
+      return { ok: false, reason: 'The D6 has no draw or discard pile card to exchange' };
+  }
   if (card.itemId) {
     const item = ITEMS[card.itemId];
     if (item?.timing === ItemUseTiming.CombatOnce && run.combat.usedPassiveItems.includes(item.id)) {
@@ -2509,6 +2930,13 @@ export function confirmPlayerDeployment(state: RunState): RunState {
     sourceId: 'isaac',
     value: run.combat.round,
   });
+  run.combat.familiars.forEach((familiar) => {
+    pushAnimation(run.combat!, {
+      kind: CombatAnimationKind.FamiliarSpawn,
+      sourceId: familiar.instanceId,
+      targetId: familiar.instanceId,
+    });
+  });
   pushLog(
     run.combat,
     `Isaac deployed at (${run.combat.playerPosition.x}, ${run.combat.playerPosition.y}).`,
@@ -2519,6 +2947,8 @@ export function confirmPlayerDeployment(state: RunState): RunState {
       y: run.combat.playerPosition.y,
     },
   );
+  runFamiliarAttacks(run);
+  if (allEnemiesDefeated(run.combat)) finishCombat(run);
   return touch(run);
 }
 
@@ -2701,20 +3131,20 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
 
   if (card.type === CardType.Shield) {
     const amount = (card.value ?? 5) + (instance.upgraded ? 3 : 0);
-    combat.playerShield += amount;
+    const gained = gainPlayerShield(run, combat, amount);
     pushAnimation(combat, {
       kind: CombatAnimationKind.Shield,
       sourceId: 'isaac',
       targetId: 'isaac',
-      value: amount,
+      value: gained,
     });
-    pushLog(combat, `${card.name} granted ${amount} shield.`, CombatLogTone.Good, 'shield', {
+    pushLog(combat, `${card.name} granted ${gained} shield.`, CombatLogTone.Good, 'shield', {
       sourceCardId: card.id,
-      amount,
+      amount: gained,
     });
   }
   if (card.type === CardType.Recovery) {
-    const amount = (card.value ?? 10) + (instance.upgraded ? 5 : 0);
+    const amount = (card.value ?? TREATMENT_BASE_HEAL) + (instance.upgraded ? TREATMENT_UPGRADE_HEAL : 0);
     const healed = healRed(run.player, amount);
     pushAnimation(combat, {
       kind: CombatAnimationKind.Heal,
@@ -2725,6 +3155,14 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     pushLog(combat, `${card.name} recovered ${healed} HP.`, CombatLogTone.Good, 'heal', {
       sourceCardId: card.id,
       amount: healed,
+    });
+  }
+  if (card.type === CardType.Vitality) {
+    const amount = (card.value ?? 2) + (instance.upgraded ? 1 : 0);
+    combat.vitality += amount;
+    pushLog(combat, `${card.name} granted ${amount} vitality this turn.`, CombatLogTone.Good, 'vitality', {
+      sourceCardId: card.id,
+      amount,
     });
   }
   if (card.type === CardType.Hex) {
@@ -2745,13 +3183,14 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
     if (card.effects?.length) applyCardEffects(run, combat, card.effects, instanceId, targetId);
   }
   if (card.type === CardType.Tarot) {
-    if (card.id === 'the-empress') combat.playerDamageBuff += card.value ?? 3;
+    const tarotUpgradeScale = instance.upgraded ? CARD_UPGRADE_EFFECT_MULTIPLIER : 1;
+    if (card.id === 'the-empress') combat.playerDamageBuff += (card.value ?? 3) * tarotUpgradeScale;
     if (card.id === 'death' || card.id === 'the-sun') {
       combat.enemies
         .filter((enemy) => enemy.hp > 0)
         .forEach((enemy) => {
           const wasAlive = enemy.hp > 0;
-          const dealt = hurtEnemy(enemy, card.value ?? 25, 99);
+          const dealt = hurtEnemy(enemy, (card.value ?? 25) * tarotUpgradeScale, 99);
           pushAnimation(combat, {
             kind: CombatAnimationKind.PlayerAttack,
             sourceId: 'isaac',
@@ -2767,7 +3206,7 @@ export function playCard(state: RunState, instanceId: string, targetId?: string)
             });
         });
       if (card.id === 'the-sun') {
-        const healed = healRed(run.player, 10);
+        const healed = healRed(run.player, Math.round(TREATMENT_BASE_HEAL * tarotUpgradeScale));
         pushAnimation(combat, {
           kind: CombatAnimationKind.Heal,
           sourceId: 'isaac',
@@ -2838,6 +3277,40 @@ export function resolveCombatSelection(state: RunState, selectedInstanceIds: rea
       { count: selected.length },
     );
     if (remainingEffects.length) {
+      applyCardEffects(
+        run,
+        combat,
+        remainingEffects,
+        pending.sourceInstanceId,
+        continuationTargetId,
+        false,
+        selected.length,
+      );
+    }
+    notifyNewEnemyDeaths(run);
+    if (allEnemiesDefeated(combat) && !combat.pendingSelection) finishCombat(run);
+    return touch(run);
+  }
+
+  if (pending.kind === CombatSelectionKind.Cycle) {
+    const targetHandSize = combat.hand.length;
+    for (const selectedId of selected) {
+      if (!combat.hand.includes(selectedId)) throw new Error('A selected cycle card is no longer in hand');
+      combat.hand = combat.hand.filter((id) => id !== selectedId);
+      combat.discardPile.push(selectedId);
+    }
+    drawToHand(run, combat, targetHandSize);
+    const remainingEffects = pending.remainingEffects ?? [];
+    const continuationTargetId = pending.targetId;
+    combat.pendingSelection = undefined;
+    pushLog(
+      combat,
+      `Cycled ${selected.length} selected hand card${selected.length === 1 ? '' : 's'}.`,
+      CombatLogTone.Special,
+      'chosenCycle',
+      { count: selected.length },
+    );
+    if (remainingEffects.length) {
       applyCardEffects(run, combat, remainingEffects, pending.sourceInstanceId, continuationTargetId);
     }
     notifyNewEnemyDeaths(run);
@@ -2861,6 +3334,7 @@ export function resolveCombatSelection(state: RunState, selectedInstanceIds: rea
     (card) =>
       card.type === CardType.Item &&
       Boolean(card.itemId && run.unlocks.includes(card.itemId)) &&
+      itemUsesCombatCard(ITEMS[card.itemId!]!) &&
       ITEMS[card.itemId!]?.timing !== ItemUseTiming.CombatOnce,
   );
   for (const selectedId of selected) {
@@ -2889,11 +3363,9 @@ export function resolveCombatSelection(state: RunState, selectedInstanceIds: rea
 }
 
 export function cancelCombatSelection(state: RunState): RunState {
-  const run = clone(state);
-  if (!run.combat?.pendingSelection) return run;
-  if (run.combat.pendingSelection.min > 0) throw new Error('This selection requires a card');
-  run.combat.pendingSelection = undefined;
-  return touch(run);
+  if (!state.combat?.pendingSelection) return clone(state);
+  if (state.combat.pendingSelection.min > 0) throw new Error('This selection requires a card');
+  return resolveCombatSelection(state, []);
 }
 
 export function endTurn(state: RunState): RunState {
@@ -2972,6 +3444,7 @@ function loseDirectHeartHp(run: RunState, combat: CombatState, amount: number, r
   run.floorRedDamage += redDamage;
   const dealt = initial - remaining;
   combat.damageTakenThisFloor += dealt;
+  const health = getPlayerHealth(run.player);
   pushAnimation(combat, {
     kind: CombatAnimationKind.EnemyAttack,
     sourceId: reason,
@@ -2984,7 +3457,11 @@ function loseDirectHeartHp(run: RunState, combat: CombatState, amount: number, r
   pushLog(combat, `${reason} removed ${dealt} HP directly.`, CombatLogTone.Danger, 'directHeartDamage', {
     reason,
     damage: dealt,
+    remainingHp: health.current,
+    maximumHp: health.maximum,
   });
+  if (dealt > 0) runItemActions(run, ItemActionTrigger.PlayerDamaged, { amount: dealt });
+  if (!isPlayerAlive(run.player)) runItemActions(run, ItemActionTrigger.FatalDamage, { amount: dealt });
   return dealt;
 }
 
@@ -3114,6 +3591,7 @@ function hurtPlayer(
   run.floorRedDamage += redDamage;
   combat.damageTakenThisFloor += Math.max(0, initial - shielded);
   const heartDamage = Math.max(0, initial - shielded);
+  const health = getPlayerHealth(run.player);
   if (source) {
     pushAnimation(combat, {
       kind: CombatAnimationKind.EnemyAttack,
@@ -3137,6 +3615,8 @@ function hurtPlayer(
         enemy: source.name,
         damage: heartDamage,
         shield: shielded,
+        remainingHp: health.current,
+        maximumHp: health.maximum,
       },
     );
   } else {
@@ -3148,11 +3628,13 @@ function hurtPlayer(
       {
         damage: heartDamage,
         shield: shielded,
+        remainingHp: health.current,
+        maximumHp: health.maximum,
       },
     );
   }
   if (heartDamage > 0) runItemActions(run, ItemActionTrigger.PlayerDamaged, { amount: heartDamage });
-  if (run.player.redHp <= 0) runItemActions(run, ItemActionTrigger.FatalDamage, { amount: heartDamage });
+  if (!isPlayerAlive(run.player)) runItemActions(run, ItemActionTrigger.FatalDamage, { amount: heartDamage });
   return heartDamage;
 }
 
@@ -3639,7 +4121,7 @@ function resolveEnemyTurn(run: RunState): void {
       }
       let attacked = false;
       for (const enemyAction of enemyActions) {
-        if (run.player.redHp <= 0) break;
+        if (!isPlayerAlive(run.player)) break;
         resolveEnemyAction(run, combat, enemy, enemyAction);
         attacked ||= enemyAction.kind === IntentKind.Attack;
       }
@@ -3650,7 +4132,7 @@ function resolveEnemyTurn(run: RunState): void {
       if (status === StatusKind.Poison) continue;
       if ((enemy.statuses[status] ?? 0) > 0) enemy.statuses[status] = (enemy.statuses[status] ?? 0) - 1;
     }
-    if (run.player.redHp <= 0) break;
+    if (!isPlayerAlive(run.player)) break;
   }
 
   notifyNewEnemyDeaths(run);
@@ -3688,7 +4170,7 @@ function resolveEnemyTurn(run: RunState): void {
       combat.playerStatuses[status] = (combat.playerStatuses[status] ?? 0) - 1;
     }
   }
-  if (run.player.redHp <= 0) {
+  if (!isPlayerAlive(run.player)) {
     run.phase = RunPhase.Defeat;
     run.victory = false;
     run.combat = combat;
@@ -3715,6 +4197,11 @@ function resolveEnemyTurn(run: RunState): void {
     combat.selectedEnemyId = undefined;
   }
   pushAnimation(combat, { kind: CombatAnimationKind.RoundStart, sourceId: 'isaac', value: combat.round });
+  runFamiliarAttacks(run);
+  if (allEnemiesDefeated(combat)) {
+    finishCombat(run);
+    return;
+  }
   pushLog(
     combat,
     `Round ${combat.round} — vitality restored to ${combat.vitality}.`,
@@ -3761,7 +4248,7 @@ function makeFloorUpgrade(run: RunState): void {
       type: RewardOptionType.Upgrade,
       upgrade: UpgradeKind.Heart,
       label: 'Heart Training',
-      description: '+5 HP per red container and fully heal.',
+      description: `+${HEART_SIZE_UPGRADE_AMOUNT} HP per heart and fully heal red hearts.`,
       icon: '♥',
     },
     {
@@ -3955,19 +4442,20 @@ function finishCombat(run: RunState): void {
 
 function applyUpgrade(run: RunState, upgrade: NonNullable<RewardOption['upgrade']>): void {
   switch (upgrade) {
+    case UpgradeKind.Card:
+      throw new Error('Choose a deck card for this upgrade');
     case UpgradeKind.Damage:
       run.player.stats.baseDamage += 2;
       break;
     case UpgradeKind.Heart:
-      run.player.stats.heartSize += 5;
-      run.player.pocketHearts.forEach((heart) => {
-        heart.maxHp += 5;
-        heart.hp += 5;
-      });
+      increaseHeartSize(run.player, HEART_SIZE_UPGRADE_AMOUNT);
       run.player.redHp = maxRedHp(run.player);
       break;
+    case UpgradeKind.Shield:
+      run.player.stats.maxShield += SHIELD_CAPACITY_UPGRADE_AMOUNT;
+      break;
     case UpgradeKind.Armor:
-      run.player.stats.armor += 1;
+      run.player.stats.armor += ARMOR_UPGRADE_AMOUNT;
       break;
     case UpgradeKind.Vitality:
       run.player.stats.maxVitality += 1;
@@ -4094,6 +4582,9 @@ export function chooseOption(state: RunState, optionId: string): RunState {
     makeFloorUpgrade(run);
     return touch(run);
   }
+  if (choice.kind === ChoiceKind.Shop && option.upgrade === UpgradeKind.Card) {
+    throw new Error('Choose a deck card for this upgrade');
+  }
 
   payPrice(run, option);
   if (choice.kind === ChoiceKind.Shop && (option.price ?? 0) > 0) {
@@ -4131,6 +4622,37 @@ export function chooseOption(state: RunState, optionId: string): RunState {
   } else {
     advanceAfterChoice(run, choice.next);
   }
+  return touch(run);
+}
+
+export function purchaseShopCardUpgrade(state: RunState, optionId: string, cardInstanceId: string): RunState {
+  const run = clone(state);
+  if (run.phase !== RunPhase.Choice || run.choice?.kind !== ChoiceKind.Shop) {
+    throw new Error('Card upgrades are only available in a shop');
+  }
+  const option = run.choice.options.find((entry) => entry.id === optionId);
+  if (
+    !option ||
+    option.sold ||
+    option.type !== RewardOptionType.Upgrade ||
+    option.upgrade !== UpgradeKind.Card
+  ) {
+    throw new Error('That card-upgrade slot is unavailable');
+  }
+  const card = run.player.deck.find((entry) => entry.instanceId === cardInstanceId);
+  if (!card) throw new Error('That card is not in the deck');
+  if (card.upgraded) throw new Error('That card is already upgraded');
+
+  payPrice(run, option);
+  if ((option.price ?? 0) > 0) {
+    recordAchievementEvent(run, {
+      type: AchievementEventType.CoinsSpent,
+      amount: option.price!,
+    });
+  }
+  card.upgraded = true;
+  option.sold = true;
+  run.lastReward = [CARDS[card.definitionId]?.name ?? option.label];
   return touch(run);
 }
 

@@ -45,12 +45,33 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ever
 
 ### Changed
 
+- All passive familiar collectibles now stay out of combat piles and deploy as non-blocking assistants around Isaac's eight directions. They automatically attack the nearest living enemy every player round, preserve trait-driven multishot/attack-form/status/explosion behavior, animate independently in Phaser, and migrate legacy familiar cards out of existing saves.
+- The D6 now exchanges every other Item card in hand with random physical cards from the existing draw and discard piles instead of silently rewriting card definitions in place; it preserves pile positions, reports each source count, blocks empty activations, and plays a dedicated exchange animation.
+- Key-locked Shops and Treasure Rooms can now be passed without entering when Isaac has no key, advancing to their outgoing route nodes without spending a key or granting room rewards and preventing mandatory-route softlocks.
+- Fusion projectile size is now a physical combat-grid diameter based on a 0.4-cell normal shot instead of a direct damage multiplier. Enlarged projectiles can graze non-primary enemies along their pre-impact flight path for 50% normal damage scaled by the actual projectile/enemy overlap-area ratio.
+- Draw and cycle effects can now be skipped or resolved below their offered maximum. Cycle choices are player-directed, may include active-item cards, and cannot exceed the number actually taken during a preceding draw choice.
+- Isaac's 15-card starter deck now contains one Treatment and one zero-cost Vitality Shot; the shot grants two vitality for the current turn and is permanently exhausted after use.
+- Interactive draw choices now list only the current draw pile, keep their action footer visible, and scroll the card grid after two rows.
+- Treatment again restores 10 red-heart HP, while its card upgrade adds exactly 3 HP.
+- Shops now contain four fixed upgrade services (targeted deck-card forging, heart capacity, shield capacity, and armor) plus three new item-card offers; leaving remains a separate free action. Heart-capacity, shield-capacity, and armor services cost 5¢ on the first floor and a fixed 15¢ on every later floor.
+- Hearts now contain 10 HP instead of 30, giving Isaac 30 starting red-heart HP; version-one saves preserve their heart fill ratio when migrated.
+- Nine classic health-up collectibles now resolve as one-time permanent treasure pickups outside combat, adding and filling one to three red-heart containers without entering the deck.
+- Red-heart containers are capped at 12, including multi-container pickups and migrated saves.
+- Stem Cells, Placenta, Old Bandage, Blood Bag, Bucket of Lard, and Marrow are now permanent out-of-combat pickups that add 3 HP to every heart and fill the newly added capacity without entering the deck.
+- Heart Training now follows the same +3 HP-per-heart increment instead of adding 5 HP.
+- Item cards can temporarily overflow shield capacity for the current room, while Wooden Cross and other regular shield cards remain capped and disabled at the current capacity.
+- Placebo now repeats the previous non-active card at 50% numeric power and requires four rounds to recharge.
+- Isaac's 15-card starter deck now contains three Wooden Cross cards and five item/skill cards, including Sad Onion as an immediately available fusion material.
+- Familiar and offensively tagged collectibles now receive meaningful fusion modifiers, and generated fusion materials describe their actual modifiers in the attack workbench.
+- The former Half Heart card is now Treatment; red-heart recovery is disabled at full health, and player shield has an extensible soft capacity of 15 by default.
+- The health HUD, damage logs, and defeat checks now share one red/soul/black-heart total; partially damaged pocket-heart icons render their actual fill, and characters remain alive while any pocket-heart HP remains.
+- New-run confirmations now keep their action buttons below the save summary instead of inheriting the home-page disclaimer positioning; confirmation panels scroll safely on short viewports.
 - Automatic cycle effects now protect active-item cards, while player-selected discards still send them to the reusable discard pile.
 - Tarot cards now use a dedicated crimson-and-ivory surface distinct from every item-quality color, and attack damage calculations resolve in 500 ms.
 - Active-item cards can now be discarded and reshuffled within combat without unequipping them; acquiring another active item still replaces the previous item and keeps the one-active-card deck limit.
 - Player-facing collectible copy is now concise and omits adaptation/debug terminology, reward-pool metadata, and internal strength labels; active-card charge text is carried by the charge UI instead of repeated descriptions.
 - Item cards now use quality-coded gray, green, blue, purple, and gold surfaces for qualities 0–4; ordinary cards use an ivory-white surface and Tarot cards use a dedicated crimson-and-ivory treatment.
-- Isaac's starting deck is now a strict 15-card build: four attacks, four shields, four item cards (including The D6), two recovery cards, and one Tarot card; Battery Pack, Starter Deck, and The Common Cold add early draw, cycling, and status choices.
+- Isaac's starting deck remains a strict 15-card build; Battery Pack, Starter Deck, and The Common Cold provide early draw, cycling, and status choices.
 - Combat bombs now deal 30 damage on the center cell, 20 on each cardinal neighbor, and 15 on each diagonal cell; multi-cell enemies accumulate the covered cell values.
 - Achievement completion is now shown inside the blocking room-reward reveal and then queued as a persistent, explicitly acknowledged notice; saved unacknowledged achievements reappear after resuming instead of expiring behind another overlay.
 - Resume selection now compares local and server snapshot timestamps instead of always preferring any stale local snapshot.

@@ -12,6 +12,8 @@ export interface MapNode {
   anchorId?: string;
   doorOpened?: boolean;
   visited: boolean;
+  /** The route advanced through this locked room without opening it. */
+  bypassed?: boolean;
   revealed: boolean;
 }
 

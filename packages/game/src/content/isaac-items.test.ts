@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { CARDS, ITEMS, itemUsesCombatCard, passiveCardId } from '../catalog.js';
-import { CardEffectOpcode, CardType, ItemKind, ItemUseTiming, RewardQuality } from '../domain/enums.js';
+import {
+  CardEffectOpcode,
+  CardType,
+  ItemKind,
+  ItemUseTiming,
+  RewardPool,
+  RewardQuality,
+} from '../domain/enums.js';
 import { createRun, usePocketItem } from '../engine.js';
+import { createFamiliarState, FAMILIAR_DIRECTION_ORDER, isFamiliarItem } from '../combat/familiars.js';
 import { equipItem } from '../player.js';
-import type { ItemDefinition } from '../domain/player.js';
+import { HEART_SIZE_UPGRADE_AMOUNT, type ItemDefinition } from '../domain/player.js';
 import { FULL_ISAAC_ITEMS, FULL_ISAAC_ITEM_MANIFEST } from './isaac-items.generated.js';
 
 function runtimeItemFor(source: (typeof FULL_ISAAC_ITEM_MANIFEST)[number]): ItemDefinition {
@@ -114,6 +122,76 @@ describe('full Isaac collectible content pack', () => {
       expect(item.timing, item.id).toBe(ItemUseTiming.ActiveCharge);
       expect(item.skillCardId, item.id).toBeTruthy();
       expect(CARDS[item.skillCardId!], item.id).toBeDefined();
+    }
+  });
+
+  it('offers fusion effects on at least half of combat item cards and makes familiars autonomous', () => {
+    const combatItems = Object.values(ITEMS).filter(itemUsesCombatCard);
+    const fusionItems = combatItems.filter((item) => item.fusion);
+    const familiarItems = Object.values(ITEMS).filter(isFamiliarItem);
+
+    expect(fusionItems.length / combatItems.length).toBeGreaterThanOrEqual(0.5);
+    expect(familiarItems.length).toBeGreaterThan(0);
+    expect(familiarItems.every((item) => !itemUsesCombatCard(item))).toBe(true);
+    expect(familiarItems.every((item) => item.timing === ItemUseTiming.Permanent)).toBe(true);
+    expect(familiarItems.every((item) => item.fusion === undefined)).toBe(true);
+
+    const run = createRun('FAMILIAR-DIRECTIONS');
+    familiarItems.slice(0, 9).forEach((item) => equipItem(run, item.id));
+    expect(
+      run.player.deck.some((card) =>
+        familiarItems.some((item) => card.definitionId === passiveCardId(item.id)),
+      ),
+    ).toBe(false);
+    expect(FAMILIAR_DIRECTION_ORDER).toHaveLength(8);
+    const assistants = familiarItems.slice(0, 9).map((item, index) => createFamiliarState(item, index, 6, 1));
+    expect(assistants.slice(0, 8).map((familiar) => familiar.direction)).toEqual(FAMILIAR_DIRECTION_ORDER);
+    expect(assistants[8]).toMatchObject({ direction: FAMILIAR_DIRECTION_ORDER[0], ring: 2 });
+  });
+
+  it('keeps classic health-up collectibles as permanent out-of-combat treasure choices', () => {
+    const healthUpIds = [
+      'breakfast',
+      'lunch',
+      'dinner',
+      'dessert',
+      'rotten-meat',
+      'midnight-snack',
+      'raw-liver',
+      'the-body',
+      'stigmata',
+    ];
+
+    for (const id of healthUpIds) {
+      const item = ITEMS[id]!;
+      expect(item.kind, id).toBe(ItemKind.Passive);
+      expect(item.combatCard, id).toBe(false);
+      expect(itemUsesCombatCard(item), id).toBe(false);
+      expect(item.pool, id).toContain(RewardPool.Treasure);
+      expect(
+        item.effects?.some((effect) => (effect.redContainers ?? 0) > 0),
+        id,
+      ).toBe(true);
+    }
+  });
+
+  it('provides permanent out-of-combat items that increase every heart by three HP', () => {
+    const heartCapacityIds = [
+      'stem-cells',
+      'placenta',
+      'old-bandage',
+      'blood-bag',
+      'bucket-of-lard',
+      'marrow',
+    ];
+
+    for (const id of heartCapacityIds) {
+      const item = ITEMS[id]!;
+      expect(item.kind, id).toBe(ItemKind.Passive);
+      expect(item.combatCard, id).toBe(false);
+      expect(itemUsesCombatCard(item), id).toBe(false);
+      expect(item.pool, id).toContain(RewardPool.Treasure);
+      expect(item.effects, id).toContainEqual({ heartSize: HEART_SIZE_UPGRADE_AMOUNT });
     }
   });
 

@@ -244,6 +244,10 @@ export function getMapNode(map: FloorMap, id: string): MapNode {
   return node;
 }
 
+export function roomRequiresKey(floorIndex: number, kind: RoomKind): boolean {
+  return floorIndex > 0 && (kind === RoomKind.Shop || kind === RoomKind.Treasure);
+}
+
 export function availableNodeIds(map: FloorMap): string[] {
   const current = getMapNode(map, map.currentNodeId);
   const main = current.connections;

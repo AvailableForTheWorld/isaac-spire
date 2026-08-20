@@ -4,6 +4,7 @@ import * as Phaser from 'phaser';
 import {
   CARDS,
   DEFAULT_COMBAT_ROOM_LAYOUT,
+  ITEMS,
   getPlayerDeploymentCells,
   getReachablePlayerCells,
   getEnemyOccupiedCells,
@@ -13,7 +14,7 @@ import {
   type EnemyState,
   type RunState,
 } from '@isaac-spire/game';
-import { cardName, enemyName, roomName } from '../localize';
+import { cardName, enemyName, itemName, roomName } from '../localize';
 import { BattleScene, BattleSceneEvent } from './BattleScene';
 
 function roomGridStyle(layout: CombatRoomLayout) {
@@ -100,11 +101,14 @@ export function PhaserStage({
       shieldBlocked: t('combat.shieldBlocked'),
       hpDamage: t('combat.hpDamage'),
       noHeartDamage: t('combat.noHeartDamage'),
+      grazeHit: t('combat.grazeHit'),
+      d6Exchange: t('combat.d6Exchange'),
       targetLock: t('combat.targetLock'),
       enemies: Object.fromEntries(
         (run.combat?.enemies ?? []).map((enemy) => [enemy.instanceId, enemyName(t, enemy)]),
       ),
       cards: Object.fromEntries(Object.values(CARDS).map((card) => [card.id, cardName(t, card.id)])),
+      items: Object.fromEntries(Object.values(ITEMS).map((item) => [item.id, itemName(t, item.id)])),
     });
     game.events.emit(BattleSceneEvent.RunSync);
   }, [highlightedEnemyId, i18n.resolvedLanguage, run, t]);

@@ -228,12 +228,22 @@
 }
 
 .combat-selection-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   width: min(66rem, 94vw);
-  max-height: 88vh;
+  max-height: min(48rem, 88vh);
 }
 
 .combat-selection-panel .pile-card-grid.selectable {
   grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  max-height: 24.25rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.combat-selection-panel > footer {
+  border-top: 1px solid var(--line);
+  background: #1d1917;
 }
 
 .combat-selection-panel .pile-card {
@@ -597,7 +607,7 @@ input:focus-visible {
 .boss-line b {
   color: #c2665f;
 }
-.home-page footer {
+.home-page > footer {
   position: absolute;
   z-index: 4;
   right: 2rem;
@@ -1134,6 +1144,14 @@ html[lang^='zh']
 .map-node.available:not(:disabled):hover {
   transform: translate(-50%, -50%) scale(1.12);
 }
+.map-node.bypassable::before {
+  border-color: rgba(208, 119, 109, 0.72);
+  border-style: dashed;
+  box-shadow: 0 0 0 5px rgba(208, 119, 109, 0.08);
+}
+.map-node.bypassable:hover::before {
+  border-color: #e59a8e;
+}
 .map-node.choosing {
   z-index: 8;
   animation: route-choice 0.42s ease both;
@@ -1169,6 +1187,10 @@ html[lang^='zh']
   content: '✓';
   color: #796a5e;
   font-size: 0.7rem;
+}
+.map-node.bypassed::after {
+  content: '↷';
+  color: #a6786f;
 }
 .map-node.entrance::before,
 .map-node.combat::before {
@@ -1332,12 +1354,18 @@ html[lang^='zh']
   filter: drop-shadow(0 0 6px #b33e3e55);
 }
 .heart-unit.soul b {
-  color: #a7dce9;
-  text-shadow: 0 0 12px #8cc9dc88;
+  color: transparent;
+  background: linear-gradient(90deg, #a7dce9 0 var(--heart-fill), #263b42 var(--heart-fill) 100%);
+  background-clip: text;
+  filter: drop-shadow(0 0 6px #8cc9dc88);
+  -webkit-background-clip: text;
 }
 .heart-unit.black b {
-  color: #66576d;
-  text-shadow: 0 0 10px #aa83bd77;
+  color: transparent;
+  background: linear-gradient(90deg, #76647f 0 var(--heart-fill), #2b252e var(--heart-fill) 100%);
+  background-clip: text;
+  filter: drop-shadow(0 0 6px #aa83bd77);
+  -webkit-background-clip: text;
 }
 .defense-unit {
   min-width: 3.1rem;
@@ -1355,6 +1383,11 @@ html[lang^='zh']
   opacity: 1;
   filter: drop-shadow(0 0 10px #68cada99);
   animation: shield-breathe 1.6s ease-in-out infinite;
+}
+.defense-unit.shield.over-cap b,
+.defense-unit.shield.over-cap small {
+  color: #f2c879;
+  filter: drop-shadow(0 0 10px #d7973a99);
 }
 .defense-unit.armor b {
   color: #dfbd78;
@@ -3214,7 +3247,10 @@ html[lang^='zh']
 .confirmation-panel {
   position: relative;
   width: min(34rem, 94vw);
-  overflow: hidden;
+  max-height: calc(100dvh - 2.4rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid rgba(221, 176, 123, 0.42);
   background: linear-gradient(145deg, #29201d, #171413 72%);
   box-shadow:
@@ -3378,6 +3414,7 @@ html[lang^='zh']
   width: 100%;
 }
 .confirmation-panel > footer {
+  position: static;
   display: flex;
   justify-content: flex-end;
   gap: 0.7rem;
@@ -3848,6 +3885,21 @@ html[lang^='zh']
 .choice-page.angel::before {
   background: radial-gradient(circle at 50% 32%, rgba(230, 213, 166, 0.17), transparent 45%);
 }
+.choice-page.shop {
+  justify-content: flex-start;
+  padding: 2rem 1rem 5rem;
+}
+.choice-page.shop .choice-copy h1 {
+  font-size: clamp(2.4rem, 4vw, 3.8rem);
+}
+.choice-page.shop .choice-grid {
+  width: min(100%, 60rem);
+  margin-top: 1.25rem;
+}
+.choice-page.shop .choice-card {
+  min-height: 11rem;
+  padding: 1.1rem 0.9rem;
+}
 .choice-aura {
   position: absolute;
   top: 4%;
@@ -4000,6 +4052,16 @@ html[lang^='zh']
 }
 .choice-card.action {
   min-height: 11rem;
+}
+
+.shop-card-upgrade-panel {
+  width: min(64rem, 96vw);
+}
+
+.shop-card-upgrade-grid > button > b::after {
+  margin-left: 0.25rem;
+  color: #d9b86f;
+  content: '+';
 }
 
 /* Card surfaces: collectible cards use Isaac quality, ordinary cards stay paper-white. */

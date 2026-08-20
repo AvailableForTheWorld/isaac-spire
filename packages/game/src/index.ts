@@ -9,6 +9,8 @@ export * from './combat/enemy-ai.js';
 export * from './combat/events.js';
 export * from './combat/boss-patterns.js';
 export * from './combat/difficulty.js';
+export * from './combat/projectile.js';
+export * from './combat/familiars.js';
 export * from './content/registry.js';
 export * from './content/catalog.js';
 export * from './state/migrations.js';

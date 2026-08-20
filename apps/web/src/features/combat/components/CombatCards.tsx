@@ -195,18 +195,25 @@ export function CombatCardSelectionModal({
   const pending = run.combat?.pendingSelection;
   const [selected, setSelected] = useState<string[]>([]);
   if (!pending) return null;
-  const title =
-    pending.kind === CombatSelectionKind.Draw
-      ? t('combatSelection.drawTitle', { count: pending.max })
-      : pending.kind === CombatSelectionKind.Transposition
-        ? t('combatSelection.transpositionTitle')
-        : t('combatSelection.blankTitle');
-  const hint =
-    pending.kind === CombatSelectionKind.Draw
-      ? t('combatSelection.drawHint', { count: pending.max })
-      : pending.kind === CombatSelectionKind.Transposition
-        ? t('combatSelection.transpositionHint')
-        : t('combatSelection.blankHint');
+  const selectionCopy = {
+    [CombatSelectionKind.Draw]: {
+      title: t('combatSelection.drawTitle', { count: pending.max }),
+      hint: t('combatSelection.drawHint', { count: pending.max }),
+    },
+    [CombatSelectionKind.Cycle]: {
+      title: t('combatSelection.cycleTitle', { count: pending.max }),
+      hint: t('combatSelection.cycleHint', { count: pending.max }),
+    },
+    [CombatSelectionKind.Transposition]: {
+      title: t('combatSelection.transpositionTitle'),
+      hint: t('combatSelection.transpositionHint'),
+    },
+    [CombatSelectionKind.BlankImitation]: {
+      title: t('combatSelection.blankTitle'),
+      hint: t('combatSelection.blankHint'),
+    },
+  } satisfies Record<CombatSelectionKind, { title: string; hint: string }>;
+  const { title, hint } = selectionCopy[pending.kind];
   const toggle = (instanceId: string) => {
     setSelected((current) => {
       if (current.includes(instanceId)) return current.filter((id) => id !== instanceId);
@@ -266,7 +273,7 @@ export function CombatCardSelectionModal({
           <footer>
             {pending.min === 0 && (
               <button type="button" className="text-button" onClick={onCancel}>
-                {t('confirmation.cancel')}
+                {t('combatSelection.skip')}
               </button>
             )}
             <button

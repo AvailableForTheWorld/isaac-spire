@@ -305,28 +305,66 @@ function cardEffectsFor(entry: IsaacItemManifestEntry): CardEffect[] {
 function fusionFor(entry: IsaacItemManifestEntry): AttackFusionEffect | undefined {
   const quality = qualityPower(entry.quality);
   const traits = new Set(entry.traits);
-  const attackRelated = [
-    ItemEffectFamily.Assault,
-    ItemEffectFamily.Volley,
-    ItemEffectFamily.Status,
-    ItemEffectFamily.Bomb,
-  ].includes(entry.family);
+  const attackTraits = [
+    ItemTrait.DamageUp,
+    ItemTrait.FireRateUp,
+    ItemTrait.RangeUp,
+    ItemTrait.Homing,
+    ItemTrait.Piercing,
+    ItemTrait.Spectral,
+    ItemTrait.MultiShot,
+    ItemTrait.SplitShot,
+    ItemTrait.Laser,
+    ItemTrait.Brimstone,
+    ItemTrait.Knife,
+    ItemTrait.Explosive,
+    ItemTrait.Poison,
+    ItemTrait.Slow,
+    ItemTrait.Freeze,
+    ItemTrait.Burn,
+    ItemTrait.Familiar,
+    ItemTrait.Orbital,
+  ];
+  const attackRelated =
+    [
+      ItemEffectFamily.Assault,
+      ItemEffectFamily.Volley,
+      ItemEffectFamily.Familiar,
+      ItemEffectFamily.Status,
+      ItemEffectFamily.Bomb,
+    ].includes(entry.family) || attackTraits.some((trait) => traits.has(trait));
   if (!attackRelated) return undefined;
   const fusion: AttackFusionEffect = {
-    damageMultiplier: 1.03 + quality * 0.025,
+    damageMultiplier: 1.05 + quality * 0.03,
     projectileScale: 1 + quality * 0.05,
   };
   if (entry.family === ItemEffectFamily.Assault || traits.has(ItemTrait.DamageUp)) {
-    fusion.damageMultiplier = 1.05 + quality * 0.04;
+    fusion.damageMultiplier = 1.08 + quality * 0.05;
     fusion.flatDamage = Math.floor(quality / 2);
   }
+  if (
+    entry.family === ItemEffectFamily.Familiar ||
+    traits.has(ItemTrait.Familiar) ||
+    traits.has(ItemTrait.Orbital)
+  ) {
+    fusion.damageMultiplier = (fusion.damageMultiplier ?? 1) + 0.06 + quality * 0.02;
+    fusion.projectileScale = Math.max(fusion.projectileScale ?? 1, 1.1 + quality * 0.05);
+  }
+  if (traits.has(ItemTrait.FireRateUp))
+    fusion.damageMultiplier = (fusion.damageMultiplier ?? 1) + 0.04 + quality * 0.01;
+  if (traits.has(ItemTrait.RangeUp))
+    fusion.projectileScale = Math.max(fusion.projectileScale ?? 1, 1.15 + quality * 0.04);
   if (traits.has(ItemTrait.MultiShot) || traits.has(ItemTrait.SplitShot)) {
     fusion.damageMultiplier = (fusion.damageMultiplier ?? 1) + 0.05 + quality * 0.015;
     fusion.projectileScale = 1.15 + quality * 0.08;
   }
   if (traits.has(ItemTrait.Homing)) fusion.curvedShots = true;
   if (traits.has(ItemTrait.Piercing)) fusion.flatDamage = (fusion.flatDamage ?? 0) + 1;
+  if (traits.has(ItemTrait.Spectral))
+    fusion.projectileScale = Math.max(fusion.projectileScale ?? 1, 1.12 + quality * 0.04);
   if (traits.has(ItemTrait.Explosive)) fusion.knockback = 1 + Math.floor(quality / 3);
+  if (traits.has(ItemTrait.Orbital)) fusion.knockback = Math.max(fusion.knockback ?? 0, 1);
+  if (traits.has(ItemTrait.Burn)) fusion.flatDamage = (fusion.flatDamage ?? 0) + 1 + Math.floor(quality / 2);
   if (traits.has(ItemTrait.Poison)) {
     fusion.poisonTurns = 1 + Math.ceil(quality / 2);
     fusion.poisonDamage = 2 + quality;
@@ -341,6 +379,9 @@ function fusionFor(entry: IsaacItemManifestEntry): AttackFusionEffect | undefine
 
 function timingFor(entry: IsaacItemManifestEntry): ItemUseTiming {
   if (entry.kind === ItemKind.Active) return ItemUseTiming.ActiveCharge;
+  if (entry.family === ItemEffectFamily.Familiar || entry.traits.includes(ItemTrait.Familiar)) {
+    return ItemUseTiming.Permanent;
+  }
   return ItemUseTiming.CombatCard;
 }
 
@@ -453,6 +494,8 @@ export function adaptIsaacItem(entry: IsaacItemManifestEntry): ItemDefinition {
   const timing = timingFor(entry);
   const cardEffects = cardEffectsFor(entry);
   const active = entry.kind === ItemKind.Active;
+  const familiar =
+    !active && (entry.family === ItemEffectFamily.Familiar || entry.traits.includes(ItemTrait.Familiar));
   return {
     id: entry.id,
     isaacId: entry.isaacId,
@@ -460,8 +503,12 @@ export function adaptIsaacItem(entry: IsaacItemManifestEntry): ItemDefinition {
     nameZh: entry.nameZh,
     kind: entry.kind,
     pool: entry.pools.length ? [...entry.pools] : [RewardPool.Treasure],
-    description: effectDescription(cardEffects, 'en'),
-    descriptionZh: effectDescription(cardEffects, 'zh'),
+    description: familiar
+      ? 'Permanent familiar. Deploys around Isaac and automatically attacks each player round.'
+      : effectDescription(cardEffects, 'en'),
+    descriptionZh: familiar
+      ? '永久宝宝：部署在以撒周围，每个玩家回合自动攻击。'
+      : effectDescription(cardEffects, 'zh'),
     icon: FAMILY_ICONS[entry.family],
     quality: entry.quality,
     timing,
@@ -471,9 +518,9 @@ export function adaptIsaacItem(entry: IsaacItemManifestEntry): ItemDefinition {
     chargeRounds: active ? (entry.chargeRounds ?? 3) : undefined,
     skillCardId: active ? `skill:${entry.id}` : undefined,
     cardCost: Math.max(0, Math.min(3, 1 + Math.floor(qualityPower(entry.quality) / 2))),
-    combatCard: !active,
+    combatCard: !active && !familiar,
     effects: entry.traits.includes(ItemTrait.Homing) ? [{ curvedShots: true }] : undefined,
     cardEffects,
-    fusion: fusionFor(entry),
+    fusion: familiar ? undefined : fusionFor(entry),
   };
 }
